@@ -1,0 +1,110 @@
+# name: test/sql/erpl_web.test
+# description: test erpl_web extension
+# group: [erpl_web]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM http_get('https://httpbun.com/get');
+----
+Catalog Error: Table Function with name http_get does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# Extension works
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
+----
+GET
+200
+application/json
+
+
+# Status code
+query I
+SELECT status FROM http_get('https://httpbin.org/status/202');
+----
+202
+
+
+# Headers
+query I
+SELECT headers['Abc'] FROM http_get('https://httpbin.org/response-headers?Abc=xyz')
+----
+[xyz]
+
+
+# GET Plain
+query IIII
+SELECT status, 
+	   content::JSON->'args'->>'foo' as args,
+	   content::JSON->>'url' as url,
+	   content::JSON->>'method' as method
+FROM http_get('https://httpbin.org/anything?foo=bar');
+----
+200
+bar
+https://httpbin.org/anything?foo=bar
+GET
+
+
+# POST with JSON data
+query IIII
+SELECT status,
+	   content::JSON->'json'->>'foo' as args,
+	   content::JSON->>'url' as url,
+	   content::JSON->>'method' as method
+FROM http_post('https://httpbin.org/anything', {'foo': 'bar'}::JSON);
+----
+200
+bar
+https://httpbin.org/anything
+POST
+
+
+# POST with text data
+query IIIII
+SELECT status,
+content::json->>'data' AS data,
+content::JSON->'args'->>'foo' as args,
+content::json->>'url' AS url,
+content::json->>'method' AS method,
+FROM http_post('https://httpbin.org/anything?foo=bar', 'payload', 'text/plain');
+----
+200
+payload
+bar
+https://httpbin.org/anything?foo=bar
+POST
+
+
+# POST with form form data
+query IIIII
+-- POST with data
+SELECT status,
+content::json->'form'->>'key1' AS key1,
+content::json->'form'->>'key2' AS key2,
+content::json->>'url' AS url,
+content::json->>'method' AS method
+FROM http_post('https://httpbin.org/anything', 'key1=value1&key2=value2','application/x-www-form-urlencoded');
+----
+200
+value1
+value2
+https://httpbin.org/anything
+POST
+
+
+# HEAD request
+query II
+SELECT status, headers['Abcde']
+FROM http_head('https://httpbin.org/response-headers?Abcde=abcde')
+----
+200
+[abcde]

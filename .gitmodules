@@ -6,3 +6,6 @@
 	path = extension-ci-tools
 	url = git@github.com:duckdb/extension-ci-tools.git
 	branch = main
+[submodule "vcpkg"]
+	path = vcpkg
+	url = https://github.com/microsoft/vcpkg.git

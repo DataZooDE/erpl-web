@@ -1,27 +1,55 @@
 cmake_minimum_required(VERSION 2.8.12)
 
+option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." OFF)
+
 # Set extension name here
-set(TARGET_NAME quack)
+set(TARGET_NAME erpl_web)
 
-# DuckDB's extension distribution supports vcpkg. As such, dependencies can be added in ./vcpkg.json and then
-# used in cmake with find_package. Feel free to remove or replace with other dependencies.
-# Note that it should also be removed from vcpkg.json to prevent needlessly installing it..
 find_package(OpenSSL REQUIRED)
+find_package(tinyxml2 CONFIG REQUIRED)
 
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "v")
+set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON) #Optional
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
+set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+
+
+if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-deprecated-declarations)
+endif()
+
+if(MSVC)
+    add_compile_options(/wd4996)
+endif()
 
 project(${TARGET_NAME})
-include_directories(src/include)
+include_directories(
+    src/include
+    ./duckdb/third_party/
+    ./duckdb/third_party/httplib
+)
 
-set(EXTENSION_SOURCES src/quack_extension.cpp)
+set(EXTENSION_SOURCES
+    src/duckdb_argument_helper.cpp
+    src/erpl_http_client.cpp
+    src/erpl_odata_client.cpp
+    src/erpl_web_functions.cpp
+    src/erpl_web_extension.cpp
+)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-# Link OpenSSL in both the static library as the loadable extension
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
+
+if(${BUILD_UNITTESTS})
+      add_subdirectory(test)
+endif()
 
 install(
   TARGETS ${EXTENSION_NAME}
