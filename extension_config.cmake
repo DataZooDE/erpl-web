@@ -4,6 +4,7 @@
 duckdb_extension_load(erpl_web
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
+    DONT_LINK
 )
 
 duckdb_extension_load(json)
