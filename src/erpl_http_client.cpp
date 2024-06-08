@@ -300,7 +300,7 @@ duckdb::LogicalType HttpResponse::DuckDbResponseType()
 {
     child_list_t<LogicalType> children;
     children.push_back(std::make_pair("method", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("code", duckdb::LogicalTypeId::INTEGER));
+    children.push_back(std::make_pair("status", duckdb::LogicalTypeId::INTEGER));
     children.push_back(std::make_pair("url", duckdb::LogicalTypeId::VARCHAR));
     children.push_back(std::make_pair("headers", DuckDbHeaderType()));
     children.push_back(std::make_pair("content_type", duckdb::LogicalTypeId::VARCHAR));
