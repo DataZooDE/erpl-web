@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.5...3.29)
 
 option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." OFF)
 
@@ -8,15 +8,10 @@ set(TARGET_NAME erpl_web)
 find_package(OpenSSL REQUIRED)
 find_package(tinyxml2 CONFIG REQUIRED)
 
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "v")
-set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) #Optional
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
-
 
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-deprecated-declarations)
@@ -46,6 +41,12 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
 target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
+
+# Enable C++17
+target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
+target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 if(${BUILD_UNITTESTS})
       add_subdirectory(test)
