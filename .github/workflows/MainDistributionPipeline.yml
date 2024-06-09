@@ -4,6 +4,8 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    paths-ignore:
+      - '**/README.md'
   pull_request:
   workflow_dispatch:
 
@@ -18,7 +20,7 @@ jobs:
     with:
       duckdb_version: v1.0.0
       extension_name: erpl_web
-      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;'
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_rtools;'
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
@@ -28,6 +30,6 @@ jobs:
     with:
       duckdb_version: v1.0.0
       extension_name: erpl_web
-      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;'
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_rtools;'
       deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
