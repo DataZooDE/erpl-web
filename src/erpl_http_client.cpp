@@ -287,7 +287,7 @@ std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &meth
                                                                 duckdb_httplib_openssl::Response &response)
 {
     auto content_type = response.get_header_value("Content-Type");
-    auto ret =  make_uniq<HttpResponse>(method, url, response.status, content_type, response.body);
+    auto ret =  std::make_unique<HttpResponse>(method, url, response.status, content_type, response.body);
     for (auto &header : response.headers)
     {
         ret->headers.emplace(header.first, header.second);

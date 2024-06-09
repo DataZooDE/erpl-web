@@ -34,6 +34,7 @@ set(EXTENSION_SOURCES
     src/erpl_odata_client.cpp
     src/erpl_web_functions.cpp
     src/erpl_web_extension.cpp
+    src/telemetry.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

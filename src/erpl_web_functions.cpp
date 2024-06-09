@@ -1,6 +1,8 @@
 #include "erpl_web_functions.hpp"
 #include "duckdb_argument_helper.hpp"
 
+#include "telemetry.hpp"
+
 namespace erpl_web {
 
 
@@ -148,6 +150,7 @@ static unique_ptr<FunctionData> HttpGetBind(ClientContext &context,
                                             vector<LogicalType> &return_types, 
                                             vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_get");
     return HttpBind(context, input, return_types, names, HttpMethod::GET);
 }
 
@@ -156,6 +159,7 @@ static unique_ptr<FunctionData> HttpHeadBind(ClientContext &context,
                                             vector<LogicalType> &return_types, 
                                             vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_head");
     return HttpBind(context, input, return_types, names, HttpMethod::HEAD);
 }
 
@@ -178,6 +182,7 @@ static unique_ptr<FunctionData> HttpPostBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_post");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::POST);
 }
 
@@ -186,6 +191,7 @@ static unique_ptr<FunctionData> HttpPutBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_put");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::PUT);
 }
 
@@ -194,6 +200,7 @@ static unique_ptr<FunctionData> HttpPatchBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_patch");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::PATCH);
 }
 
@@ -202,6 +209,7 @@ static unique_ptr<FunctionData> HttpDeleteBind(ClientContext &context,
                                               vector<LogicalType> &return_types, 
                                               vector<string> &names) 
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("http_delete");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::_DELETE);
 }
 

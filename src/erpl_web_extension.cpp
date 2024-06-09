@@ -8,11 +8,33 @@
 #include "erpl_web_extension.hpp"
 #include "erpl_web_functions.hpp"
 
+#include "telemetry.hpp"
+
 namespace duckdb {
 
+static void OnTelemetryEnabled(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto telemetry_enabled = parameter.GetValue<bool>();
+    PostHogTelemetry::Instance().SetEnabled(telemetry_enabled);
+}
 
+static void OnAPIKey(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto api_key = parameter.GetValue<std::string>();
+    PostHogTelemetry::Instance().SetAPIKey(api_key);
+}
 
-static void LoadInternal(DatabaseInstance &instance) 
+static void RegisterConfiguration(DatabaseInstance &instance)
+{
+    auto &config = DBConfig::GetConfig(instance);
+
+    config.AddExtensionOption("erpl_telemetry_enabled", "Enable ERPL telemetry, see https://erpl.io/telemetry for details.", 
+                                  LogicalType::BOOLEAN, Value(true), OnTelemetryEnabled);
+    config.AddExtensionOption("erpl_telemetry_key", "Telemetry key, see https://erpl.io/telemetry for details.", LogicalType::VARCHAR, 
+                                Value("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t"), OnAPIKey);
+}
+
+static void RegisterWebFunctions(DatabaseInstance &instance)
 {
     ExtensionUtil::RegisterType(instance, "HTTP_HEADER", erpl_web::CreateHttpHeaderType());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpGetFunction());
@@ -25,7 +47,10 @@ static void LoadInternal(DatabaseInstance &instance)
 
 void ErplWebExtension::Load(DuckDB &db) 
 {
-	LoadInternal(*db.instance);
+    PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web");
+
+	RegisterConfiguration(*db.instance);
+    RegisterWebFunctions(*db.instance);
 }
 std::string ErplWebExtension::Name() 
 {
