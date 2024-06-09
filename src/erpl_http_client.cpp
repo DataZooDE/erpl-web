@@ -458,7 +458,7 @@ std::unique_ptr<HttpResponse> HttpClient::Get(const std::string &url)
 std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(const HttpParams &http_params,
                                                                                 const std::string &scheme_host_and_port)
 {
-    auto c = make_uniq<duckdb_httplib_openssl::Client>(scheme_host_and_port.c_str());
+    auto c = std::make_unique<duckdb_httplib_openssl::Client>(scheme_host_and_port.c_str());
     c->set_follow_location(true);
 	c->set_keep_alive(http_params.keep_alive);
 	c->enable_server_certificate_verification(false);
