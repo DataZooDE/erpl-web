@@ -60,7 +60,7 @@ TEST_CASE("HttpMethod Tests", "[http_method]") {
         REQUIRE(HttpMethod::FromString("GET") == HttpMethod::GET);
         REQUIRE(HttpMethod::FromString("POST") == HttpMethod::POST);
         REQUIRE(HttpMethod::FromString("PUT") == HttpMethod::PUT);
-        REQUIRE(HttpMethod::FromString("DELETE") == HttpMethod::DELETE);
+        REQUIRE(HttpMethod::FromString("DELETE") == HttpMethod::_DELETE);
         REQUIRE(HttpMethod::FromString("PATCH") == HttpMethod::PATCH);
         REQUIRE(HttpMethod::FromString("HEAD") == HttpMethod::HEAD);
         REQUIRE(HttpMethod::FromString("OPTIONS") == HttpMethod::OPTIONS);
@@ -72,7 +72,7 @@ TEST_CASE("HttpMethod Tests", "[http_method]") {
         REQUIRE(HttpMethod(HttpMethod::GET).ToString() == "GET");
         REQUIRE(HttpMethod(HttpMethod::POST).ToString() == "POST");
         REQUIRE(HttpMethod(HttpMethod::PUT).ToString() == "PUT");
-        REQUIRE(HttpMethod(HttpMethod::DELETE).ToString() == "DELETE");
+        REQUIRE(HttpMethod(HttpMethod::_DELETE).ToString() == "DELETE");
         REQUIRE(HttpMethod(HttpMethod::PATCH).ToString() == "PATCH");
         REQUIRE(HttpMethod(HttpMethod::HEAD).ToString() == "HEAD");
         REQUIRE(HttpMethod(HttpMethod::OPTIONS).ToString() == "OPTIONS");

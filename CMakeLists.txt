@@ -48,6 +48,17 @@ target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+if (WIN32)
+      target_link_libraries(${EXTENSION_NAME} iphlpapi)
+      target_link_libraries(${LOADABLE_EXTENSION_NAME} iphlpapi)
+endif()
+
+if(MINGW)
+   find_package(ZLIB)
+   target_link_libraries(${EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
+   target_link_libraries(${LOADABLE_EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
+endif()
+
 if(${BUILD_UNITTESTS})
       add_subdirectory(test)
 endif()

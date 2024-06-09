@@ -95,7 +95,7 @@ public:
         GET,
         POST,
         PUT,
-        DELETE,
+        _DELETE,
         PATCH,
         HEAD,
         OPTIONS,

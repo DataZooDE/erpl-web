@@ -1,9 +1,5 @@
 find_package(OpenSSL REQUIRED)
-find_package(TinyXML2 REQUIRED)
-
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "v")
-set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_CXX_EXTENSIONS OFF)
+find_package(tinyxml2 CONFIG REQUIRED)
 
 include_directories(./include
                     ../../src/include
@@ -24,6 +20,22 @@ add_executable(erpl_web_tests ${TEST_SOURCES})
 target_link_libraries(erpl_web_tests 
                       ${EXTENSION_NAME} 
                       duckdb_static 
-                      test_helpers 
+                      test_helpers
                       OpenSSL::SSL OpenSSL::Crypto 
                       tinyxml2::tinyxml2)
+
+                    
+# Enable C++17
+target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
+target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+if (WIN32)
+    target_link_libraries(erpl_web_tests iphlpapi)
+endif()
+
+if(MINGW)
+    find_package(ZLIB)
+    target_link_libraries(erpl_web_tests ZLIB::ZLIB -lcrypt32)
+endif()

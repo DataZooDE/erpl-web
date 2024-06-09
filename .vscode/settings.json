@@ -1,5 +1,5 @@
 {
-    "cmake.sourceDirectory": "${workspaceFolder}/duckdb",
+    "cmake.sourceDirectory": "C:/Users/jr/Desktop/erpl-web",
     "cmake.buildDirectory": "${workspaceFolder}/build/debug/",
     "cmake.configureSettings": {
         "CMAKE_TOOLCHAIN_FILE": "${workspaceFolder}/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -9,14 +9,8 @@
     },
     
     "cmake.configureArgs": [
-        "-DDUCKDB_EXTENSION_NAMES=erpl_web",
-        "-DDUCKDB_EXTENSION_ERPL_WEB_PATH=${workspaceFolder}",
-        "-DDUCKDB_EXTENSION_ERPL_WEB_LOAD_TESTS=1",
-        "-DDUCKDB_EXTENSION_ERPL_WEB_INCLUDE_PATH=${workspaceFolder}/src/include",
-        "-DDUCKDB_EXTENSION_ERPL_WEB_TEST_PATH=${workspaceFolder}/test/",
-        "-DDUCKDB_EXTENSION_ERPL_WEB_SHOULD_LINK=0",
-
-        "-DEXTENSION_STATIC_BUILD=0",
+        "-DDUCKDB_EXTENSION_CONFIGS=${workspaceFolder}/extension_config.cmake",
+        "-DEXTENSION_STATIC_BUILD=1",
         "-DBUILD_PARQUET_EXTENSION=1",
         "-DCMAKE_BUILD_TYPE=Debug",
         "-Wno-unused-variable"

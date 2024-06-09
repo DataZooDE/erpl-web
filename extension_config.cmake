@@ -1,10 +1,15 @@
-# This file is included by DuckDB's build system. It specifies which extension to load
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    duckdb_extension_load(erpl_web
+        SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
+        DONT_LINK)
+    set(BUILD_UNITTESTS OFF)
+else()
+    duckdb_extension_load(erpl_web
+        SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
+        LOAD_TESTS)
+    set(BUILD_UNITTESTS ON)
+endif()
 
-# Extension from this repo
-duckdb_extension_load(erpl_web
-    SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
-    LOAD_TESTS
-    DONT_LINK
-)
+
 
 duckdb_extension_load(json)

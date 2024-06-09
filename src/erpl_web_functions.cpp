@@ -202,7 +202,7 @@ static unique_ptr<FunctionData> HttpDeleteBind(ClientContext &context,
                                               vector<LogicalType> &return_types, 
                                               vector<string> &names) 
 {
-    return HttpMutatingBind(context, input, return_types, names, HttpMethod::DELETE);
+    return HttpMutatingBind(context, input, return_types, names, HttpMethod::_DELETE);
 }
 
 // ----------------------------------------------------------------------

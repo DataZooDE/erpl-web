@@ -125,7 +125,7 @@ HttpMethod HttpMethod::FromString(const std::string &method)
     }
     else if (upperMethod == "DELETE")
     {
-        return HttpMethod(DELETE);
+        return HttpMethod(_DELETE);
     }
     else if (upperMethod == "PATCH")
     {
@@ -163,7 +163,7 @@ std::string HttpMethod::ToString() const
         return "POST";
     case PUT:
         return "PUT";
-    case DELETE:
+    case _DELETE:
         return "DELETE";
     case PATCH:
         return "PATCH";
@@ -258,7 +258,7 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     {
         return client.Patch(path_str.c_str(), headers, content, content_type.c_str());
     }
-    else if (method == HttpMethod::DELETE)
+    else if (method == HttpMethod::_DELETE)
     {
         return client.Delete(path_str.c_str(), headers, content, content_type.c_str());
     }
