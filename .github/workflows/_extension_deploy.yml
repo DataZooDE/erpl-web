@@ -109,7 +109,6 @@ jobs:
         shell: bash
         env:
           BUCKET_NAME: ${{ vars.DEPLOY_S3_BUCKET }}
-          DUCKDB_EXTENSION_SIGNING_PK: ${{ secrets.S3_DUCKDB_ORG_EXTENSION_SIGNING_PK }}
         run: |
           pwd
           python3 -m pip install pip awscli
