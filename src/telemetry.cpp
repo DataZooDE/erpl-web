@@ -13,6 +13,15 @@
 #include <winsock2.h>
 #include <iphlpapi.h>
 
+#elif __APPLE__
+
+#include <iostream>
+#include <stdexcept>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <cstring>
+
 #endif
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -47,7 +56,7 @@ std::string PostHogEvent::GetNowISO8601() const
 
 // PostHogEvent -----------------------------------------------------------------
 
-void PostHogProcess(const std::string api_key, const PostHogEvent &event) 
+void PostHogProcess(const std::string api_key, const PostHogEvent &event)
 {
     auto re = duckdb_re2::Regex("*");
     std::string payload = StringUtil::Format(R"(
@@ -59,8 +68,8 @@ void PostHogProcess(const std::string api_key, const PostHogEvent &event)
                 "properties": %s,
                 "timestamp": "%s"
             }]
-        }   
-    )", api_key, event.event_name, event.distinct_id, 
+        }
+    )", api_key, event.event_name, event.distinct_id,
         event.GetPropertiesJson(), event.GetNowISO8601());
 
     auto cli = duckdb_httplib_openssl::Client("https://eu.posthog.com");
@@ -78,16 +87,16 @@ void PostHogProcess(const std::string api_key, const PostHogEvent &event)
 
 // PostHogProcess ----------------------------------------------------------------
 
-PostHogTelemetry::PostHogTelemetry() 
+PostHogTelemetry::PostHogTelemetry()
     : _queue(TelemetryTaskQueue<PostHogEvent>()),
-      _telemetry_enabled(true), 
+      _telemetry_enabled(true),
       _api_key("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t")
 {  }
 
-PostHogTelemetry::~PostHogTelemetry() 
+PostHogTelemetry::~PostHogTelemetry()
 { }
 
-PostHogTelemetry& PostHogTelemetry::Instance() 
+PostHogTelemetry& PostHogTelemetry::Instance()
 {
     static PostHogTelemetry instance;
     return instance;
@@ -95,7 +104,7 @@ PostHogTelemetry& PostHogTelemetry::Instance()
 
 void PostHogTelemetry::CaptureExtensionLoad()
 {
-    CaptureExtensionLoad("erpl_rfc");
+    CaptureExtensionLoad("erpl_web");
 }
 
 void PostHogTelemetry::CaptureExtensionLoad(std::string extension_name)
@@ -109,14 +118,15 @@ void PostHogTelemetry::CaptureExtensionLoad(std::string extension_name)
         GetMacAddressSafe(),
         {
             {"extension_name", extension_name},
-            {"extension_version", "0.1.0"}
+            {"extension_version", "0.1.0"},
+            {"extension_platform", DuckDB::Platform() }
         }
     };
     auto api_key = this->_api_key;
     _queue.EnqueueTask([api_key](auto event) { PostHogProcess(api_key, event); }, event);
 }
 
-void PostHogTelemetry::CaptureFunctionExecution(std::string function_name) 
+void PostHogTelemetry::CaptureFunctionExecution(std::string function_name)
 {
     if (!_telemetry_enabled) {
         return;
@@ -135,29 +145,29 @@ void PostHogTelemetry::CaptureFunctionExecution(std::string function_name)
 }
 
 
-bool PostHogTelemetry::IsEnabled() 
+bool PostHogTelemetry::IsEnabled()
 {
     return _telemetry_enabled;
 }
 
-void PostHogTelemetry::SetEnabled(bool enabled) 
+void PostHogTelemetry::SetEnabled(bool enabled)
 {
     std::lock_guard<mutex> t(_thread_lock);
     _telemetry_enabled = enabled;
 }
 
-std::string PostHogTelemetry::GetAPIKey() 
+std::string PostHogTelemetry::GetAPIKey()
 {
     return _api_key;
 }
 
-void PostHogTelemetry::SetAPIKey(std::string new_key) 
+void PostHogTelemetry::SetAPIKey(std::string new_key)
 {
     std::lock_guard<mutex> t(_thread_lock);
     _api_key = new_key;
 }
 
-std::string PostHogTelemetry::GetMacAddressSafe() 
+std::string PostHogTelemetry::GetMacAddressSafe()
 {
     try {
         return GetMacAddress();
@@ -166,8 +176,9 @@ std::string PostHogTelemetry::GetMacAddressSafe()
     }
 }
 
-#ifdef __linux__ 
-std::string PostHogTelemetry::GetMacAddress() 
+#ifdef __linux__
+
+std::string PostHogTelemetry::GetMacAddress()
 {
     auto device = FindFirstPhysicalDevice();
     if (device.empty()) {
@@ -189,7 +200,7 @@ bool PostHogTelemetry::IsPhysicalDevice(const std::string& device) {
     return access(path.c_str(), F_OK) != -1;
 }
 
-std::string PostHogTelemetry::FindFirstPhysicalDevice() 
+std::string PostHogTelemetry::FindFirstPhysicalDevice()
 {
     DIR* dir = opendir("/sys/class/net");
     if (!dir) {
@@ -221,7 +232,7 @@ std::string PostHogTelemetry::FindFirstPhysicalDevice()
 
 #elif _WIN32
 
-std::string PostHogTelemetry::GetMacAddress() 
+std::string PostHogTelemetry::GetMacAddress()
 {
     ULONG out_buf_len = sizeof(IP_ADAPTER_INFO);
     std::vector<BYTE> buffer(out_buf_len);
@@ -252,9 +263,41 @@ std::string PostHogTelemetry::GetMacAddress()
     return mac_addresses.empty() ? "" : mac_addresses.front();
 }
 
+#elif __APPLE__
+
+std::string PostHogTelemetry::GetMacAddress()
+{
+    struct ifaddrs *ifap, *ifa;
+    struct sockaddr_dl *sdl = nullptr;
+    char mac_address[18] = {0};
+
+    if (getifaddrs(&ifap) != 0) {
+        throw std::runtime_error("getifaddrs() failed!");
+    }
+
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr->sa_family == AF_LINK && strcmp(ifa->ifa_name, "en0") == 0) {
+            sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+            break;
+        }
+    }
+
+    if (sdl && sdl->sdl_alen == 6) {
+        unsigned char *ptr = (unsigned char *)LLADDR(sdl);
+        snprintf(mac_address, sizeof(mac_address), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
+    } else {
+        strncpy(mac_address, "00:00:00:00:00:00", sizeof(mac_address));
+    }
+
+    freeifaddrs(ifap);
+
+    return std::string(mac_address);
+}
+
 #else
 
-std::string PostHogTelemetry::GetMacAddress() 
+std::string PostHogTelemetry::GetMacAddress()
 {
     return "";
 }
