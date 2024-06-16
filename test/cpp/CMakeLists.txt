@@ -11,6 +11,7 @@ include_directories(./include
                     ${OPENSSL_INCLUDE_DIR})
 
 set(TEST_SOURCES
+    test_charset_converter.cpp
     test_http_client.cpp
     test_odata_edm.cpp
     test_main.cpp

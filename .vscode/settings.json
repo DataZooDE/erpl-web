@@ -7,7 +7,6 @@
         "VCPKG_BUILD": "1",
         "GEN": "ninja"
     },
-    
     "cmake.configureArgs": [
         "-DDUCKDB_EXTENSION_CONFIGS=${workspaceFolder}/extension_config.cmake",
         "-DEXTENSION_STATIC_BUILD=1",

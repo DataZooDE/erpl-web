@@ -5,6 +5,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 
+#include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
 
 using namespace duckdb;
@@ -243,9 +244,9 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     auto headers = HttplibHeaders();
 
     if (method == HttpMethod::GET)
-    { 
+    {
         return client.Get(path_str.c_str(), headers);
-    } 
+    }
     else if (method == HttpMethod::POST)
     {
         return client.Post(path_str.c_str(), headers, content, content_type.c_str());
@@ -312,7 +313,7 @@ duckdb::LogicalType HttpResponse::DuckDbResponseType()
 duckdb::LogicalType HttpResponse::DuckDbHeaderType()
 {
     return duckdb::LogicalType::MAP(
-        duckdb::LogicalType::VARCHAR, 
+        duckdb::LogicalType::VARCHAR,
         duckdb::LogicalType::VARCHAR
     );
 }
@@ -357,13 +358,15 @@ duckdb::Value HttpResponse::CreateHeaderMap() const
 
 std::vector<duckdb::Value> HttpResponse::ToRow() const
 {
+	auto conv = CharsetConverter(content_type);
+
     return {
         duckdb::Value(method.ToString()),
         duckdb::Value(code),
         duckdb::Value(url.ToString()),
         CreateHeaderMap(),
         duckdb::Value(content_type),
-        duckdb::Value(content)
+        duckdb::Value(conv.convert(content))
     };
 }
 
@@ -420,10 +423,10 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
             if (caught_e) {
 				std::rethrow_exception(caught_e);
 			} else if (err == duckdb_httplib_openssl::Error::Success) {
-				throw HTTPException(response, "Request returned HTTP %d for HTTP %s to '%s'", 
+				throw HTTPException(response, "Request returned HTTP %d for HTTP %s to '%s'",
                                     status, request.method.ToString(), request.url.ToString());
 			} else {
-				throw IOException("%s error for HTTP %s to '%s'", to_string(err), 
+				throw IOException("%s error for HTTP %s to '%s'", to_string(err),
                                   request.method.ToString(), request.url.ToString());
 			}
         }

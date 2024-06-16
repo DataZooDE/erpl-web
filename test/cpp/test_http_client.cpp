@@ -5,6 +5,7 @@
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
 
+#include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
 #include "duckdb_argument_helper.hpp"
 
@@ -85,11 +86,10 @@ TEST_CASE("HttpMethod Tests", "[http_method]") {
     }
 }
 
-
 TEST_CASE("Test http HEAD", "[http_client]")
 {
     HttpClient client;
-    
+
     auto response = client.Head("https://google.com");
     REQUIRE(response->code == 200);
 }
@@ -97,7 +97,7 @@ TEST_CASE("Test http HEAD", "[http_client]")
 TEST_CASE("Test http GET", "[http_client]")
 {
     HttpClient client;
-    
+
     auto response = client.Get("http://httpbun.com/get");
     REQUIRE(response->code == 200);
     REQUIRE(response->content_type == "application/json");
@@ -109,4 +109,28 @@ TEST_CASE("Test http GET", "[http_client]")
     auto val = response->ToValue();
     auto content = ValueHelper(val)["content"];
     auto content_json = content.DefaultCastAs(duckdb::LogicalType::JSON());
+}
+
+TEST_CASE("Test http GET on google.com", "[http_client]")
+{
+	HttpClient client;
+
+	auto response = client.Get("https://google.com");
+	REQUIRE(response->code == 200);
+	REQUIRE(response->content_type == "text/html; charset=ISO-8859-1");
+
+	auto conv = CharsetConverter(response->content_type);
+	auto val = conv.convert(response->content);
+
+	// Check if val starts with <!doctype html>
+	REQUIRE(val.find("<!doctype html>") == 0);
+}
+
+TEST_CASE("Test http GET on erpl.io", "[http_client]")
+{
+	HttpClient client;
+
+	auto response = client.Get("https://erpl.io");
+	REQUIRE(response->code == 200);
+	REQUIRE(response->content_type == "text/html; charset=utf-8");
 }

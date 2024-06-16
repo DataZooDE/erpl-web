@@ -30,6 +30,7 @@ include_directories(
 
 set(EXTENSION_SOURCES
     src/duckdb_argument_helper.cpp
+    src/charset_converter.cpp
     src/erpl_http_client.cpp
     src/erpl_odata_client.cpp
     src/erpl_web_functions.cpp

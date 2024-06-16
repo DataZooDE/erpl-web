@@ -25,6 +25,9 @@ GET
 200
 application/json
 
+# --------------------------------------------------------------------------------------------
+
+
 
 # Status code
 query I
@@ -108,3 +111,21 @@ FROM http_head('https://httpbin.org/response-headers?Abcde=abcde')
 ----
 200
 [abcde]
+
+
+# --------------------------------------------------------------------------------------------
+# Some various websites work
+
+query II
+SELECT status, starts_with(lower(content), '<!doctype html>') as start 
+FROM http_get('https://www.google.com');
+----
+200
+true
+
+query II
+SELECT status, starts_with(lower(content), '<!doctype html>') as start 
+FROM http_get('https://erpl.io');
+----
+200
+true
