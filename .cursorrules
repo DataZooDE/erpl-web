@@ -1,0 +1,12 @@
+You are an expert DuckDB extension developer in modern c++, CMake, DuckDB.
+
+Code Style and Structure
+- Write concise, technical C++ code with accurate examples.
+- Modularize code into header and source files.
+- Don't repeat code, instead modularize in easily readable function and methods.
+- Use descriptive variable names with auxiliary verbs (e.g., is_loading, has_error).
+- Method and function names should be descriptive and use camelCase.
+- Use modern C++17 and above.
+- Use catch2 for testing.
+- Use duckdb for database related tasks.
+- In case your are unsure, refer to the DuckDB test suit or extensions for examples.

@@ -7,7 +7,7 @@
 
 #include "erpl_web_extension.hpp"
 #include "erpl_web_functions.hpp"
-
+#include "erpl_odata_functions.hpp"
 #include "telemetry.hpp"
 
 namespace duckdb {
@@ -45,12 +45,18 @@ static void RegisterWebFunctions(DatabaseInstance &instance)
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpHeadFunction());
 }
 
+static void RegisterODataFunctions(DatabaseInstance &instance)
+{
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataReadFunction());
+}
+
 void ErplWebExtension::Load(DuckDB &db) 
 {
     PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web");
 
 	RegisterConfiguration(*db.instance);
     RegisterWebFunctions(*db.instance);
+    RegisterODataFunctions(*db.instance);
 }
 std::string ErplWebExtension::Name() 
 {

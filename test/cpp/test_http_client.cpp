@@ -54,6 +54,50 @@ TEST_CASE("HttpUrl Parsing and Serialization", "[http_url]") {
         REQUIRE(url.ToPathQueryFragment() == "/newpath?newquery#newfragment");
         REQUIRE(url.ToString() == "https://www.example.com:443/newpath?newquery#newfragment");
     }
+
+    SECTION("Merging paths") {
+        std::filesystem::path base_path("/v4/northwind/Customers");
+        std::filesystem::path rel_path_1("Customers");
+        std::filesystem::path rel_path_2("northwind/Customers");
+        std::filesystem::path rel_path_3("Products");
+        std::filesystem::path rel_path_4("../Products");
+        std::filesystem::path rel_path_5("../../../Products");
+        std::filesystem::path rel_path_6("/Products");
+
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_1) == "/v4/northwind/Customers");
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_2) == "/v4/northwind/Customers");
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_3) == "/v4/northwind/Customers/Products");
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_4) == "/v4/northwind/Products");
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_5) == "/Products");
+        REQUIRE(HttpUrl::MergePaths(base_path, rel_path_6) == "/Products");
+    }
+
+    SECTION("Merging relative URLs with base URLs") {
+        HttpUrl base_url("https://services.odata.org/v4/northwind/northwind.svc/");
+        std::string relative_url = "Customers?$skiptoken='ERNSH'";
+        HttpUrl merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Customers?$skiptoken='ERNSH'");
+
+        base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
+        relative_url = "Customers?$skiptoken='ERNSH'";
+        merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Customers?$skiptoken='ERNSH'");
+
+        base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
+        relative_url = "../../../foo/northwind/northwind.svc/Customers?$skiptoken='ERNSH'";
+        merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/foo/northwind/northwind.svc/Customers?$skiptoken='ERNSH'");
+
+        base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
+        relative_url = "/Customers?$skiptoken='ERNSH'";
+        merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/Customers?$skiptoken='ERNSH'");
+
+        base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
+        relative_url = "https://services.odata.org/v4/northwind/northwind.svc/Products";
+        merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Products");
+    }
 }
 
 TEST_CASE("HttpMethod Tests", "[http_method]") {

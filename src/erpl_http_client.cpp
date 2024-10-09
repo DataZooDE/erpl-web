@@ -1,6 +1,9 @@
 #include <algorithm>
+
 #include <regex>
 #include <sstream>
+#include <vector>
+#include <numeric>
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -43,9 +46,15 @@ std::string HttpUrl::ToSchemeHostAndPort() const {
     return ss.str();
 }
 
+std::string HttpUrl::ToPathQuery() const {
+    std::stringstream ss;
+    ss << (path.empty() ? "/" : path) << query;
+    return ss.str();
+}
+
 std::string HttpUrl::ToPathQueryFragment() const {
     std::stringstream ss;
-    ss << (path.empty() ? "/" : path) << query << fragment;
+    ss << ToPathQuery() << fragment;
     return ss.str();
 }
 
@@ -53,6 +62,10 @@ std::string HttpUrl::ToString() const {
     std::stringstream ss;
     ss << ToSchemeHostAndPort() << ToPathQueryFragment();
     return ss.str();
+}
+
+HttpUrl::operator std::string() const {
+    return ToString();
 }
 
 bool HttpUrl::Equals(const HttpUrl& other) const {
@@ -71,6 +84,95 @@ std::string HttpUrl::ToLower(const std::string& str) {
     std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(),
                    [](unsigned char c){ return std::tolower(c); });
     return lowerStr;
+}
+
+std::filesystem::path HttpUrl::MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& rel_path) 
+{
+    // Check if the relative path is actually an absolute path
+    if (rel_path.is_absolute()) {
+        return rel_path.lexically_normal();
+    }
+
+    // Decompose the paths into their respective components
+    std::vector<std::string> base_parts;
+    for (const auto& part : base_path) {
+        base_parts.push_back(part.string());
+    }
+
+    std::vector<std::string> rel_parts;
+    for (const auto& part : rel_path) {
+        rel_parts.push_back(part.string());
+    }
+
+    // Find the overlap between the end of base_parts and the beginning of rel_parts
+    std::size_t overlap_start = 0;
+    for (std::size_t i = 0; i < base_parts.size(); ++i) {
+        std::size_t j = 0;
+        while (i + j < base_parts.size() && j < rel_parts.size() && base_parts[i + j] == rel_parts[j]) {
+            ++j;
+        }
+        if (i + j == base_parts.size()) {
+            overlap_start = j; // Overlap found
+            break;
+        }
+    }
+
+    // Build the merged path from base_parts and the remaining rel_parts
+    std::filesystem::path merged_path;
+    for (const auto& part : base_parts) {
+        merged_path /= part;
+    }
+    for (std::size_t i = overlap_start; i < rel_parts.size(); ++i) {
+        merged_path /= rel_parts[i];
+    }
+
+    merged_path = merged_path.lexically_normal();
+    return merged_path;
+}
+ 
+
+HttpUrl HttpUrl::MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::string& relative_url_or_path)
+{
+    if (relative_url_or_path.empty()) {
+        return base_url;
+    }
+
+    if (relative_url_or_path.find("://") != std::string::npos) {
+        return HttpUrl(relative_url_or_path);
+    }
+
+    // Now parse the path, query, and fragment
+    const std::regex path_query_fragment_regex(
+        R"(([^?#]*)(?:\?([^#]*))?(?:#(.*))?)"
+    );
+
+    std::smatch match;
+    if (!std::regex_match(relative_url_or_path, match, path_query_fragment_regex)) {
+        throw std::runtime_error("Invalid path, query, or fragment in URL: " + relative_url_or_path);
+    }
+
+    std::string rel_path = match[1].str();
+    std::string rel_query = match[2].str();
+    std::string rel_fragment = match[3].str();
+
+    // Merge the base URL with the relative URL
+    HttpUrl merged_url = base_url;
+
+    // Handle path
+    if (!rel_path.empty()) {
+        auto merged_path = MergePaths(base_url.Path(), rel_path);
+        merged_url.Path(merged_path.string());
+    }
+
+    // Handle query and fragment
+    if (!rel_query.empty()) {
+        merged_url.Query(rel_query.empty() ? "" : "?" + rel_query);
+    }
+    if (!rel_fragment.empty()) {
+        merged_url.Fragment(rel_fragment.empty() ? "" : "#" + rel_fragment);
+    }
+
+    return merged_url;
 }
 
 // Setters
@@ -240,7 +342,7 @@ duckdb_httplib_openssl::Headers HttpRequest::HttplibHeaders()
 
 duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Client &client)
 {
-    auto path_str = url.ToPathQueryFragment();
+    auto path_str = url.ToPathQuery();
     auto headers = HttplibHeaders();
 
     if (method == HttpMethod::GET)
@@ -370,6 +472,19 @@ std::vector<duckdb::Value> HttpResponse::ToRow() const
     };
 }
 
+int HttpResponse::Code() const {
+    return code;
+}
+
+std::string HttpResponse::ContentType() const {
+    return content_type;
+}
+
+std::string HttpResponse::Content() const {
+    auto conv = CharsetConverter(content_type);
+    return conv.convert(content);
+}
+
 // ----------------------------------------------------------------------
 
 HttpClient::HttpClient(const HttpParams &http_params)
@@ -473,5 +588,3 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 }
 
 } // namespace erpl_web
-
-

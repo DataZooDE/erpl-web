@@ -1,5 +1,7 @@
 #pragma once
 
+#include <filesystem>
+
 #include "duckdb.hpp"
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.hpp"
@@ -28,8 +30,10 @@ public:
     HttpUrl(const std::string& url);
     void ParseUrl(const std::string& url);
     std::string ToSchemeHostAndPort() const;
+    std::string ToPathQuery() const;
     std::string ToPathQueryFragment() const;
     std::string ToString() const;
+    operator std::string() const;
     bool Equals(const HttpUrl& other) const;
 
     void Scheme(const std::string& value);
@@ -49,6 +53,9 @@ public:
     std::string Fragment() const;
     std::string Username() const;
     std::string Password() const;
+
+    static HttpUrl MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::string& relative_url);
+    static std::filesystem::path MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& relative_path);
 
 private:
     std::string scheme;
@@ -158,6 +165,10 @@ public:
     static duckdb::LogicalType DuckDbHeaderType();
     duckdb::Value ToValue() const;
     std::vector<duckdb::Value> ToRow() const;
+
+    int Code() const;
+    std::string ContentType() const;
+    std::string Content() const;
 
 public:
     HttpMethod method;

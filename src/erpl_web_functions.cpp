@@ -319,5 +319,4 @@ TableFunctionSet CreateHttpDeleteFunction()
     return CreateMutatingHttpFunction("delete", HttpDeleteBind);
 }
 
-
 } // namespace erpl_web

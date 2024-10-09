@@ -33,6 +33,8 @@ set(EXTENSION_SOURCES
     src/charset_converter.cpp
     src/erpl_http_client.cpp
     src/erpl_odata_client.cpp
+    src/erpl_odata_predicate_pushdown_helper.cpp
+    src/erpl_odata_functions.cpp
     src/erpl_web_functions.cpp
     src/erpl_web_extension.cpp
     src/telemetry.cpp

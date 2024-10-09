@@ -299,6 +299,14 @@ TEST_CASE("Test Edmx class", "[odata_edm]")
         auto data_svc = edmx.data_services;
     }
 
+    SECTION("Test FromXml with Trippin RESTIER")
+    {
+        // Create a sample XML element for testing
+        auto xml = LoadTestFile("./test/cpp/edm_trippin_restier.xml");
+        auto edmx = Edmx::FromXml(xml);
+        auto data_svc = edmx.data_services;
+    }
+
     /*
     SECTION("Test FromXml with MSGraph")
     {
@@ -313,16 +321,6 @@ TEST_CASE("Test Edmx class", "[odata_edm]")
 
     SECTION("Test EntitySet type resolution")
     {
-        /*
-        auto type_name = std::visit(Overload {
-            [](const EntityType& et) { return et.name; },
-            [](const ComplexType& ct) { return ct.name; },
-            [](const EnumType& et) { return et.name; },
-            [](const PrimitiveType& tr) { return tr.name; },
-            [](const TypeDefinition& td) { return td.name; }
-        }, type);
-        */
-
         // Create a sample XML element for testing
         auto xml = LoadTestFile("./test/cpp/edm_trippin.xml");
         auto edmx = Edmx::FromXml(xml);

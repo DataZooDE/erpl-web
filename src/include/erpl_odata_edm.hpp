@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+#include <iostream>
 
 #include "duckdb.hpp"
 #include "tinyxml2.h"
@@ -220,72 +221,78 @@ public:
     FunctionParameter() : nullable(true), SRID(0) {}
 
     static FunctionParameter FromXml(const tinyxml2::XMLElement& element) {
-        FunctionParameter parameter;
+        try {
+            FunctionParameter parameter;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            parameter.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                parameter.name = name_attr;
+            }
+
+            // Parse Type attribute
+            const char* type_attr = element.Attribute("Type");
+            if (type_attr) {
+                parameter.type = type_attr;
+            }
+
+            // Parse Nullable attribute
+            const char* nullable_attr = element.Attribute("Nullable");
+            if (nullable_attr) {
+                parameter.nullable = std::string(nullable_attr) == "true";
+            }
+
+            // Parse DefaultValue attribute
+            const char* default_value_attr = element.Attribute("DefaultValue");
+            if (default_value_attr) {
+                parameter.default_value = default_value_attr;
+            }
+
+            // Parse MaxLength attribute
+            const char* max_length_attr = element.Attribute("MaxLength");
+            if (max_length_attr) {
+                parameter.max_length = std::stoi(max_length_attr);
+            }
+
+            // Parse Precision attribute
+            const char* precision_attr = element.Attribute("Precision");
+            if (precision_attr) {
+                parameter.precision = std::stoi(precision_attr);
+            }
+
+            // Parse Scale attribute
+            const char* scale_attr = element.Attribute("Scale");
+            if (scale_attr) {
+                parameter.scale = std::stoi(scale_attr);
+            }
+
+            // Parse SRID attribute
+            const char* SRID_attr = element.Attribute("SRID");
+            if (SRID_attr) {
+                parameter.SRID = std::stoi(SRID_attr);
+            }
+
+            // Parse Unicode attribute
+            const char* unicode_attr = element.Attribute("Unicode");
+            if (unicode_attr) {
+                parameter.unicode = std::string(unicode_attr) == "true";
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                parameter.annotations.push_back(annotation);
+            }
+
+            return parameter;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing FunctionParameter: " << e.what() << std::endl;
+            std::cerr << "FunctionParameter XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Type attribute
-        const char* type_attr = element.Attribute("Type");
-        if (type_attr) {
-            parameter.type = type_attr;
-        }
-
-        // Parse Nullable attribute
-        const char* nullable_attr = element.Attribute("Nullable");
-        if (nullable_attr) {
-            parameter.nullable = std::string(nullable_attr) == "true";
-        }
-
-        // Parse DefaultValue attribute
-        const char* default_value_attr = element.Attribute("DefaultValue");
-        if (default_value_attr) {
-            parameter.default_value = default_value_attr;
-        }
-
-        // Parse MaxLength attribute
-        const char* max_length_attr = element.Attribute("MaxLength");
-        if (max_length_attr) {
-            parameter.max_length = std::stoi(max_length_attr);
-        }
-
-        // Parse Precision attribute
-        const char* precision_attr = element.Attribute("Precision");
-        if (precision_attr) {
-            parameter.precision = std::stoi(precision_attr);
-        }
-
-        // Parse Scale attribute
-        const char* scale_attr = element.Attribute("Scale");
-        if (scale_attr) {
-            parameter.scale = std::stoi(scale_attr);
-        }
-
-        // Parse SRID attribute
-        const char* SRID_attr = element.Attribute("SRID");
-        if (SRID_attr) {
-            parameter.SRID = std::stoi(SRID_attr);
-        }
-
-        // Parse Unicode attribute
-        const char* unicode_attr = element.Attribute("Unicode");
-        if (unicode_attr) {
-            parameter.unicode = std::string(unicode_attr) == "true";
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            parameter.annotations.push_back(annotation);
-        }
-
-        return parameter;
     }
 
 public:
@@ -317,38 +324,44 @@ public:
 
     static Function FromXml(const tinyxml2::XMLElement& element)
     {
-        Function function;
+        try {
+            Function function;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            function.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                function.name = name_attr;
+            }
+
+            const char *returnType_attr = element.Attribute("ReturnType");
+            if (returnType_attr) {
+                function.return_type = returnType_attr;
+            }
+
+            // Parse Parameter elements
+            for (const tinyxml2::XMLElement* parameter_el = element.FirstChildElement("Parameter");
+                parameter_el != nullptr;
+                parameter_el = parameter_el->NextSiblingElement("Parameter")) 
+            { 
+                auto parameter = FunctionParameter::FromXml(*parameter_el);
+                function.parameters.push_back(parameter);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                function.annotations.push_back(annotation);
+            }
+
+            return function;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Function: " << e.what() << std::endl;
+            std::cerr << "Function XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        const char *returnType_attr = element.Attribute("ReturnType");
-        if (returnType_attr) {
-            function.return_type = returnType_attr;
-        }
-
-        // Parse Parameter elements
-        for (const tinyxml2::XMLElement* parameter_el = element.FirstChildElement("Parameter");
-            parameter_el != nullptr;
-            parameter_el = parameter_el->NextSiblingElement("Parameter")) 
-        { 
-            auto parameter = FunctionParameter::FromXml(*parameter_el);
-            function.parameters.push_back(parameter);
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            function.annotations.push_back(annotation);
-        }
-
-        return function;
     }
 
 public:
@@ -367,30 +380,36 @@ public:
 
     static EnumMember FromXml(const tinyxml2::XMLElement& element)
     {
-        EnumMember member;
+        try {
+            EnumMember member;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            member.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                member.name = name_attr;
+            }
+
+            // Parse Value attribute
+            const char* value_attr = element.Attribute("Value");
+            if (value_attr) {
+                member.value = std::stoi(value_attr);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                member.annotations.push_back(annotation);
+            }
+
+            return member;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing EnumMember: " << e.what() << std::endl;
+            std::cerr << "EnumMember XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Value attribute
-        const char* value_attr = element.Attribute("Value");
-        if (value_attr) {
-            member.value = std::stoi(value_attr);
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            member.annotations.push_back(annotation);
-        }
-
-        return member;
     }
 
 public:
@@ -406,54 +425,60 @@ public:
     EnumType() : underlying_type(erpl_web::Int32), is_flags(false) {}
 
     static EnumType FromXml(const tinyxml2::XMLElement& element) {
-        EnumType enumType;
+        try {
+            EnumType enumType;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            enumType.name = name_attr;
-        }
-
-        // Parse UnderlyingType attribute
-        const char* underlyingType_attr = element.Attribute("UnderlyingType");
-        if (underlyingType_attr) {
-            auto underlying_type = PrimitiveType(underlyingType_attr);
-            enumType.underlying_type = underlying_type;
-        }
-
-        // Parse IsFlags attribute
-        const char* isFlags_attr = element.Attribute("IsFlags");
-        if (isFlags_attr) {
-            enumType.is_flags = std::string(isFlags_attr) == "true";
-        }
-
-        // Parse Member elements
-        for (const tinyxml2::XMLElement* member_el = element.FirstChildElement("Member");
-            member_el != nullptr;
-            member_el = member_el->NextSiblingElement("Member")) 
-        {
-            EnumMember member;
-            const char* name_attr = member_el->Attribute("Name");
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
             if (name_attr) {
-                member.name = name_attr;
+                enumType.name = name_attr;
             }
-            const char* value_attr = member_el->Attribute("Value");
-            if (value_attr) {
-                member.value = std::stoi(value_attr);
+
+            // Parse UnderlyingType attribute
+            const char* underlyingType_attr = element.Attribute("UnderlyingType");
+            if (underlyingType_attr) {
+                auto underlying_type = PrimitiveType(underlyingType_attr);
+                enumType.underlying_type = underlying_type;
             }
-            enumType.members.push_back(member);
-        }
 
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            enumType.annotations.push_back(annotation);
-        }
+            // Parse IsFlags attribute
+            const char* isFlags_attr = element.Attribute("IsFlags");
+            if (isFlags_attr) {
+                enumType.is_flags = std::string(isFlags_attr) == "true";
+            }
 
-        return enumType;
+            // Parse Member elements
+            for (const tinyxml2::XMLElement* member_el = element.FirstChildElement("Member");
+                member_el != nullptr;
+                member_el = member_el->NextSiblingElement("Member")) 
+            {
+                EnumMember member;
+                const char* name_attr = member_el->Attribute("Name");
+                if (name_attr) {
+                    member.name = name_attr;
+                }
+                const char* value_attr = member_el->Attribute("Value");
+                if (value_attr) {
+                    member.value = std::stoi(value_attr);
+                }
+                enumType.members.push_back(member);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                enumType.annotations.push_back(annotation);
+            }
+
+            return enumType;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing EnumType: " << e.what() << std::endl;
+            std::cerr << "EnumType XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
     }
 
 public:
@@ -471,21 +496,27 @@ public:
     ReferentialConstraint() {}
 
     static ReferentialConstraint FromXml(const tinyxml2::XMLElement& element) {
-        ReferentialConstraint referential_constraint;
+        try {
+            ReferentialConstraint referential_constraint;
 
-        // Parse Property attribute
-        const char* property_attr = element.Attribute("Property");
-        if (property_attr) {
-            referential_constraint.property = property_attr;
+            // Parse Property attribute
+            const char* property_attr = element.Attribute("Property");
+            if (property_attr) {
+                referential_constraint.property = property_attr;
+            }
+
+            // Parse ReferencedProperty attribute
+            const char* referencedProperty_attr = element.Attribute("ReferencedProperty");
+            if (referencedProperty_attr) {
+                referential_constraint.referenced_property = referencedProperty_attr;
+            }
+
+            return referential_constraint;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing ReferentialConstraint: " << e.what() << std::endl;
+            std::cerr << "ReferentialConstraint XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse ReferencedProperty attribute
-        const char* referencedProperty_attr = element.Attribute("ReferencedProperty");
-        if (referencedProperty_attr) {
-            referential_constraint.referenced_property = referencedProperty_attr;
-        }
-
-        return referential_constraint;
     }
 
 public:
@@ -501,57 +532,63 @@ public:
     NavigationProperty() : nullable(true), contains_target(false) {}
 
     static NavigationProperty FromXml(const tinyxml2::XMLElement& element) {
+        try {
         NavigationProperty nav_prop;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            nav_prop.name = name_attr;
-        }
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                nav_prop.name = name_attr;
+            }
 
-        // Parse Type attribute
-        const char* type_attr = element.Attribute("Type");
-        if (type_attr) {
-            nav_prop.type = type_attr;
-        }
+            // Parse Type attribute
+            const char* type_attr = element.Attribute("Type");
+            if (type_attr) {
+                nav_prop.type = type_attr;
+            }
 
-        // Parse Nullable attribute
-        const char* nullable_attr = element.Attribute("Nullable");
-        if (nullable_attr) {
-            nav_prop.nullable = std::string(nullable_attr) == "true";
-        }
+            // Parse Nullable attribute
+            const char* nullable_attr = element.Attribute("Nullable");
+            if (nullable_attr) {
+                nav_prop.nullable = std::string(nullable_attr) == "true";
+            }
 
-        // Parse Partner attribute
-        const char* partner_attr = element.Attribute("Partner");
-        if (partner_attr) {
-            nav_prop.partner = partner_attr;
-        }
+            // Parse Partner attribute
+            const char* partner_attr = element.Attribute("Partner");
+            if (partner_attr) {
+                nav_prop.partner = partner_attr;
+            }
 
-        // Parse ContainsTarget attribute
-        const char* containsTarget_attr = element.Attribute("ContainsTarget");
-        if (containsTarget_attr) {
-            nav_prop.contains_target = std::string(containsTarget_attr) == "true";
-        }
+            // Parse ContainsTarget attribute
+            const char* containsTarget_attr = element.Attribute("ContainsTarget");
+            if (containsTarget_attr) {
+                nav_prop.contains_target = std::string(containsTarget_attr) == "true";
+            }
 
-        // Parse ReferentialConstraint elements
-        for (const tinyxml2::XMLElement* referentialConstraint_el = element.FirstChildElement("ReferentialConstraint");
-            referentialConstraint_el != nullptr;
-            referentialConstraint_el = referentialConstraint_el->NextSiblingElement("ReferentialConstraint")) 
-        {
-            auto referential_constraint = ReferentialConstraint::FromXml(*referentialConstraint_el);
-            nav_prop.referential_constraints.push_back(referential_constraint);
-        }
+            // Parse ReferentialConstraint elements
+            for (const tinyxml2::XMLElement* referentialConstraint_el = element.FirstChildElement("ReferentialConstraint");
+                referentialConstraint_el != nullptr;
+                referentialConstraint_el = referentialConstraint_el->NextSiblingElement("ReferentialConstraint")) 
+            {
+                auto referential_constraint = ReferentialConstraint::FromXml(*referentialConstraint_el);
+                nav_prop.referential_constraints.push_back(referential_constraint);
+            }
 
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            nav_prop.annotations.push_back(annotation);
-        }
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                nav_prop.annotations.push_back(annotation);
+            }
 
-        return nav_prop;
+            return nav_prop;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing NavigationProperty: " << e.what() << std::endl;
+            std::cerr << "NavigationProperty XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
     }
 
 public:
@@ -572,94 +609,100 @@ public:
     Property() : nullable(true), SRID(0) {}
 
     static Property FromXml(const tinyxml2::XMLElement& element) {
-        Property property;
+        try {
+            Property property;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            property.name = name_attr;
-        }
-
-        // Parse Type attribute
-        const char* type_attr = element.Attribute("Type");
-        if (type_attr) {
-            property.type_name = type_attr;
-        }
-
-        // Parse Nullable attribute
-        const char* nullable_attr = element.Attribute("Nullable");
-        if (nullable_attr) {
-            property.nullable = std::string(nullable_attr) == "true";
-        }
-
-        // Parse DefaultValue attribute
-        const char* default_value_attr = element.Attribute("DefaultValue");
-        if (default_value_attr) {
-            property.default_value = default_value_attr;
-        }
-
-        // Parse MaxLength attribute
-        const char* max_length_attr = element.Attribute("MaxLength");
-        if (max_length_attr) {
-            if (std::string(max_length_attr) == "max") {
-                property.max_length = -1;
-            } else {
-                property.max_length = std::stoi(max_length_attr);
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                property.name = name_attr;
             }
-        }
 
-        // Parse FixedLength attribute
-        const char* fixed_length_attr = element.Attribute("FixedLength");
-        if (fixed_length_attr) {
-            property.fixed_length = std::stoi(fixed_length_attr);
-        }
+            // Parse Type attribute
+            const char* type_attr = element.Attribute("Type");
+            if (type_attr) {
+                property.type_name = type_attr;
+            }
 
-        // Parse Precision attribute
-        const char* precision_attr = element.Attribute("Precision");
-        if (precision_attr) {
-            property.precision = std::stoi(precision_attr);
-        }
+            // Parse Nullable attribute
+            const char* nullable_attr = element.Attribute("Nullable");
+            if (nullable_attr) {
+                property.nullable = std::string(nullable_attr) == "true";
+            }
 
-        // Parse Scale attribute
-        const char* scale_attr = element.Attribute("Scale");
-        if (scale_attr) {
-            property.scale = std::stoi(scale_attr);
-        }
+            // Parse DefaultValue attribute
+            const char* default_value_attr = element.Attribute("DefaultValue");
+            if (default_value_attr) {
+                property.default_value = default_value_attr;
+            }
 
-        // Parse SRID attribute
-        const char* SRID_attr = element.Attribute("SRID");
-        if (SRID_attr) {
-            property.SRID = std::stoi(SRID_attr);
-        }
+            // Parse MaxLength attribute
+            const char* max_length_attr = element.Attribute("MaxLength");
+            if (max_length_attr) {
+                if (std::string(max_length_attr) == "max") {
+                    property.max_length = -1;
+                } else {
+                    property.max_length = std::stoi(max_length_attr);
+                }
+            }
 
-        // Parse Unicode attribute
-        const char* unicode_attr = element.Attribute("Unicode");
-        if (unicode_attr) {
-            property.unicode = std::string(unicode_attr) == "true";
-        }
+            // Parse FixedLength attribute
+            const char* fixed_length_attr = element.Attribute("FixedLength");
+            if (fixed_length_attr) {
+                property.fixed_length = std::stoi(fixed_length_attr);
+            }
 
-        // Parse Sorting attribute
-        const char* sorting_attr = element.Attribute("Sorting");
-        if (sorting_attr) {
-            property.sorting = sorting_attr;
-        }
+            // Parse Precision attribute
+            const char* precision_attr = element.Attribute("Precision");
+            if (precision_attr) {
+                property.precision = std::stoi(precision_attr);
+            }
 
-        // Parse ConcurrencyMode attribute
-        const char* concurrencyMode_attr = element.Attribute("ConcurrencyMode");
-        if (concurrencyMode_attr) {
-            property.concurrencyMode = concurrencyMode_attr;
-        }
+            // Parse Scale attribute
+            const char* scale_attr = element.Attribute("Scale");
+            if (scale_attr) {
+                property.scale = std::stoi(scale_attr);
+            }
 
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            property.annotations.push_back(annotation);
-        }
+            // Parse SRID attribute
+            const char* SRID_attr = element.Attribute("SRID");
+            if (SRID_attr) {
+                property.SRID = std::stoi(SRID_attr);
+            }
 
-        return property;
+            // Parse Unicode attribute
+            const char* unicode_attr = element.Attribute("Unicode");
+            if (unicode_attr) {
+                property.unicode = std::string(unicode_attr) == "true";
+            }
+
+            // Parse Sorting attribute
+            const char* sorting_attr = element.Attribute("Sorting");
+            if (sorting_attr) {
+                property.sorting = sorting_attr;
+            }
+
+            // Parse ConcurrencyMode attribute
+            const char* concurrencyMode_attr = element.Attribute("ConcurrencyMode");
+            if (concurrencyMode_attr) {
+                property.concurrencyMode = concurrencyMode_attr;
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                property.annotations.push_back(annotation);
+            }
+
+            return property;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Property: " << e.what() << std::endl;
+            std::cerr << "Property XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
     }
 
 public:
@@ -685,66 +728,72 @@ public:
     ComplexType() : abstract_type(false), open_type(false), has_tream(false) {}
 
     static ComplexType FromXml(const tinyxml2::XMLElement& element) {
-        ComplexType complex_type;
+        try {
+            ComplexType complex_type;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            complex_type.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                complex_type.name = name_attr;
+            }
+
+            // Parse BaseType attribute
+            const char* baseType_attr = element.Attribute("BaseType");
+            if (baseType_attr) {
+                complex_type.base_type = baseType_attr;
+            }
+
+            // Parse Abstract attribute
+            const char* abstract_attr = element.Attribute("Abstract");
+            if (abstract_attr) {
+                complex_type.abstract_type = std::string(abstract_attr) == "true";
+            }
+
+            // Parse OpenType attribute
+            const char* openType_attr = element.Attribute("OpenType");
+            if (openType_attr) {
+                complex_type.open_type = std::string(openType_attr) == "true";
+            }
+
+            // Parse HasStream attribute
+            const char* hasStream_attr = element.Attribute("HasStream");
+            if (hasStream_attr) {
+                complex_type.has_tream = std::string(hasStream_attr) == "true";
+            }
+
+            // Parse Property elements
+            for (const tinyxml2::XMLElement* prop_el = element.FirstChildElement("Property");
+                prop_el != nullptr;
+                prop_el = prop_el->NextSiblingElement("Property")) 
+            {
+                auto property = Property::FromXml(*prop_el);
+                complex_type.properties.push_back(property);
+            }
+
+            // Parse NavigationProperty elements
+            for (const tinyxml2::XMLElement* nav_prop_el = element.FirstChildElement("NavigationProperty");
+                nav_prop_el != nullptr;
+                nav_prop_el = nav_prop_el->NextSiblingElement("NavigationProperty")) 
+            {
+                auto nav_prop = NavigationProperty::FromXml(*nav_prop_el);
+                complex_type.navigation_properties.push_back(nav_prop);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                    complex_type.annotations.push_back(annotation);
+            }
+
+            return complex_type;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing ComplexType: " << e.what() << std::endl;
+            std::cerr << "ComplexType XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse BaseType attribute
-        const char* baseType_attr = element.Attribute("BaseType");
-        if (baseType_attr) {
-            complex_type.base_type = baseType_attr;
-        }
-
-        // Parse Abstract attribute
-        const char* abstract_attr = element.Attribute("Abstract");
-        if (abstract_attr) {
-            complex_type.abstract_type = std::string(abstract_attr) == "true";
-        }
-
-        // Parse OpenType attribute
-        const char* openType_attr = element.Attribute("OpenType");
-        if (openType_attr) {
-            complex_type.open_type = std::string(openType_attr) == "true";
-        }
-
-        // Parse HasStream attribute
-        const char* hasStream_attr = element.Attribute("HasStream");
-        if (hasStream_attr) {
-            complex_type.has_tream = std::string(hasStream_attr) == "true";
-        }
-
-        // Parse Property elements
-        for (const tinyxml2::XMLElement* prop_el = element.FirstChildElement("Property");
-            prop_el != nullptr;
-            prop_el = prop_el->NextSiblingElement("Property")) 
-        {
-            auto property = Property::FromXml(*prop_el);
-            complex_type.properties.push_back(property);
-        }
-
-        // Parse NavigationProperty elements
-        for (const tinyxml2::XMLElement* nav_prop_el = element.FirstChildElement("NavigationProperty");
-            nav_prop_el != nullptr;
-            nav_prop_el = nav_prop_el->NextSiblingElement("NavigationProperty")) 
-        {
-            auto nav_prop = NavigationProperty::FromXml(*nav_prop_el);
-            complex_type.navigation_properties.push_back(nav_prop);
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            complex_type.annotations.push_back(annotation);
-        }
-
-        return complex_type;
     }
 
 public:
@@ -766,15 +815,21 @@ public:
     PropertyRef() {}
 
     static PropertyRef FromXml(const tinyxml2::XMLElement& element) {
-        PropertyRef property_ref;
+        try {
+            PropertyRef property_ref;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            property_ref.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                property_ref.name = name_attr;
+            }
+
+            return property_ref;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing PropertyRef: " << e.what() << std::endl;
+            std::cerr << "PropertyRef XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        return property_ref;
     }
 
 public:
@@ -788,22 +843,28 @@ public:
     Key() {}
 
     static Key FromXml(const tinyxml2::XMLElement& element) {
-        Key key;
+        try {
+            Key key;
 
-        // Parse PropertyRef elements
-        for (const tinyxml2::XMLElement* propertyRef_el = element.FirstChildElement("PropertyRef");
-            propertyRef_el != nullptr;
-            propertyRef_el = propertyRef_el->NextSiblingElement("PropertyRef")) 
-        {
-            PropertyRef property_ref;
-            const char* name_attr = propertyRef_el->Attribute("Name");
-            if (name_attr) {
-                property_ref.name = name_attr;
+            // Parse PropertyRef elements
+            for (const tinyxml2::XMLElement* propertyRef_el = element.FirstChildElement("PropertyRef");
+                propertyRef_el != nullptr;
+                propertyRef_el = propertyRef_el->NextSiblingElement("PropertyRef")) 
+            {
+                PropertyRef property_ref;
+                const char* name_attr = propertyRef_el->Attribute("Name");
+                if (name_attr) {
+                    property_ref.name = name_attr;
+                }
+                key.property_refs.push_back(property_ref);
             }
-            key.property_refs.push_back(property_ref);
-        }
 
-        return key;
+            return key;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Key: " << e.what() << std::endl;
+            std::cerr << "Key XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
     }
 
 public:
@@ -817,72 +878,78 @@ public:
     EntityType() : abstract_type(false), open_type(false), hasStream(false) {}
 
     static EntityType FromXml(const tinyxml2::XMLElement& element) {
-        EntityType entity_type;
+        try {
+            EntityType entity_type;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            entity_type.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                entity_type.name = name_attr;
+            }
+
+            // Parse Key element
+            const tinyxml2::XMLElement* key_el = element.FirstChildElement("Key");
+            if (key_el) {
+                entity_type.key = Key::FromXml(*key_el);
+            }
+
+            // Parse BaseType attribute
+            const char* baseType_attr = element.Attribute("BaseType");
+            if (baseType_attr) {
+                entity_type.base_type = baseType_attr;
+            }
+
+            // Parse Abstract attribute
+            const char* abstract_attr = element.Attribute("Abstract");
+            if (abstract_attr) {
+                entity_type.abstract_type = std::string(abstract_attr) == "true";
+            }
+
+            // Parse OpenType attribute
+            const char* openType_attr = element.Attribute("OpenType");
+            if (openType_attr) {
+                entity_type.open_type = std::string(openType_attr) == "true";
+            }
+
+            // Parse HasStream attribute
+            const char* hasStream_attr = element.Attribute("HasStream");
+            if (hasStream_attr) {
+                entity_type.hasStream = std::string(hasStream_attr) == "true";
+            }
+
+            // Parse Property elements
+            for (const tinyxml2::XMLElement* prop_el = element.FirstChildElement("Property");
+                prop_el != nullptr;
+                prop_el = prop_el->NextSiblingElement("Property")) 
+            {
+                auto property = Property::FromXml(*prop_el);
+                entity_type.properties.push_back(property);
+            }
+
+            // Parse NavigationProperty elements
+            for (const tinyxml2::XMLElement* nav_prop_el = element.FirstChildElement("NavigationProperty");
+                nav_prop_el != nullptr;
+                nav_prop_el = nav_prop_el->NextSiblingElement("NavigationProperty")) 
+            {
+                auto nav_prop = NavigationProperty::FromXml(*nav_prop_el);
+                entity_type.navigation_properties.push_back(nav_prop);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                entity_type.annotations.push_back(annotation);
+            }
+
+            return entity_type;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing EntityType: " << e.what() << std::endl;
+            std::cerr << "EntityType XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Key element
-        const tinyxml2::XMLElement* key_el = element.FirstChildElement("Key");
-        if (key_el) {
-            entity_type.key = Key::FromXml(*key_el);
-        }
-
-        // Parse BaseType attribute
-        const char* baseType_attr = element.Attribute("BaseType");
-        if (baseType_attr) {
-            entity_type.base_type = baseType_attr;
-        }
-
-        // Parse Abstract attribute
-        const char* abstract_attr = element.Attribute("Abstract");
-        if (abstract_attr) {
-            entity_type.abstract_type = std::string(abstract_attr) == "true";
-        }
-
-        // Parse OpenType attribute
-        const char* openType_attr = element.Attribute("OpenType");
-        if (openType_attr) {
-            entity_type.open_type = std::string(openType_attr) == "true";
-        }
-
-        // Parse HasStream attribute
-        const char* hasStream_attr = element.Attribute("HasStream");
-        if (hasStream_attr) {
-            entity_type.hasStream = std::string(hasStream_attr) == "true";
-        }
-
-        // Parse Property elements
-        for (const tinyxml2::XMLElement* prop_el = element.FirstChildElement("Property");
-            prop_el != nullptr;
-            prop_el = prop_el->NextSiblingElement("Property")) 
-        {
-            auto property = Property::FromXml(*prop_el);
-            entity_type.properties.push_back(property);
-        }
-
-        // Parse NavigationProperty elements
-        for (const tinyxml2::XMLElement* nav_prop_el = element.FirstChildElement("NavigationProperty");
-            nav_prop_el != nullptr;
-            nav_prop_el = nav_prop_el->NextSiblingElement("NavigationProperty")) 
-        {
-            auto nav_prop = NavigationProperty::FromXml(*nav_prop_el);
-            entity_type.navigation_properties.push_back(nav_prop);
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            entity_type.annotations.push_back(annotation);
-        }
-
-        return entity_type;
     }
 
 
@@ -905,61 +972,67 @@ public:
     TypeDefinition() : underlying_type(erpl_web::Int32), maxLength(0), unicode(false), precision(0), scale(0), SRID(0) {}
 
     static TypeDefinition FromXml(const tinyxml2::XMLElement& element) {
-        TypeDefinition type_definition;
+        try {
+            TypeDefinition type_definition;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            type_definition.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                type_definition.name = name_attr;
+            }
+
+            // Parse UnderlyingType attribute
+            const char* underlyingType_attr = element.Attribute("UnderlyingType");
+            if (underlyingType_attr) {
+                auto underlying_type = PrimitiveType(underlyingType_attr);
+                type_definition.underlying_type = underlying_type;
+            }
+
+            // Parse MaxLength attribute
+            const char* maxLength_attr = element.Attribute("MaxLength");
+            if (maxLength_attr) {
+                type_definition.maxLength = std::stoi(maxLength_attr);
+            }
+
+            // Parse Unicode attribute
+            const char* unicode_attr = element.Attribute("Unicode");
+            if (unicode_attr) {
+                type_definition.unicode = std::string(unicode_attr) == "true";
+            }
+
+            // Parse Precision attribute
+            const char* precision_attr = element.Attribute("Precision");
+            if (precision_attr) {
+                type_definition.precision = std::stoi(precision_attr);
+            }
+
+            // Parse Scale attribute
+            const char* scale_attr = element.Attribute("Scale");
+            if (scale_attr) {
+                type_definition.scale = std::stoi(scale_attr);
+            }
+
+            // Parse SRID attribute
+            const char* SRID_attr = element.Attribute("SRID");
+            if (SRID_attr) {
+                type_definition.SRID = std::stoi(SRID_attr);
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                type_definition.annotations.push_back(annotation);
+            }
+
+            return type_definition;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing TypeDefinition: " << e.what() << std::endl;
+            std::cerr << "TypeDefinition XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse UnderlyingType attribute
-        const char* underlyingType_attr = element.Attribute("UnderlyingType");
-        if (underlyingType_attr) {
-            auto underlying_type = PrimitiveType(underlyingType_attr);
-            type_definition.underlying_type = underlying_type;
-        }
-
-        // Parse MaxLength attribute
-        const char* maxLength_attr = element.Attribute("MaxLength");
-        if (maxLength_attr) {
-            type_definition.maxLength = std::stoi(maxLength_attr);
-        }
-
-        // Parse Unicode attribute
-        const char* unicode_attr = element.Attribute("Unicode");
-        if (unicode_attr) {
-            type_definition.unicode = std::string(unicode_attr) == "true";
-        }
-
-        // Parse Precision attribute
-        const char* precision_attr = element.Attribute("Precision");
-        if (precision_attr) {
-            type_definition.precision = std::stoi(precision_attr);
-        }
-
-        // Parse Scale attribute
-        const char* scale_attr = element.Attribute("Scale");
-        if (scale_attr) {
-            type_definition.scale = std::stoi(scale_attr);
-        }
-
-        // Parse SRID attribute
-        const char* SRID_attr = element.Attribute("SRID");
-        if (SRID_attr) {
-            type_definition.SRID = std::stoi(SRID_attr);
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            type_definition.annotations.push_back(annotation);
-        }
-
-        return type_definition;
     }
 
 public:
@@ -980,30 +1053,36 @@ public:
     EntitySet() {}
 
     static EntitySet FromXml(const tinyxml2::XMLElement& element) {
-        EntitySet entity_set;
+        try {
+            EntitySet entity_set;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            entity_set.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                entity_set.name = name_attr;
+            }
+
+            // Parse EntityType attribute
+            const char* entityType_attr = element.Attribute("EntityType");
+            if (entityType_attr) {
+                entity_set.entity_type_name = entityType_attr;
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                entity_set.annotations.push_back(annotation);
+            }
+
+            return entity_set;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing EntitySet: " << e.what() << std::endl;
+            std::cerr << "EntitySet XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse EntityType attribute
-        const char* entityType_attr = element.Attribute("EntityType");
-        if (entityType_attr) {
-            entity_set.entity_type_name = entityType_attr;
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            entity_set.annotations.push_back(annotation);
-        }
-
-        return entity_set;
     }
 
 public:
@@ -1020,30 +1099,36 @@ public:
 
     static ActionImport FromXml(const tinyxml2::XMLElement& element) 
     {
-        ActionImport action_import;
+        try {
+            ActionImport action_import;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            action_import.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                action_import.name = name_attr;
+            }
+
+            // Parse Action attribute
+            const char* action_attr = element.Attribute("Action");
+            if (action_attr) {
+                action_import.action = action_attr;
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                action_import.annotations.push_back(annotation);
+            }
+
+            return action_import;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing ActionImport: " << e.what() << std::endl;
+            std::cerr << "ActionImport XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Action attribute
-        const char* action_attr = element.Attribute("Action");
-        if (action_attr) {
-            action_import.action = action_attr;
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            action_import.annotations.push_back(annotation);
-        }
-
-        return action_import;
     }
 
 public:
@@ -1060,36 +1145,42 @@ public:
 
     static FunctionImport FromXml(const tinyxml2::XMLElement& element) 
     {
-        FunctionImport function_import;
+        try {
+            FunctionImport function_import;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            function_import.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                function_import.name = name_attr;
+            }
+
+            // Parse Function attribute
+            const char* function_attr = element.Attribute("Function");
+            if (function_attr) {
+                function_import.function = function_attr;
+            }
+
+            // Parse IncludeInServiceDocument attribute
+            const char* includeInServiceDocument_attr = element.Attribute("IncludeInServiceDocument");
+            if (includeInServiceDocument_attr) {
+                function_import.includeInServiceDocument = std::string(includeInServiceDocument_attr) == "true";
+            }
+
+            // Parse Annotation elements
+            for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
+                annotation_el != nullptr;
+                annotation_el = annotation_el->NextSiblingElement("Annotation")) 
+            {
+                auto annotation = Annotation::FromXml(*annotation_el);
+                function_import.annotations.push_back(annotation);
+            }
+
+            return function_import;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing FunctionImport: " << e.what() << std::endl;
+            std::cerr << "FunctionImport XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Function attribute
-        const char* function_attr = element.Attribute("Function");
-        if (function_attr) {
-            function_import.function = function_attr;
-        }
-
-        // Parse IncludeInServiceDocument attribute
-        const char* includeInServiceDocument_attr = element.Attribute("IncludeInServiceDocument");
-        if (includeInServiceDocument_attr) {
-            function_import.includeInServiceDocument = std::string(includeInServiceDocument_attr) == "true";
-        }
-
-        // Parse Annotation elements
-        for (const tinyxml2::XMLElement* annotation_el = element.FirstChildElement("Annotation");
-            annotation_el != nullptr;
-            annotation_el = annotation_el->NextSiblingElement("Annotation")) 
-        {
-            auto annotation = Annotation::FromXml(*annotation_el);
-            function_import.annotations.push_back(annotation);
-        }
-
-        return function_import;
     }
 
 public:
@@ -1108,66 +1199,72 @@ public:
 
     static EntityContainer FromXml(const tinyxml2::XMLElement& element) 
     {
-        EntityContainer entity_container;
+        try {
+            EntityContainer entity_container;
 
-        // Parse Name attribute
-        const char* name_attr = element.Attribute("Name");
-        if (name_attr) {
-            entity_container.name = name_attr;
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                entity_container.name = name_attr;
+            }
+
+            // Parse EntitySet elements
+            for (const tinyxml2::XMLElement* entitySet_el = element.FirstChildElement("EntitySet");
+                entitySet_el != nullptr;
+                entitySet_el = entitySet_el->NextSiblingElement("EntitySet")) 
+            {
+                EntitySet entitySet;
+                const char* entitySet_name_attr = entitySet_el->Attribute("Name");
+                if (entitySet_name_attr) {
+                    entitySet.name = entitySet_name_attr;
+                }
+                const char* entitySet_entityType_attr = entitySet_el->Attribute("EntityType");
+                if (entitySet_entityType_attr) {
+                    entitySet.entity_type_name = entitySet_entityType_attr;
+                }
+                entity_container.entity_sets.push_back(entitySet);
+            }
+
+            // Parse ActionImport elements
+            for (const tinyxml2::XMLElement* actionImport_el = element.FirstChildElement("ActionImport");
+                actionImport_el != nullptr;
+                actionImport_el = actionImport_el->NextSiblingElement("ActionImport")) 
+            {
+                ActionImport actionImport;
+                const char* actionImport_name_attr = actionImport_el->Attribute("Name");
+                if (actionImport_name_attr) {
+                    actionImport.name = actionImport_name_attr;
+                }
+                const char* actionImport_action_attr = actionImport_el->Attribute("Action");
+                if (actionImport_action_attr) {
+                    actionImport.action = actionImport_action_attr;
+                }
+                entity_container.action_imports.push_back(actionImport);
+            }
+
+            // Parse FunctionImport elements
+            for (const tinyxml2::XMLElement* functionImport_el = element.FirstChildElement("FunctionImport");
+                functionImport_el != nullptr;
+                functionImport_el = functionImport_el->NextSiblingElement("FunctionImport")) 
+            {
+                FunctionImport functionImport;
+                const char* functionImport_name_attr = functionImport_el->Attribute("Name");
+                if (functionImport_name_attr) {
+                    functionImport.name = functionImport_name_attr;
+                }
+                const char* functionImport_function_attr = functionImport_el->Attribute("Function");
+                if (functionImport_function_attr) {
+                    functionImport.function = functionImport_function_attr;
+                }
+                entity_container.function_imports.push_back(functionImport);
+            }
+
+            return entity_container;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing EntityContainer: " << e.what() << std::endl;
+            std::cerr << "EntityContainer XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse EntitySet elements
-        for (const tinyxml2::XMLElement* entitySet_el = element.FirstChildElement("EntitySet");
-            entitySet_el != nullptr;
-            entitySet_el = entitySet_el->NextSiblingElement("EntitySet")) 
-        {
-            EntitySet entitySet;
-            const char* entitySet_name_attr = entitySet_el->Attribute("Name");
-            if (entitySet_name_attr) {
-                entitySet.name = entitySet_name_attr;
-            }
-            const char* entitySet_entityType_attr = entitySet_el->Attribute("EntityType");
-            if (entitySet_entityType_attr) {
-                entitySet.entity_type_name = entitySet_entityType_attr;
-            }
-            entity_container.entity_sets.push_back(entitySet);
-        }
-
-        // Parse ActionImport elements
-        for (const tinyxml2::XMLElement* actionImport_el = element.FirstChildElement("ActionImport");
-            actionImport_el != nullptr;
-            actionImport_el = actionImport_el->NextSiblingElement("ActionImport")) 
-        {
-            ActionImport actionImport;
-            const char* actionImport_name_attr = actionImport_el->Attribute("Name");
-            if (actionImport_name_attr) {
-                actionImport.name = actionImport_name_attr;
-            }
-            const char* actionImport_action_attr = actionImport_el->Attribute("Action");
-            if (actionImport_action_attr) {
-                actionImport.action = actionImport_action_attr;
-            }
-            entity_container.action_imports.push_back(actionImport);
-        }
-
-        // Parse FunctionImport elements
-        for (const tinyxml2::XMLElement* functionImport_el = element.FirstChildElement("FunctionImport");
-            functionImport_el != nullptr;
-            functionImport_el = functionImport_el->NextSiblingElement("FunctionImport")) 
-        {
-            FunctionImport functionImport;
-            const char* functionImport_name_attr = functionImport_el->Attribute("Name");
-            if (functionImport_name_attr) {
-                functionImport.name = functionImport_name_attr;
-            }
-            const char* functionImport_function_attr = functionImport_el->Attribute("Function");
-            if (functionImport_function_attr) {
-                functionImport.function = functionImport_function_attr;
-            }
-            entity_container.function_imports.push_back(functionImport);
-        }
-
-        return entity_container;
     }
 
 public:
@@ -1187,87 +1284,106 @@ public:
     Schema() {}
 
     static Schema FromXml(const tinyxml2::XMLElement& element) {
-        Schema schema;
+        try {
+            Schema schema;
 
-        // Parse Namespace attribute
-        const char* ns_attr = element.Attribute("Namespace");
-        if (ns_attr) {
-            schema.ns = ns_attr;
+            // Parse Namespace attribute
+            try {
+                const char* ns_attr = element.Attribute("Namespace");
+                if (ns_attr) {
+                    schema.ns = ns_attr;
+                }
+            } catch (const std::runtime_error& e) {
+                std::cerr << "Error parsing Namespaces: " << e.what() << std::endl;
+                std::cerr << "Schema XML: " << std::endl << element.Value() << std::endl;
+                throw e;
+            }
+
+            // Parse Alias attribute
+            try {
+                const char* alias_attr = element.Attribute("Alias");
+                if (alias_attr) {
+                    schema.alias = alias_attr;
+                }
+            } catch (const std::runtime_error& e) {
+                std::cerr << "Error parsing Alias: " << e.what() << std::endl;
+                std::cerr << "Schema XML: " << std::endl << element.Value() << std::endl;
+                throw e;
+            }
+
+            // Parse EnumType elements
+            for (const tinyxml2::XMLElement* enumType_el = element.FirstChildElement("EnumType");
+                enumType_el != nullptr;
+                enumType_el = enumType_el->NextSiblingElement("EnumType")) 
+            {
+                schema.enum_types.push_back(EnumType::FromXml(*enumType_el));
+            }
+
+            // Parse TypeDefinition elements
+            for (const tinyxml2::XMLElement* typeDef_el = element.FirstChildElement("TypeDefinition");
+                typeDef_el != nullptr;
+                typeDef_el = typeDef_el->NextSiblingElement("TypeDefinition")) 
+            {
+                schema.type_definitions.push_back(TypeDefinition::FromXml(*typeDef_el));
+            }
+
+            // Parse ComplexType elements
+            for (const tinyxml2::XMLElement* complexType_el = element.FirstChildElement("ComplexType");
+                complexType_el != nullptr;
+                complexType_el = complexType_el->NextSiblingElement("ComplexType")) 
+            {
+                schema.complex_types.push_back(ComplexType::FromXml(*complexType_el));
+            }
+
+            // Parse EntityType elements
+            for (const tinyxml2::XMLElement* entityType_el = element.FirstChildElement("EntityType");
+                entityType_el != nullptr;
+                entityType_el = entityType_el->NextSiblingElement("EntityType")) 
+            {
+                auto entity_type = EntityType::FromXml(*entityType_el);
+                schema.entity_types.push_back(entity_type);
+            }
+
+            /*
+            // Parse Action elements
+            for (const tinyxml2::XMLElement* action_el = element.FirstChildElement("Action");
+                action_el != nullptr;
+                action_el = action_el->NextSiblingElement("Action")) 
+            {
+                schema.actions.push_back(Action::FromXml(*action_el));
+            }
+            */
+
+            // Parse Function elements
+            for (const tinyxml2::XMLElement* function_el = element.FirstChildElement("Function");
+                function_el != nullptr;
+                function_el = function_el->NextSiblingElement("Function")) 
+            {
+                schema.functions.push_back(Function::FromXml(*function_el));
+            }
+
+            // Parse EntityContainer elements
+            for (const tinyxml2::XMLElement* entityContainer_el = element.FirstChildElement("EntityContainer");
+                entityContainer_el != nullptr;
+                entityContainer_el = entityContainer_el->NextSiblingElement("EntityContainer")) 
+            {
+                schema.entity_containers.push_back(EntityContainer::FromXml(*entityContainer_el));
+            }
+
+            // Parse Annotations elements
+            for (const tinyxml2::XMLElement* annotations_el = element.FirstChildElement("Annotations");
+                annotations_el != nullptr;
+                annotations_el = annotations_el->NextSiblingElement("Annotations")) 
+            {
+                schema.annotations.push_back(Annotations::FromXml(*annotations_el));
+            }
+
+            return schema;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Schema: " << e.what() << std::endl;
+            std::cerr << "Schema XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        // Parse Alias attribute
-        const char* alias_attr = element.Attribute("Alias");
-        if (alias_attr) {
-            schema.alias = alias_attr;
-        }
-
-        // Parse EnumType elements
-        for (const tinyxml2::XMLElement* enumType_el = element.FirstChildElement("EnumType");
-            enumType_el != nullptr;
-            enumType_el = enumType_el->NextSiblingElement("EnumType")) 
-        {
-            schema.enum_types.push_back(EnumType::FromXml(*enumType_el));
-        }
-
-        // Parse TypeDefinition elements
-        for (const tinyxml2::XMLElement* typeDef_el = element.FirstChildElement("TypeDefinition");
-            typeDef_el != nullptr;
-            typeDef_el = typeDef_el->NextSiblingElement("TypeDefinition")) 
-        {
-            schema.type_definitions.push_back(TypeDefinition::FromXml(*typeDef_el));
-        }
-
-        // Parse ComplexType elements
-        for (const tinyxml2::XMLElement* complexType_el = element.FirstChildElement("ComplexType");
-            complexType_el != nullptr;
-            complexType_el = complexType_el->NextSiblingElement("ComplexType")) 
-        {
-            schema.complex_types.push_back(ComplexType::FromXml(*complexType_el));
-        }
-
-        // Parse EntityType elements
-        for (const tinyxml2::XMLElement* entityType_el = element.FirstChildElement("EntityType");
-            entityType_el != nullptr;
-            entityType_el = entityType_el->NextSiblingElement("EntityType")) 
-        {
-            schema.entity_types.push_back(EntityType::FromXml(*entityType_el));
-        }
-
-        /*
-        // Parse Action elements
-        for (const tinyxml2::XMLElement* action_el = element.FirstChildElement("Action");
-            action_el != nullptr;
-            action_el = action_el->NextSiblingElement("Action")) 
-        {
-            schema.actions.push_back(Action::FromXml(*action_el));
-        }
-        */
-
-        // Parse Function elements
-        for (const tinyxml2::XMLElement* function_el = element.FirstChildElement("Function");
-            function_el != nullptr;
-            function_el = function_el->NextSiblingElement("Function")) 
-        {
-            schema.functions.push_back(Function::FromXml(*function_el));
-        }
-
-        // Parse EntityContainer elements
-        for (const tinyxml2::XMLElement* entityContainer_el = element.FirstChildElement("EntityContainer");
-            entityContainer_el != nullptr;
-            entityContainer_el = entityContainer_el->NextSiblingElement("EntityContainer")) 
-        {
-            schema.entity_containers.push_back(EntityContainer::FromXml(*entityContainer_el));
-        }
-
-        // Parse Annotations elements
-        for (const tinyxml2::XMLElement* annotations_el = element.FirstChildElement("Annotations");
-            annotations_el != nullptr;
-            annotations_el = annotations_el->NextSiblingElement("Annotations")) 
-        {
-            schema.annotations.push_back(Annotations::FromXml(*annotations_el));
-        }
-
-        return schema;
     }
 
     TypeVariant FindType(const std::string& type_name) const 
@@ -1322,17 +1438,23 @@ public:
     DataServices() {}
 
     static DataServices FromXml(const tinyxml2::XMLElement& element) {
-        DataServices data_svc;
+        try {
+            DataServices data_svc;
 
-        // Parse Schema elements
-        for (const tinyxml2::XMLElement* schema_el = element.FirstChildElement("Schema");
-            schema_el != nullptr;
-            schema_el = schema_el->NextSiblingElement("Schema")) 
-        {
-            data_svc.schemas.push_back(Schema::FromXml(*schema_el));
+            // Parse Schema elements
+            for (const tinyxml2::XMLElement* schema_el = element.FirstChildElement("Schema");
+                schema_el != nullptr;
+                schema_el = schema_el->NextSiblingElement("Schema")) 
+            {
+                data_svc.schemas.push_back(Schema::FromXml(*schema_el));
+            }
+
+            return data_svc;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Schema: " << e.what() << std::endl;
+            std::cerr << "Schema XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        return data_svc;
     }
 
 public:
@@ -1346,19 +1468,25 @@ public:
     ReferenceInclude() {}
 
     static ReferenceInclude FromXml(const tinyxml2::XMLElement& element) {
-        ReferenceInclude include;
+        try {
+            ReferenceInclude include;
 
-        const char* ns_attr = element.Attribute("Namespace");
-        if (ns_attr) {
-            include.namespace_ = ns_attr;
+            const char* ns_attr = element.Attribute("Namespace");
+            if (ns_attr) {
+                include.namespace_ = ns_attr;
+            }
+
+            const char* ailas_attr = element.Attribute("Alias");
+            if (ailas_attr) {
+                include.alias = ailas_attr;
+            }
+
+            return include;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing ReferenceInclude: " << e.what() << std::endl;
+            std::cerr << "ReferenceInclude XML: " << std::endl << element.Value() << std::endl;
+            throw e;
         }
-
-        const char* ailas_attr = element.Attribute("Alias");
-        if (ailas_attr) {
-            include.alias = ailas_attr;
-        }
-
-        return include;
     }
 
 public:
@@ -1373,28 +1501,34 @@ public:
     Reference() {}
 
     static Reference FromXml(const tinyxml2::XMLElement& element) {
-        Reference reference;
+        try {
+            Reference reference;
 
-        // Parse Uri attribute
-        const char* uri_attr = element.Attribute("Uri");
-        if (uri_attr) {
-            reference.uri = uri_attr;
-        }
-
-        // Parse Include elements
-        for (const tinyxml2::XMLElement* include_el = element.FirstChildElement("Include");
-            include_el != nullptr;
-            include_el = include_el->NextSiblingElement("Include")) 
-        {
-            ReferenceInclude include;
-            const char* namespaceAttr = include_el->Attribute("Namespace");
-            if (namespaceAttr) {
-                include.namespace_ = namespaceAttr;
+            // Parse Uri attribute
+            const char* uri_attr = element.Attribute("Uri");
+            if (uri_attr) {
+                reference.uri = uri_attr;
             }
-            reference.includes.push_back(include);
-        }
 
-        return reference;
+            // Parse Include elements
+            for (const tinyxml2::XMLElement* include_el = element.FirstChildElement("Include");
+                include_el != nullptr;
+                include_el = include_el->NextSiblingElement("Include")) 
+            {
+                ReferenceInclude include;
+                const char* namespaceAttr = include_el->Attribute("Namespace");
+                if (namespaceAttr) {
+                    include.namespace_ = namespaceAttr;
+                }
+                reference.includes.push_back(include);
+            }
+
+            return reference;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Reference: " << e.what() << std::endl;
+            std::cerr << "Reference XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
     }
 public:
     std::string uri;
@@ -1411,7 +1545,11 @@ public:
         tinyxml2::XMLDocument doc;
         tinyxml2::XMLError result = doc.Parse(xml.c_str());
         if (result != tinyxml2::XML_SUCCESS) {
-            throw std::runtime_error("Failed to parse XML");
+            std::stringstream ss;
+            ss << "Failed to parse XML [" << tinyxml2::XMLDocument::ErrorIDToName(result) << "]" << std::endl;   
+            ss << "Description: " << doc.ErrorStr() << std::endl;
+            ss << "Content: " << std::endl << xml << std::endl;
+            throw std::runtime_error(ss.str());
         }
 
         return FromXml(doc);
@@ -1448,8 +1586,24 @@ public:
         return edmx;
     }
 
-    TypeVariant FindType(const std::string& type_name) const 
+    std::string StripUrlIfNecessary(const std::string& type_name_or_url) const 
     {
+        if (type_name_or_url.find("http://") == std::string::npos && type_name_or_url.find("https://") == std::string::npos) {
+            return type_name_or_url;
+        }
+
+        auto type_name = type_name_or_url.find('#');
+        if (type_name != std::string::npos) {
+            return type_name_or_url.substr(type_name + 1);
+        }
+
+        throw std::runtime_error("Malformed type name or URL: " + type_name_or_url);
+    }
+
+    TypeVariant FindType(const std::string& type_name_or_url) const 
+    {
+        auto type_name = StripUrlIfNecessary(type_name_or_url);
+
         auto [ns, local_type_name] = SplitNamespace(type_name);
         if (! ns.empty()) {
             for (const auto& schema : data_services.schemas) {
@@ -1460,10 +1614,27 @@ public:
         }
 
         if (PrimitiveType::IsValidPrimitiveType(local_type_name)) {
-            return PrimitiveType::FromString(type_name);
+            return PrimitiveType::FromString(local_type_name);
         }
         
         throw std::runtime_error("Unable to resolve type: " + type_name);
+    }
+
+    EntitySet FindEntitySet(const std::string& entity_set_name_or_url) const
+    {
+        auto entity_set_name = StripUrlIfNecessary(entity_set_name_or_url);
+
+        for (const auto& schema : data_services.schemas) {
+            for (const auto& container : schema.entity_containers) {
+                for (const auto& entity_set : container.entity_sets) {
+                    if (entity_set.name == entity_set_name) {
+                        return entity_set;
+                    }
+                }
+            }
+        }
+
+        throw std::runtime_error("Unable to resolve entity set: " + entity_set_name);
     }
 
 private:
@@ -1578,7 +1749,6 @@ class DuckTypeConverter
 
             return duckdb::LogicalType::STRUCT(fields);
         }
-        
 
         std::tuple<bool, std::string> ExtractCollectionType(const std::string &type_name) const
         {

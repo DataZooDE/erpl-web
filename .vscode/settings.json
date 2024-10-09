@@ -15,6 +15,7 @@
         "-Wno-unused-variable"
     ],
     "files.associations": {
+        "*.gs": "javascript",
         "cctype": "cpp",
         "clocale": "cpp",
         "cmath": "cpp",
@@ -122,7 +123,8 @@
         "xutility": "cpp",
         "filesystem": "cpp",
         "hash_set": "cpp",
-        "text_encoding": "cpp"
+        "text_encoding": "cpp",
+        "*.rh": "cpp"
     },
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "cmake.autoSelectActiveFolder": true,

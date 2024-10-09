@@ -1,0 +1,66 @@
+# name: test/sql/erpl_odata_read.test
+# description: test erpl_odata extension
+# group: [erpl_odata_read]
+
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# Read EntitySet from OData service, and select a single column
+query I
+SELECT UserName FROM odata_read('https://services.odata.org/TripPinRESTierService/People') ORDER BY 1;
+----
+angelhuffman
+clydeguess
+elainestewart
+genevievereeves
+georginabarlow
+javieralfred
+jonirosales
+keithpinckney
+kristakemp
+laurelosborn
+marshallgaray
+ronaldmundy
+russellwhyte
+ryantheriault
+salliesampson
+sandyosborn
+scottketchum
+ursulabright
+vincentcalabrese
+willieashmore
+
+# Read EntitySet from OData service, and select complex type column
+query IIII
+SELECT UserName, 
+       AddressInfo[1].City."Name" AS City,
+       Emails[1] AS Email,
+       Gender
+FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=1') ORDER BY 1 LIMIT 1;
+----
+angelhuffman
+Butte
+Angel@example.com
+Female
+
+
+# Read EntitySet from OData service, where we have to page through results
+query I
+SELECT count(*) 
+FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Customers') AS people;
+----
+91
+
+# Read EntitySet from OData service with column selection, and filter
+SELECT UserName 
+FROM odata_read('https://services.odata.org/TripPinRESTierService/People') 
+WHERE UserName = 'angelhuffman';
+----
+angelhuffman
