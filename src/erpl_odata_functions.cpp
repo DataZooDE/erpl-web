@@ -22,23 +22,48 @@ ODataReadBindData::ODataReadBindData(std::shared_ptr<ODataClient> odata_client)
     predicate_pushdown_helper = std::make_shared<ODataPredicatePushdownHelper>(odata_client->GetResultNames());
 }
 
-
-std::vector<std::string> ODataReadBindData::GetResultNames()
+std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns)
 {
     if (all_result_names.empty()) {
         all_result_names = odata_client->GetResultNames();
     }
 
-    return all_result_names;
+    if (all_columns || active_column_ids.empty()) {
+        return all_result_names;
+    }
+
+    std::vector<std::string> active_result_names;
+    for (auto &column_id : active_column_ids) {
+        if (duckdb::IsRowIdColumnId(column_id)) {
+            continue;
+        }
+
+        active_result_names.push_back(all_result_names[column_id]);
+    }
+
+    return active_result_names;
 }
 
-std::vector<duckdb::LogicalType> ODataReadBindData::GetResultTypes()
+std::vector<duckdb::LogicalType> ODataReadBindData::GetResultTypes(bool all_columns)
 {
     if (all_result_types.empty()) {
         all_result_types = odata_client->GetResultTypes();
     }
 
-    return all_result_types;
+    if (all_columns || active_column_ids.empty()) {
+        return all_result_types;
+    }
+
+    std::vector<duckdb::LogicalType> active_result_types;
+    for (auto &column_id : active_column_ids) {
+        if (duckdb::IsRowIdColumnId(column_id)) {
+            continue;
+        }
+
+        active_result_types.push_back(all_result_types[column_id]);
+    }
+
+    return active_result_types;
 }
 
 unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output)
@@ -47,10 +72,16 @@ unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output)
     auto result_names = GetResultNames();
     auto result_types = GetResultTypes();
     auto rows = response->ToRows(result_names, result_types);
+    auto null_value = duckdb::Value();
 
     for (idx_t i = 0; i < rows.size(); i++) {
-        for (idx_t j = 0; j < result_names.size(); j++) {
-            output.SetValue(j, i, rows[i][j]);
+        for (idx_t j = 0; j < output.ColumnCount(); j++) {
+            if (j >= result_names.size()) {
+                auto col_type = output.data[j].GetType();
+                output.SetValue(j, i, null_value.DefaultCastAs(col_type));
+            } else {
+                output.SetValue(j, i, rows[i][j]);
+            }
         }
     }
     
@@ -71,13 +102,26 @@ bool ODataReadBindData::HasMoreResults()
 
 void ODataReadBindData::ActivateColumns(const std::vector<duckdb::column_t> &column_ids)
 {
+    active_column_ids = column_ids;
     predicate_pushdown_helper->ConsumeColumnSelection(column_ids);
+
+    std::cout << "Select: " << predicate_pushdown_helper->SelectClause() << std::endl;
 }
 
 void ODataReadBindData::AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters)
 {
     predicate_pushdown_helper->ConsumeFilters(filters);
 }
+
+void ODataReadBindData::UpdateUrlFromPredicatePushdown()
+{
+    auto http_client = odata_client->GetHttpClient();
+    auto updated_url = predicate_pushdown_helper->ApplyFiltersToUrl(odata_client->Url());
+    auto current_edmx = odata_client->GetMetadata();
+
+    odata_client = std::make_shared<ODataClient>(http_client, updated_url, current_edmx);
+}
+
 // -------------------------------------------------------------------------------------------------
 
 static duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context, 
@@ -102,6 +146,8 @@ static unique_ptr<GlobalTableFunctionState> ODataReadTableInitGlobalState(Client
 
     bind_data.ActivateColumns(column_ids);
     bind_data.AddFilters(input.filters);
+
+    bind_data.UpdateUrlFromPredicatePushdown();
 
     return duckdb::make_uniq<GlobalTableFunctionState>();
 }

@@ -354,9 +354,25 @@ std::vector<std::vector<duckdb::Value>> ODataResponse::ToRows(std::vector<std::s
 
 // ----------------------------------------------------------------------
 
+ODataClient::ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx) 
+    : ODataClient(http_client, url)
+{ 
+    cached_edmx = edmx;
+}
+
 ODataClient::ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url) 
     : http_client(http_client), url(url) 
 { }
+
+std::shared_ptr<HttpClient> ODataClient::GetHttpClient()
+{
+    return http_client;
+}
+
+std::string ODataClient::Url()
+{
+    return url.ToString();
+}
 
 Edmx ODataClient::GetMetadata() 
 {
@@ -367,7 +383,7 @@ Edmx ODataClient::GetMetadata()
     Get();
 
     auto metadata_url = current_response->MetadataContextUrl();
-    //std::cout << "Fetching Metadata From: " << metadata_url << std::endl;
+    std::cout << "Fetching Metadata From: " << metadata_url << std::endl;
     auto metadata_request = HttpRequest(HttpMethod::GET, metadata_url);
     auto metadata_response = http_client->SendRequest(metadata_request);
     if (metadata_response == nullptr || metadata_response->Code() != 200) {
@@ -389,8 +405,8 @@ std::shared_ptr<ODataResponse> ODataClient::Get(bool get_next)
         return current_response;
     }
 
-    //std::cout << "Fetching OData Request From: [" << (get_next ? "next" : "first") << "] "; 
-    //std::cout << url.ToString() << std::endl;
+    std::cout << "Fetching OData Request From: [" << (get_next ? "next" : "first") << "] "; 
+    std::cout << url.ToString() << std::endl;
 
     if (get_next && current_response != nullptr) {
         auto next_url = current_response->NextUrl();
@@ -460,5 +476,7 @@ std::vector<duckdb::LogicalType> ODataClient::GetResultTypes()
 
     return ret_types;
 }
+
+
 
 } // namespace erpl_web

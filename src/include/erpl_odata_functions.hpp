@@ -23,8 +23,8 @@ public:
 public:
     ODataReadBindData(std::shared_ptr<ODataClient> odata_client);
 
-    std::vector<std::string> GetResultNames();
-    std::vector<duckdb::LogicalType> GetResultTypes();
+    std::vector<std::string> GetResultNames(bool all_columns = false);
+    std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
     
     bool HasMoreResults();
     unsigned int FetchNextResult(DataChunk &output);
@@ -32,11 +32,13 @@ public:
     void ActivateColumns(const std::vector<duckdb::column_t> &column_ids);
     void AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters);
 
+    void UpdateUrlFromPredicatePushdown();
+
 private:
     bool first_fetch = true;
     std::shared_ptr<ODataClient> odata_client;
     std::vector<std::string> all_result_names;
-    std::vector<duckdb::column_t> active_column_names;
+    std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::LogicalType> all_result_types;
 
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;

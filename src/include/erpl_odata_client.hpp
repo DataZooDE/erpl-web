@@ -80,6 +80,7 @@ private:
 
 class ODataClient {
 public:
+    ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx);
     ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url);
 
     Edmx GetMetadata();
@@ -88,6 +89,8 @@ public:
     std::string Url();
     std::vector<std::string> GetResultNames();
     std::vector<duckdb::LogicalType> GetResultTypes();
+
+    std::shared_ptr<HttpClient> GetHttpClient();
 
 private:
     std::shared_ptr<HttpClient> http_client;

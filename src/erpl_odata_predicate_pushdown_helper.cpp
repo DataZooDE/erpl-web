@@ -21,7 +21,9 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     std::string query = result.Query();
 
     if (!select_clause.empty() || !filter_clause.empty()) {
-        if (!query.empty()) {
+        if (query.empty()) {
+            query += "?";
+        } else {
             query += "&";
         }
     }
@@ -47,14 +49,22 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
     }
 
     std::stringstream select_clause;
-    select_clause << "$select=";
     for (size_t i = 0; i < column_ids.size(); ++i) {
+        if (duckdb::IsRowIdColumnId(column_ids[i])) {
+            continue;
+        }
+
         if (i > 0) {
             select_clause << ",";
         }
         select_clause << all_column_names[column_ids[i]];
     }
-    return select_clause.str();
+
+    if (select_clause.str().empty()) {
+        return "";
+    }
+
+    return "$select=" + select_clause.str();
 }
 
 std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) const {
@@ -83,8 +93,16 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
             return column_name + " eq null";
         case duckdb::TableFilterType::IS_NOT_NULL:
             return column_name + " ne null";
+        case duckdb::TableFilterType::CONJUNCTION_AND:
+        case duckdb::TableFilterType::CONJUNCTION_OR:
+            return TranslateConjunction(filter.Cast<duckdb::ConjunctionAndFilter>(), column_name);
         default:
-            throw std::runtime_error("Unsupported filter type for OData translation");
+            std::stringstream error;
+            auto filter_str = const_cast<duckdb::TableFilter&>(filter).ToString(column_name);
+            auto filter_type_name = typeid(filter).name();
+            error << "Unsupported filter type for OData translation: '" << filter_str << "'"
+                  << " (" << filter_type_name << ")";
+            throw std::runtime_error(error.str());
     }
 }
 
@@ -112,11 +130,36 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
             result << "ge";
             break;
         default:
-            throw std::runtime_error("Unsupported comparison type for OData translation");
+            throw std::runtime_error("Unsupported contant filter comparison type for OData translation");
+            
     }
 
-    result << " " << filter.constant.ToString();
+    result << " '" << filter.constant.ToString() << "'";
     return result.str();
+}
+
+std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionFilter &filter, const std::string &column_name) const {
+    std::stringstream result;
+    result << "(";
+
+    for (size_t i = 0; i < filter.child_filters.size(); ++i) {
+        if (i > 0) {
+            result << (filter.filter_type == duckdb::TableFilterType::CONJUNCTION_AND ? " and " : " or ");
+        }
+        
+        result << TranslateFilter(*filter.child_filters[i], column_name);
+    }
+
+    result << ")";
+    return result.str();
+}
+
+std::string ODataPredicatePushdownHelper::SelectClause() const {
+    return select_clause;
+}
+
+std::string ODataPredicatePushdownHelper::FilterClause() const {
+    return filter_clause;
 }
 
 } // namespace erpl_web
