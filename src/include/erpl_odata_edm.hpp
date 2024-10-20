@@ -1637,6 +1637,17 @@ public:
         throw std::runtime_error("Unable to resolve entity set: " + entity_set_name);
     }
 
+    std::vector<EntitySet> FindEntitySets() const
+    {
+        std::vector<EntitySet> entity_sets;
+        for (const auto& schema : data_services.schemas) {
+            for (const auto& container : schema.entity_containers) {
+                entity_sets.insert(entity_sets.end(), container.entity_sets.begin(), container.entity_sets.end());
+            }
+        }
+        return entity_sets;
+    }
+
 private:
     static std::tuple<std::string, std::string> SplitNamespace(const std::string& type_name) {
         size_t pos = type_name.find('.');
@@ -1703,6 +1714,8 @@ class DuckTypeConverter
                 return duckdb::LogicalTypeId::VARCHAR;
             } else if (type == erpl_web::TimeOfDay) {
                 return duckdb::LogicalTypeId::TIME;
+            } else if (type == erpl_web::GeographyPoint) {
+                return duckdb::LogicalType::LIST(duckdb::LogicalTypeId::DOUBLE);
             } else {
                 throw std::runtime_error("Unsupported PrimitiveType: " + type.name);
             }
@@ -1807,6 +1820,27 @@ class DuckTypeConverter
     public:
         Edmx &edmx;
 };
+
+class EdmCache
+{
+public:
+    static EdmCache& GetInstance();
+
+    EdmCache(const EdmCache&) = delete;
+    EdmCache& operator=(const EdmCache&) = delete;
+
+    duckdb::optional_ptr<Edmx> Get(const std::string& key);
+    void Set(const std::string& key, Edmx edmx);
+
+private:
+    EdmCache() = default;
+
+    std::mutex cache_lock;
+    std::unordered_map<std::string, Edmx> cache;
+
+    std::string UrlWithoutFragment(const std::string& url) const;
+};
+
 
 } // namespace erpl_web
 

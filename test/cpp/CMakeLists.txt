@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_http_client.cpp
     test_odata_edm.cpp
     test_odata_client.cpp
+    test_odata_content.cpp
     test_main.cpp
 )
 

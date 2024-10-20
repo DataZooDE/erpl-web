@@ -20,8 +20,9 @@ class ODataReadBindData : public TableFunctionData
 {
 public: 
     static duckdb::unique_ptr<ODataReadBindData> FromEntitySetRoot(const std::string& entity_set_url);
+
 public:
-    ODataReadBindData(std::shared_ptr<ODataClient> odata_client);
+    ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client);
 
     std::vector<std::string> GetResultNames(bool all_columns = false);
     std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
@@ -36,7 +37,7 @@ public:
 
 private:
     bool first_fetch = true;
-    std::shared_ptr<ODataClient> odata_client;
+    std::shared_ptr<ODataEntitySetClient> odata_client;
     std::vector<std::string> all_result_names;
     std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::LogicalType> all_result_types;
@@ -44,7 +45,34 @@ private:
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;
 };
 
-TableFunctionSet CreateODataReadFunction();
 
+// -------------------------------------------------------------------------------------------------
+
+class ODataAttachBindData : public TableFunctionData
+{
+public:
+    static duckdb::unique_ptr<ODataAttachBindData> FromUrl(const std::string& url);
+
+public:
+    ODataAttachBindData(std::shared_ptr<ODataServiceClient> odata_client);
+
+    bool IsFinished() const;
+    void SetFinished();
+
+    bool Overwrite() const;
+    void SetOverwrite(bool overwrite);
+
+    std::vector<ODataEntitySetReference> EntitySets();
+
+private:
+    bool finished = false;
+    bool overwrite = false;
+    std::shared_ptr<ODataServiceClient> odata_client;
+};
+
+// -------------------------------------------------------------------------------------------------
+
+TableFunctionSet CreateODataReadFunction();
+TableFunctionSet CreateODataAttachFunction();
 
 } // namespace erpl_web

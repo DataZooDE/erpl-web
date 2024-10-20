@@ -11,12 +11,12 @@ namespace erpl_web {
 duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const std::string& entity_set_url)
 {
     auto http_client = std::make_shared<HttpClient>();
-    auto odata_client = std::make_shared<ODataClient>(http_client, entity_set_url);
+    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, entity_set_url);
     
     return duckdb::make_uniq<ODataReadBindData>(odata_client);
 }
 
-ODataReadBindData::ODataReadBindData(std::shared_ptr<ODataClient> odata_client)
+ODataReadBindData::ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client)
     : odata_client(odata_client)
 { 
     predicate_pushdown_helper = std::make_shared<ODataPredicatePushdownHelper>(odata_client->GetResultNames());
@@ -117,9 +117,56 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown()
 {
     auto http_client = odata_client->GetHttpClient();
     auto updated_url = predicate_pushdown_helper->ApplyFiltersToUrl(odata_client->Url());
-    auto current_edmx = odata_client->GetMetadata();
 
-    odata_client = std::make_shared<ODataClient>(http_client, updated_url, current_edmx);
+    odata_client = std::make_shared<ODataEntitySetClient>(http_client, updated_url);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+duckdb::unique_ptr<ODataAttachBindData> ODataAttachBindData::FromUrl(const std::string& url)
+{
+    auto http_client = std::make_shared<HttpClient>();
+    auto odata_client = std::make_shared<ODataServiceClient>(http_client, url);
+
+    return duckdb::make_uniq<ODataAttachBindData>(odata_client);
+}
+
+ODataAttachBindData::ODataAttachBindData(std::shared_ptr<ODataServiceClient> odata_client)
+    : odata_client(odata_client)
+{ }
+
+
+bool ODataAttachBindData::IsFinished() const
+{
+    return finished;
+}
+
+void ODataAttachBindData::SetFinished()
+{
+    finished = true;
+}
+
+
+bool ODataAttachBindData::Overwrite() const
+{
+    return overwrite;
+}
+
+void ODataAttachBindData::SetOverwrite(bool overwrite)
+{
+    this->overwrite = overwrite;
+}
+
+std::vector<ODataEntitySetReference> ODataAttachBindData::EntitySets()
+{
+    auto svc_response = odata_client->Get();
+    auto svc_references = svc_response->EntitySets();
+
+    for (auto &svc_reference : svc_references) {
+        svc_reference.MergeWithBaseUrlIfRelative(odata_client->Url());
+    }
+
+    return svc_references;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -174,6 +221,55 @@ TableFunctionSet CreateODataReadFunction()
     read_entity_set.projection_pushdown = true;
 
     function_set.AddFunction(read_entity_set);
+    return function_set;
+}
+
+static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context, 
+                                               TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, 
+                                               vector<string> &names) 
+{
+    auto url = input.inputs[0].GetValue<std::string>();
+    auto bind_data = ODataAttachBindData::FromUrl(url);
+
+    for (auto &kv : input.named_parameters) {
+		if (kv.first == "overwrite") {
+			bind_data->SetOverwrite(BooleanValue::Get(kv.second));
+		}
+	}
+
+    return_types.emplace_back(LogicalType::BOOLEAN);
+    names.emplace_back("Success");
+
+    return std::move(bind_data);
+}
+
+static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) 
+{
+    auto &data = data_p.bind_data->CastNoConst<ODataAttachBindData>();
+	if (data.IsFinished()) {
+		return;
+	}
+
+    auto duck_conn = duckdb::Connection(context.db->GetDatabase(context));
+    
+    auto svc_references = data.EntitySets();
+    for (auto &svc_reference : svc_references) {
+        auto table_relation = duck_conn.TableFunction("odata_read", {Value(svc_reference.url)});
+        auto table_view = table_relation->CreateView(svc_reference.name, data.Overwrite(), false);
+    }
+	
+    data.SetFinished();
+}
+
+TableFunctionSet CreateODataAttachFunction()
+{
+    TableFunctionSet function_set("odata_attach");
+
+    TableFunction attach_service({LogicalType::VARCHAR}, ODataAttachScan, ODataAttachBind);
+    attach_service.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+
+    function_set.AddFunction(attach_service);
     return function_set;
 }
 

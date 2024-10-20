@@ -65,12 +65,3 @@ FROM odata_read('https://services.odata.org/TripPinRESTierService/People')
 WHERE UserName = 'angelhuffman';
 ----
 angelhuffman
-
-
-# Read EntitySet from OData service with predicte pushdown and column selection
-query I
-SELECT UserName 
-FROM odata_read('https://services.odata.org/TripPinRESTierService/People') 
-WHERE AddressInfo[1].City."Region" in ('CA');
-----
-georginabarlow

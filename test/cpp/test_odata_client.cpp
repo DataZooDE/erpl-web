@@ -7,14 +7,14 @@
 using namespace erpl_web;
 using namespace std;
 
-TEST_CASE("Test ODataClient Metadata initalization", "[odata_client]")
+TEST_CASE("Test ODataEntitySetClient Metadata initalization", "[odata_client]")
 {
     std::cout << std::endl;
 
     auto http_client = std::make_shared<HttpClient>();
     auto url = HttpUrl("https://services.odata.org/V4/Northwind/Northwind.svc/Customers");
     
-    ODataClient client(http_client, url);
+    ODataEntitySetClient client(http_client, url);
     
     auto edmx = client.GetMetadata();
     auto entity_set = edmx.FindEntitySet("Customers");
@@ -26,14 +26,14 @@ TEST_CASE("Test ODataClient Metadata initalization", "[odata_client]")
     REQUIRE(entity_type.name == "Customer");
 }
 
-TEST_CASE("Test ODataClient GetResultNames & GetResultTypes", "[odata_client]")
+TEST_CASE("Test ODataEntitySetClient GetResultNames & GetResultTypes", "[odata_client]")
 {
     std::cout << std::endl;
 
     auto http_client = std::make_shared<HttpClient>();
     auto url = HttpUrl("https://services.odata.org/V4/Northwind/Northwind.svc/Customers");
     
-    ODataClient client(http_client, url);
+    ODataEntitySetClient client(http_client, url);
     
     /*
     {
@@ -97,7 +97,7 @@ TEST_CASE("Test ODataClient Get with get_next", "[odata_client]")
     auto http_client = std::make_shared<HttpClient>();
     auto url = HttpUrl("https://services.odata.org/V4/Northwind/Northwind.svc/Customers");
     
-    ODataClient client(http_client, url);
+    ODataEntitySetClient client(http_client, url);
     
     idx_t i = 0;
     for (auto response = client.Get(); response != nullptr; response = client.Get(true)) {
@@ -107,14 +107,14 @@ TEST_CASE("Test ODataClient Get with get_next", "[odata_client]")
     REQUIRE(i == 5);
 }
 
-TEST_CASE("Test ODataClient ToRows", "[odata_client]")
+TEST_CASE("Test ODataEntitySetClient ToRows", "[odata_client]")
 {
     std::cout << std::endl;
 
     auto http_client = std::make_shared<HttpClient>();
     auto url = HttpUrl("https://services.odata.org/V4/Northwind/Northwind.svc/Customers");
     
-    ODataClient client(http_client, url);
+    ODataEntitySetClient client(http_client, url);
 
     auto response = client.Get();
     auto result_names = client.GetResultNames();
@@ -127,4 +127,26 @@ TEST_CASE("Test ODataClient ToRows", "[odata_client]")
 
     REQUIRE(rows[0][0].ToString() == "ALFKI");
     REQUIRE(rows[19][0].ToString() == "ERNSH");
+}
+
+
+TEST_CASE("Test ODataServiceClient Get", "[odata_client]")
+{
+    std::cout << std::endl;
+
+    auto http_client = std::make_shared<HttpClient>();
+    auto url = HttpUrl("https://services.odata.org/V4/Northwind/Northwind.svc");
+    
+    ODataServiceClient client(http_client, url);
+    
+    auto metadata_context_url = client.GetMetadataContextUrl();
+    REQUIRE(metadata_context_url == "https://services.odata.org/V4/Northwind/Northwind.svc/$metadata");
+
+    auto response = client.Get();
+    REQUIRE(response != nullptr);
+
+    auto entity_sets = response->EntitySets();
+    REQUIRE(entity_sets.size() == 26);
+    REQUIRE(entity_sets[0].name == "Categories");
+    REQUIRE(entity_sets[0].url == "Categories");
 }

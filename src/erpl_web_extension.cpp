@@ -8,6 +8,8 @@
 #include "erpl_web_extension.hpp"
 #include "erpl_web_functions.hpp"
 #include "erpl_odata_functions.hpp"
+#include "erpl_odata_storage.hpp"
+
 #include "telemetry.hpp"
 
 namespace duckdb {
@@ -48,6 +50,13 @@ static void RegisterWebFunctions(DatabaseInstance &instance)
 static void RegisterODataFunctions(DatabaseInstance &instance)
 {
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataReadFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataAttachFunction());
+
+    auto &config = DBConfig::GetConfig(instance);
+    config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
+
+    duckdb::ExtensionInstallInfo extension_install_info;
+    instance.SetExtensionLoaded("odata", extension_install_info);
 }
 
 void ErplWebExtension::Load(DuckDB &db) 
