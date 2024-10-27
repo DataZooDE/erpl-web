@@ -14,13 +14,6 @@ static duckdb::unique_ptr<duckdb::Catalog> ODataAttach(duckdb::StorageExtensionI
                                                        duckdb::AttachInfo &info,
                                                        duckdb::AccessMode access_mode) 
 {
-    // name = trippin
-    // info.name = trippin
-    // info.path = https://services.odata.org/TripPinRESTierService
-    // access_mode = duckdb::AccessMode::READ_ONLY
-
-    //options.access_mode = access_mode;
-
     if (access_mode != duckdb::AccessMode::READ_ONLY) {
         throw duckdb::BinderException("ODATA storage extension does not support write access");
     }

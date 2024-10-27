@@ -298,12 +298,12 @@ public:
 public:
     std::string name;
     std::string type;
-    bool nullable;
+    bool nullable = true;
     int max_length;
     int precision;
     int scale;
-    int SRID;
-    bool unicode;
+    int SRID = 0;
+    bool unicode = true;
     std::string default_value;
     std::vector<Annotation> annotations;
 };
@@ -484,7 +484,7 @@ public:
 public:
     std::string name;
     PrimitiveType underlying_type;
-    bool is_flags;
+    bool is_flags = false;
     std::vector<EnumMember> members;
     std::vector<Annotation> annotations;
 };
@@ -594,9 +594,9 @@ public:
 public:
     std::string name;
     std::string type;
-    bool nullable;
+    bool nullable = true;
     std::string partner;
-    bool contains_target;
+    bool contains_target = false;
     std::vector<ReferentialConstraint> referential_constraints;
     std::vector<Annotation> annotations;
 
@@ -708,14 +708,14 @@ public:
 public:
     std::string name;
     std::string type_name;
-    bool nullable;
+    bool nullable = true;
     std::string default_value;
     int max_length;
     int fixed_length;
     int precision;
     int scale;
-    int SRID;
-    bool unicode;
+    int SRID = 0;
+    bool unicode = true;
     std::string sorting;
     std::string concurrencyMode;
     std::vector<Annotation> annotations;
@@ -799,9 +799,9 @@ public:
 public:
     std::string name;
     std::string base_type;
-    bool abstract_type;
-    bool open_type;
-    bool has_tream;
+    bool abstract_type = false;
+    bool open_type = false;
+    bool has_tream = false;
     std::vector<Property> properties;
     std::vector<NavigationProperty> navigation_properties;
     std::vector<Annotation> annotations;
@@ -957,9 +957,9 @@ public:
     std::string name;
     Key key;
     std::string base_type;
-    bool abstract_type;
-    bool open_type;
-    bool hasStream;
+    bool abstract_type = false;
+    bool open_type = false;
+    bool hasStream = false;
     std::vector<Property> properties;
     std::vector<NavigationProperty> navigation_properties;
     std::vector<Annotation> annotations;
@@ -1038,11 +1038,11 @@ public:
 public:
     std::string name;
     PrimitiveType underlying_type;
-    int maxLength;
-    bool unicode;
-    int precision;
-    int scale;
-    int SRID;
+    int maxLength = 0;
+    bool unicode = true;
+    int precision = 0;
+    int scale = 0;
+    int SRID = 0;
     std::vector<Annotation> annotations;
 };
 
@@ -1186,7 +1186,7 @@ public:
 public:
     std::string name;
     std::string function;
-    bool includeInServiceDocument;
+    bool includeInServiceDocument = false;
     std::vector<Annotation> annotations;
 
 };

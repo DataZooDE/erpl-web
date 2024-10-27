@@ -172,7 +172,9 @@ duckdb::optional_ptr<duckdb::CatalogEntry> ODataCatalog::CreateSchema(duckdb::Ca
 }
 
 void ODataCatalog::ScanSchemas(duckdb::ClientContext &context, std::function<void(duckdb::SchemaCatalogEntry &)> callback)
-{ }
+{ 
+    callback(*main_schema);
+}
 
 void ODataCatalog::DropSchema(duckdb::ClientContext &context, duckdb::DropInfo &info)
 {

@@ -31,8 +31,8 @@ static void RegisterConfiguration(DatabaseInstance &instance)
     auto &config = DBConfig::GetConfig(instance);
 
     config.AddExtensionOption("erpl_telemetry_enabled", "Enable ERPL telemetry, see https://erpl.io/telemetry for details.", 
-                                  LogicalType::BOOLEAN, Value(true), OnTelemetryEnabled);
-    config.AddExtensionOption("erpl_telemetry_key", "Telemetry key, see https://erpl.io/telemetry for details.", LogicalType::VARCHAR, 
+                                  LogicalTypeId::BOOLEAN, Value(true), OnTelemetryEnabled);
+    config.AddExtensionOption("erpl_telemetry_key", "Telemetry key, see https://erpl.io/telemetry for details.", LogicalTypeId::VARCHAR, 
                                 Value("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t"), OnAPIKey);
 }
 

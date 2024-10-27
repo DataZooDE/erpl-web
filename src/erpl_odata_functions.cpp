@@ -238,7 +238,7 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
 		}
 	}
 
-    return_types.emplace_back(LogicalType::BOOLEAN);
+    return_types.emplace_back(LogicalTypeId::BOOLEAN);
     names.emplace_back("Success");
 
     return std::move(bind_data);
@@ -267,7 +267,7 @@ TableFunctionSet CreateODataAttachFunction()
     TableFunctionSet function_set("odata_attach");
 
     TableFunction attach_service({LogicalType::VARCHAR}, ODataAttachScan, ODataAttachBind);
-    attach_service.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+    attach_service.named_parameters["overwrite"] = LogicalTypeId::BOOLEAN;
 
     function_set.AddFunction(attach_service);
     return function_set;

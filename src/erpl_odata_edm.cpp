@@ -9,7 +9,8 @@ EdmCache& EdmCache::GetInstance() {
 
 duckdb::optional_ptr<Edmx> EdmCache::Get(const std::string& metadata_url) {
     std::lock_guard<std::mutex> lock(cache_lock);
-    auto it = cache.find(metadata_url);
+    auto url_without_fragment = UrlWithoutFragment(metadata_url);
+    auto it = cache.find(url_without_fragment);
     if (it != cache.end()) {
         return duckdb::optional_ptr<Edmx>(&(it->second));
     }
@@ -18,7 +19,8 @@ duckdb::optional_ptr<Edmx> EdmCache::Get(const std::string& metadata_url) {
 
 void EdmCache::Set(const std::string& metadata_url, Edmx edmx) {
     std::lock_guard<std::mutex> lock(cache_lock);
-    cache[metadata_url] = std::move(edmx);
+    auto url_without_fragment = UrlWithoutFragment(metadata_url);
+    cache[url_without_fragment] = std::move(edmx);
 }
 
 std::string EdmCache::UrlWithoutFragment(const std::string& url_str) const {

@@ -19,3 +19,32 @@ query I
 SELECT count(*) FROM trippin.People;
 ----
 20
+
+statement ok
+ATTACH 'https://services.odata.org/V4/Northwind/Northwind.svc/' AS northwind (TYPE odata)
+
+# Check customers count
+query I
+SELECT count(*) FROM northwind.Customers;
+----
+91
+
+
+# Check database metadata availability
+statement ok
+SELECT * FROM duckdb_databases();
+
+query I
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name IN ('trippin', 'northwind');
+----
+2
+
+query II
+SELECT database_name, table_name FROM duckdb_tables() where database_name = 'trippin';
+----
+trippin
+People
+trippin
+Airlines
+trippin
+Airports
