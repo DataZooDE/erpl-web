@@ -1,5 +1,6 @@
 #include "erpl_odata_edm.hpp"
 #include "erpl_http_client.hpp"
+
 namespace erpl_web {
 
 EdmCache& EdmCache::GetInstance() {

@@ -1592,9 +1592,14 @@ public:
             return type_name_or_url;
         }
 
-        auto type_name = type_name_or_url.find('#');
-        if (type_name != std::string::npos) {
-            return type_name_or_url.substr(type_name + 1);
+        auto type_name_pos = type_name_or_url.find('#');
+        if (type_name_pos != std::string::npos) {
+            auto type_name = type_name_or_url.substr(type_name_pos + 1);
+            auto type_arg_pos = type_name.find('(');
+            if (type_arg_pos != std::string::npos) {
+                return type_name.substr(0, type_arg_pos);
+            }
+            return type_name;
         }
 
         throw std::runtime_error("Malformed type name or URL: " + type_name_or_url);

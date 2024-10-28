@@ -89,7 +89,7 @@ public: // OData specific methods
 
 protected:
     ODataServiceClient service_client;
-    unique_ptr<ODataSchemaEntry> main_schema;
+    std::unique_ptr<ODataSchemaEntry> main_schema;
 
 protected:
     std::optional<ODataEntitySetReference> GetEntitySetReference(const std::string &table_name);

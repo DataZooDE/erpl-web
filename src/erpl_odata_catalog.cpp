@@ -12,6 +12,42 @@ ODataSchemaEntry::ODataSchemaEntry(duckdb::Catalog &catalog, duckdb::CreateSchem
     : duckdb::SchemaCatalogEntry(catalog, info) 
 { }
 
+void ODataSchemaEntry::Scan(duckdb::ClientContext &context, duckdb::CatalogType type, const std::function<void(duckdb::CatalogEntry &)> &callback)
+{
+    auto &odata_catalog = catalog.Cast<ODataCatalog>();
+    if (type != duckdb::CatalogType::TABLE_ENTRY) {
+        return;
+    }
+
+	for (auto &entry_name : odata_catalog.GetTableNames()) {
+		callback(*GetEntry(GetCatalogTransaction(context), type, entry_name));
+	}
+}
+
+void ODataSchemaEntry::Scan(duckdb::CatalogType type, const std::function<void(duckdb::CatalogEntry &)> &callback)
+{
+    throw InternalException("Scan");
+}
+
+void ODataSchemaEntry::DropEntry(duckdb::ClientContext &context, duckdb::DropInfo &info)
+{
+    // TODO: Implement this
+}
+
+duckdb::optional_ptr<duckdb::CatalogEntry> ODataSchemaEntry::GetEntry(duckdb::CatalogTransaction transaction, duckdb::CatalogType type, const std::string &name)
+{
+    auto &odata_transaction = GetODataTransaction(transaction); 
+
+    switch (type) {
+        case duckdb::CatalogType::TABLE_ENTRY:
+            return odata_transaction.GetCatalogEntry(name);
+        default:
+            return nullptr;
+	}
+}
+
+#pragma region NotRelevantImplementations
+
 duckdb::optional_ptr<duckdb::CatalogEntry> ODataSchemaEntry::CreateTable(duckdb::CatalogTransaction transaction, duckdb::BoundCreateTableInfo &info)
 {
     throw duckdb::BinderException("OData does not support CREATING Tables");
@@ -67,39 +103,7 @@ void ODataSchemaEntry::Alter(duckdb::CatalogTransaction transaction, duckdb::Alt
     throw duckdb::BinderException("OData does not support ALTERING");
 }
 
-void ODataSchemaEntry::Scan(duckdb::ClientContext &context, duckdb::CatalogType type, const std::function<void(duckdb::CatalogEntry &)> &callback)
-{
-    auto &odata_catalog = catalog.Cast<ODataCatalog>();
-    if (type != duckdb::CatalogType::TABLE_ENTRY) {
-        return;
-    }
-
-	for (auto &entry_name : odata_catalog.GetTableNames()) {
-		callback(*GetEntry(GetCatalogTransaction(context), type, entry_name));
-	}
-}
-
-void ODataSchemaEntry::Scan(duckdb::CatalogType type, const std::function<void(duckdb::CatalogEntry &)> &callback)
-{
-    throw InternalException("Scan");
-}
-
-void ODataSchemaEntry::DropEntry(duckdb::ClientContext &context, duckdb::DropInfo &info)
-{
-    // TODO: Implement this
-}
-
-duckdb::optional_ptr<duckdb::CatalogEntry> ODataSchemaEntry::GetEntry(duckdb::CatalogTransaction transaction, duckdb::CatalogType type, const std::string &name)
-{
-    auto &odata_transaction = GetODataTransaction(transaction); 
-
-    switch (type) {
-        case duckdb::CatalogType::TABLE_ENTRY:
-            return odata_transaction.GetCatalogEntry(name);
-        default:
-            return nullptr;
-	}
-}
+#pragma endregion
 
 // -------------------------------------------------------------------------------------------------
 
@@ -165,56 +169,9 @@ duckdb::optional_ptr<duckdb::SchemaCatalogEntry> ODataCatalog::GetSchema(duckdb:
 	throw duckdb::BinderException("We don't support seperation into mutliple schemas and map all entity sets to the same schema - \"%s\"", schema_name);
 }
 
-duckdb::optional_ptr<duckdb::CatalogEntry> ODataCatalog::CreateSchema(duckdb::CatalogTransaction transaction, 
-                                                                      duckdb::CreateSchemaInfo &info)
-{
-    throw duckdb::BinderException("OData does not support CREATING Schemas");
-}
-
 void ODataCatalog::ScanSchemas(duckdb::ClientContext &context, std::function<void(duckdb::SchemaCatalogEntry &)> callback)
 { 
     callback(*main_schema);
-}
-
-void ODataCatalog::DropSchema(duckdb::ClientContext &context, duckdb::DropInfo &info)
-{
-    throw duckdb::BinderException("OData does not support DROPPING Schemas");
-}
-
-duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanCreateTableAs(duckdb::ClientContext &context,
-                                                                             duckdb::LogicalCreateTable &op,
-                                                                             duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
-{
-    throw duckdb::BinderException("OData does not support CREATING Tables");
-}
-
-duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanInsert(duckdb::ClientContext &context,
-                                                                      duckdb::LogicalInsert &op,
-                                                                      duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
-{
-    throw duckdb::BinderException("OData does not support INSERTING into Tables");
-}
-
-duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanDelete(duckdb::ClientContext &context,
-                                                                     duckdb::LogicalDelete &op,
-                                                                     duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
-{
-    throw duckdb::BinderException("OData does not support DELETING from Tables");
-}
-
-duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanUpdate(duckdb::ClientContext &context,
-                                                                     duckdb::LogicalUpdate &op,
-                                                                     duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
-{
-    throw duckdb::BinderException("OData does not support UPDATING Tables");
-}
-
-duckdb::unique_ptr<duckdb::LogicalOperator> ODataCatalog::BindCreateIndex(duckdb::Binder &binder,
-                                                                         duckdb::CreateStatement &stmt,
-                                                                         duckdb::TableCatalogEntry &table,
-                                                                         duckdb::unique_ptr<duckdb::LogicalOperator> plan)
-{
-    throw duckdb::BinderException("OData does not support CREATING Indexes");
 }
 
 duckdb::DatabaseSize ODataCatalog::GetDatabaseSize(duckdb::ClientContext &context)
@@ -231,11 +188,6 @@ duckdb::DatabaseSize ODataCatalog::GetDatabaseSize(duckdb::ClientContext &contex
     throw duckdb::BinderException("OData does not support getting the DATABASE SIZE");
 
     return result;
-}
-
-duckdb::vector<duckdb::MetadataBlockInfo> ODataCatalog::GetMetadataInfo(duckdb::ClientContext &context)
-{
-    throw duckdb::BinderException("OData does not support getting the METADATA INFO");
 }
 
 bool ODataCatalog::InMemory()
@@ -301,5 +253,61 @@ void ODataCatalog::GetTableInfo(const std::string &table_name, duckdb::ColumnLis
         columns.AddColumn(std::move(column));
     }
 }
+
+#pragma region NotRelevantImplementations
+
+duckdb::optional_ptr<duckdb::CatalogEntry> ODataCatalog::CreateSchema(duckdb::CatalogTransaction transaction, 
+                                                                      duckdb::CreateSchemaInfo &info)
+{
+    throw duckdb::BinderException("OData does not support CREATING Schemas");
+}
+
+void ODataCatalog::DropSchema(duckdb::ClientContext &context, duckdb::DropInfo &info)
+{
+    throw duckdb::BinderException("OData does not support DROPPING Schemas");
+}
+
+duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanCreateTableAs(duckdb::ClientContext &context,
+                                                                             duckdb::LogicalCreateTable &op,
+                                                                             duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
+{
+    throw duckdb::BinderException("OData does not support CREATING Tables");
+}
+
+duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanInsert(duckdb::ClientContext &context,
+                                                                      duckdb::LogicalInsert &op,
+                                                                      duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
+{
+    throw duckdb::BinderException("OData does not support INSERTING into Tables");
+}
+
+duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanDelete(duckdb::ClientContext &context,
+                                                                     duckdb::LogicalDelete &op,
+                                                                     duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
+{
+    throw duckdb::BinderException("OData does not support DELETING from Tables");
+}
+
+duckdb::unique_ptr<duckdb::PhysicalOperator> ODataCatalog::PlanUpdate(duckdb::ClientContext &context,
+                                                                     duckdb::LogicalUpdate &op,
+                                                                     duckdb::unique_ptr<duckdb::PhysicalOperator> plan)
+{
+    throw duckdb::BinderException("OData does not support UPDATING Tables");
+}
+
+duckdb::unique_ptr<duckdb::LogicalOperator> ODataCatalog::BindCreateIndex(duckdb::Binder &binder,
+                                                                         duckdb::CreateStatement &stmt,
+                                                                         duckdb::TableCatalogEntry &table,
+                                                                         duckdb::unique_ptr<duckdb::LogicalOperator> plan)
+{
+    throw duckdb::BinderException("OData does not support CREATING Indexes");
+}
+
+duckdb::vector<duckdb::MetadataBlockInfo> ODataCatalog::GetMetadataInfo(duckdb::ClientContext &context)
+{
+    throw duckdb::BinderException("OData does not support getting the METADATA INFO");
+}
+
+#pragma endregion
 
 } // namespace erpl_web

@@ -1,0 +1,23 @@
+# name: test/sql/erpl_odata_storage.test
+# description: test erpl_odata extension
+# group: [erpl_odata_storage]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+ATTACH 'https://services.odata.org/TripPinRESTierService' AS trippin (TYPE odata)
+
+# Check people count
+query I
+SELECT UserName FROM trippin.People ORDER BY 1 LIMIT 3;
+----
+angelhuffman
+clydeguess
+elainestewart

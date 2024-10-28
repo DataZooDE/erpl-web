@@ -12,7 +12,7 @@
             "args": [
                 "--test-dir",
                 "${workspaceFolder}",
-                "'test/sql/erpl_odata_storage.test'"
+                "'test/sql/erpl_odata_storage_scan.test'"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
