@@ -178,3 +178,53 @@ TEST_CASE("Test http GET on erpl.io", "[http_client]")
 	REQUIRE(response->code == 200);
 	REQUIRE(response->content_type == "text/html; charset=utf-8");
 }
+
+TEST_CASE("Test CachingHttpClient", "[http_client]") {
+    auto http_client = std::make_shared<HttpClient>();
+    CachingHttpClient caching_client(http_client, std::chrono::seconds(2));
+
+    SECTION("Test caching behavior") {
+        // First request should hit the network
+        auto response1 = caching_client.Get("https://httpbun.com/get");
+        REQUIRE(response1->code == 200);
+
+        // Second request should come from cache
+        auto response2 = caching_client.Get("https://httpbun.com/get");
+        REQUIRE(response2->code == 200);
+        REQUIRE(response2->content == response1->content);
+
+        // Wait for cache to expire
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        // Third request should hit the network again
+        auto response3 = caching_client.Get("https://httpbun.com/get");
+        REQUIRE(response3->code == 200);
+        // Content might be different since it's a new request
+    }
+
+    SECTION("Test different URLs are cached separately") {
+        auto response1 = caching_client.Get("https://httpbun.com/get");
+        auto response2 = caching_client.Get("https://httpbun.com/get?param=1");
+        
+        REQUIRE(response1->content != response2->content);
+    }
+
+    SECTION("Test IsInCache") {
+        auto request1 = HttpRequest(HttpMethod::GET, "https://httpbun.com/get");
+        auto request2 = HttpRequest(HttpMethod::GET, "https://httpbun.com/get?param=1");
+        
+        // Initially nothing should be in cache
+        REQUIRE_FALSE(caching_client.IsInCache(request1));
+        REQUIRE_FALSE(caching_client.IsInCache(request2));
+        
+        // Make a request - should add to cache
+        auto response1 = caching_client.SendRequest(request1);
+        REQUIRE(response1->code == 200);
+        REQUIRE(caching_client.IsInCache(request1));
+        REQUIRE_FALSE(caching_client.IsInCache(request2));
+        
+        // Wait for cache to expire
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        REQUIRE_FALSE(caching_client.IsInCache(request1));
+    }
+}

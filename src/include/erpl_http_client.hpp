@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 
 #include "duckdb.hpp"
@@ -137,6 +138,10 @@ public:
     void HeadersFromMapArg(duckdb::Value &header_map);
     void HeadersFromMapArg(const duckdb::Value &header_map);
 
+    std::string ToCacheKey() const {
+        return method.ToString() + ":" + url.ToString() + ":" + content;
+    }
+
 public:
     HttpMethod method;
     HttpUrl url;
@@ -208,6 +213,60 @@ private:
                                                                         const std::string &scheme_host_and_port);
 
     uint64_t CalculateSleepTime(idx_t n_tries);
+};
+
+// ----------------------------------------------------------------------
+
+struct HttpCacheEntry {
+    HttpCacheEntry(std::unique_ptr<HttpResponse> resp, 
+                  std::chrono::time_point<std::chrono::steady_clock> exp)
+        : response(std::move(resp)), expiry(exp)     
+    {}
+
+    std::unique_ptr<HttpResponse> response;
+    std::chrono::time_point<std::chrono::steady_clock> expiry;
+};
+
+class HttpCache {
+public:
+    static HttpCache& GetInstance();
+
+    std::unique_ptr<HttpResponse> GetCachedResponse(const HttpRequest& request);
+    void EmplaceCacheResponse(const HttpRequest& request, std::unique_ptr<HttpResponse> response, 
+                            const std::chrono::duration<double>& cache_duration);
+    bool IsInCache(const HttpRequest& request) const;
+
+private:
+    HttpCache();
+    ~HttpCache();
+    void GarbageCollection();
+
+    std::unordered_map<std::string, HttpCacheEntry> cache;
+    mutable std::mutex cache_mutex;
+    
+    std::thread cleanup_thread;
+    std::mutex cleanup_mutex;
+    std::condition_variable cleanup_cv;
+    bool should_stop{false};
+};
+
+// ----------------------------------------------------------------------
+
+class CachingHttpClient
+{
+public:
+    CachingHttpClient(std::shared_ptr<HttpClient> http_client, 
+                     const std::chrono::duration<double>& cache_duration = std::chrono::seconds(30));
+
+    std::shared_ptr<HttpClient> GetHttpClient();
+    std::unique_ptr<HttpResponse> Head(const std::string& url);
+    std::unique_ptr<HttpResponse> Get(const std::string& url);
+    std::unique_ptr<HttpResponse> SendRequest(HttpRequest& request);
+    bool IsInCache(const HttpRequest& request) const;
+
+private:
+    std::shared_ptr<HttpClient> http_client;
+    std::chrono::duration<double> cache_duration;
 };
 
 } // namespace erpl_web

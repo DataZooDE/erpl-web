@@ -243,7 +243,10 @@ void ODataCatalog::GetTableInfo(const std::string &table_name, duckdb::ColumnLis
     }
 
     auto entity_set_url = HttpUrl::MergeWithBaseUrlIfRelative(service_client.Url(), entity_set_ref->url);
-    auto entity_set_client = ODataEntitySetClient(service_client.GetHttpClient(), entity_set_url);
+    auto entity_set_client = ODataEntitySetClient(
+        std::dynamic_pointer_cast<HttpClient>(service_client.GetHttpClient()), 
+        entity_set_url
+    );
 
     auto result_names = entity_set_client.GetResultNames();
     auto result_types = entity_set_client.GetResultTypes();

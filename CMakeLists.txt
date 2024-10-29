@@ -7,6 +7,7 @@ set(TARGET_NAME erpl_web)
 
 find_package(OpenSSL REQUIRED)
 find_package(tinyxml2 CONFIG REQUIRED)
+find_package(cpptrace CONFIG REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) #Optional
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
@@ -48,8 +49,8 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2)
+target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
 
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)

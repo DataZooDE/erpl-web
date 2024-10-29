@@ -1,6 +1,7 @@
 {
   "dependencies": [
     "openssl",
-    "tinyxml2"
+    "tinyxml2",
+    "cpptrace"
   ]
 }

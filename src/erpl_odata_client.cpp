@@ -1,5 +1,7 @@
-#include "erpl_odata_client.hpp"
+#include <cpptrace/cpptrace.hpp>
 #include <regex>
+
+#include "erpl_odata_client.hpp"
 
 namespace erpl_web {
 
@@ -32,8 +34,12 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetResponse::ToRows(std::vect
 
 // ----------------------------------------------------------------------
 
-ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url) 
-    : ODataClient(http_client, url)
+ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
+{ }
+
+ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
 { }
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
@@ -57,8 +63,9 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
         return current_response;
     }
 
-    std::cout << "Fetching OData Request From: [" << (get_next ? "next" : "first") << "] "; 
-    std::cout << url.ToString() << std::endl;
+    //std::cout << "Fetching OData Request From: [" << (get_next ? "next" : "first") << "] "; 
+    //std::cout << url.ToString() << std::endl;
+    //cpptrace::generate_trace().print();
 
     if (get_next && current_response != nullptr) {
         auto next_url = current_response->NextUrl();
@@ -153,7 +160,7 @@ std::vector<ODataEntitySetReference> ODataServiceResponse::EntitySets()
 // ----------------------------------------------------------------------
 
 ODataServiceClient::ODataServiceClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url)
-    : ODataClient(http_client, url)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
 { }
 
 std::shared_ptr<ODataServiceResponse> ODataServiceClient::Get(bool get_next)

@@ -11,6 +11,11 @@
 #include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
 
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
+#include <condition_variable>
+
 using namespace duckdb;
 
 namespace erpl_web
@@ -585,6 +590,124 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 	c->set_connection_timeout(http_params.timeout);
 	c->set_decompress(true);
 	return c;
+}
+
+// ----------------------------------------------------------------------
+
+HttpCache& HttpCache::GetInstance() {
+    static HttpCache instance;
+    return instance;
+}
+
+HttpCache::HttpCache() {
+    cleanup_thread = std::thread(&HttpCache::GarbageCollection, this);
+}
+
+HttpCache::~HttpCache() {
+    {
+        std::unique_lock<std::mutex> lock(cleanup_mutex);
+        should_stop = true;
+    }
+    cleanup_cv.notify_one();
+    if (cleanup_thread.joinable()) {
+        cleanup_thread.join();
+    }
+}
+
+std::unique_ptr<HttpResponse> HttpCache::GetCachedResponse(const HttpRequest& request) {
+    std::string cache_key = request.ToCacheKey();
+    
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = cache.find(cache_key);
+    if (it != cache.end() && it->second.expiry > std::chrono::steady_clock::now()) {
+        return std::make_unique<HttpResponse>(*it->second.response);
+    }
+    return nullptr;
+}
+
+void HttpCache::EmplaceCacheResponse(const HttpRequest& request, std::unique_ptr<HttpResponse> response, 
+                                   const std::chrono::duration<double>& cache_duration) {
+    std::string cache_key = request.ToCacheKey();
+    auto expiry = std::chrono::steady_clock::now() + 
+                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(cache_duration);
+
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    cache.emplace(cache_key, HttpCacheEntry(std::make_unique<HttpResponse>(*response), expiry));
+}
+
+bool HttpCache::IsInCache(const HttpRequest& request) const {
+    std::string cache_key = request.ToCacheKey();
+    
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = cache.find(cache_key);
+    return (it != cache.end() && it->second.expiry > std::chrono::steady_clock::now());
+}
+
+void HttpCache::GarbageCollection() {
+    while (true) {
+        std::unique_lock<std::mutex> cleanup_lock(cleanup_mutex);
+        cleanup_cv.wait_for(cleanup_lock, std::chrono::seconds(10), [this] { return should_stop; });
+        
+        if (should_stop) {
+            break;
+        }
+
+        // Remove expired entries
+        std::lock_guard<std::mutex> cache_lock(cache_mutex);
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = cache.begin(); it != cache.end();) {
+            if (it->second.expiry <= now) {
+                it = cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+
+CachingHttpClient::CachingHttpClient(std::shared_ptr<HttpClient> http_client, 
+                                   const std::chrono::duration<double>& cache_duration)
+    : http_client(std::move(http_client))
+    , cache_duration(cache_duration) {}
+
+std::shared_ptr<HttpClient> CachingHttpClient::GetHttpClient() {
+    return http_client;
+}
+
+std::unique_ptr<HttpResponse> CachingHttpClient::Head(const std::string& url) {
+    auto request = HttpRequest(HttpMethod::HEAD, url);
+    return SendRequest(request);
+}
+
+std::unique_ptr<HttpResponse> CachingHttpClient::Get(const std::string& url) {
+    auto request = HttpRequest(HttpMethod::GET, url);
+    return SendRequest(request);
+}
+
+std::unique_ptr<HttpResponse> CachingHttpClient::SendRequest(HttpRequest& request) {
+    auto& cache = HttpCache::GetInstance();
+    
+    // Try to get from cache first
+    auto cached_response = cache.GetCachedResponse(request);
+    if (cached_response) {
+        return cached_response;
+    }
+
+    // If not in cache, forward to wrapped client
+    auto response = http_client->SendRequest(request);
+    
+    // Cache the response if successful
+    if (response && response->code >= 200 && response->code < 300) {
+        cache.EmplaceCacheResponse(request, std::make_unique<HttpResponse>(*response), cache_duration);
+    }
+    
+    return response;
+}
+
+bool CachingHttpClient::IsInCache(const HttpRequest& request) const {
+    return HttpCache::GetInstance().IsInCache(request);
 }
 
 } // namespace erpl_web

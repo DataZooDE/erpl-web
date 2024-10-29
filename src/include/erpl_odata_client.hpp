@@ -72,8 +72,9 @@ private:
 template <typename TResponse>
 class ODataClient {
 public:    
-    ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url)
-        : http_client(http_client), url(url) {}
+    ODataClient(std::shared_ptr<CachingHttpClient> http_client, const HttpUrl& url)
+        : http_client(http_client)
+        , url(url) {}
 
     virtual ~ODataClient() = default;
 
@@ -106,11 +107,14 @@ public:
     virtual std::string GetMetadataContextUrl() = 0;
 
     std::string Url() { return url.ToString(); }
-    std::shared_ptr<HttpClient> GetHttpClient() { return http_client; }
+    std::shared_ptr<HttpClient> GetHttpClient() { return http_client->GetHttpClient(); }
 
 protected:
-    std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) 
-    {
+    std::shared_ptr<CachingHttpClient> http_client;
+    HttpUrl url;
+    std::shared_ptr<TResponse> current_response;
+
+    std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         auto http_request = HttpRequest(HttpMethod::GET, url);
         auto http_response = http_client->SendRequest(http_request);
 
@@ -123,12 +127,6 @@ protected:
 
         return http_response;
     }
-
-
-protected:
-    std::shared_ptr<HttpClient> http_client;
-    HttpUrl url;
-    std::shared_ptr<TResponse> current_response;
 };
 
 // -------------------------------------------------------------------------------------------------
