@@ -105,7 +105,7 @@ void ODataReadBindData::ActivateColumns(const std::vector<duckdb::column_t> &col
     active_column_ids = column_ids;
     predicate_pushdown_helper->ConsumeColumnSelection(column_ids);
 
-    std::cout << "Select: " << predicate_pushdown_helper->SelectClause() << std::endl;
+    //std::cout << "Select: " << predicate_pushdown_helper->SelectClause() << std::endl;
 }
 
 void ODataReadBindData::AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters)

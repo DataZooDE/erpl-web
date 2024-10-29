@@ -86,7 +86,7 @@ public:
             return *cached_edmx;
         }
 
-        std::cout << "Fetching Metadata From: " << metadata_url << std::endl;
+        //std::cout << "Fetching Metadata From: " << metadata_url << std::endl;
         auto metadata_request = HttpRequest(HttpMethod::GET, metadata_url);
         auto metadata_response = http_client->SendRequest(metadata_request);
         if (metadata_response == nullptr || metadata_response->Code() != 200) {

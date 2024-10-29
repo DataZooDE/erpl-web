@@ -70,12 +70,12 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
     if (get_next && current_response != nullptr) {
         auto next_url = current_response->NextUrl();
         if (!next_url) {
-            std::cout << "Tried to get next URL: No next URL found" << std::endl;
+            //std::cout << "Tried to get next URL: No next URL found" << std::endl;
             return nullptr;
         }
 
         url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
-        std::cout << "Tried to get next URL: " << url.ToString() << std::endl;
+        //std::cout << "Tried to get next URL: " << url.ToString() << std::endl;
     }
 
     auto http_response = DoHttpGet(url);
