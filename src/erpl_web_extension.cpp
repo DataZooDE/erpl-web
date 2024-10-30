@@ -7,6 +7,7 @@
 
 #include "erpl_web_extension.hpp"
 #include "erpl_web_functions.hpp"
+#include "erpl_secret_functions.hpp"
 #include "erpl_odata_functions.hpp"
 #include "erpl_odata_storage.hpp"
 
@@ -45,6 +46,9 @@ static void RegisterWebFunctions(DatabaseInstance &instance)
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpPatchFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpDeleteFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpHeadFunction());
+
+    erpl::CreateBasicSecretFunctions::Register(instance);
+    erpl::CreateBearerTokenSecretFunctions::Register(instance);
 }
 
 static void RegisterODataFunctions(DatabaseInstance &instance)

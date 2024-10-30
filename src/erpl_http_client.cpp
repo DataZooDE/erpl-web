@@ -7,6 +7,8 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/common/types/blob.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 
 #include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
@@ -214,6 +216,66 @@ HttpParams::HttpParams()
 
 // ----------------------------------------------------------------------
 
+HttpAuthParams HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url)
+{
+    auto ret = HttpAuthParams();
+
+    auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
+    auto &secret_manager = duckdb::SecretManager::Get(context);
+
+    auto basic_match = secret_manager.LookupSecret(transaction, url.ToString(), "http_basic");
+	if (basic_match.HasMatch()) {
+        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(basic_match.GetSecret());
+		auto username = kv_secret.TryGetValue("username", true); // error_on_missing = true
+		auto password = kv_secret.TryGetValue("password", true); // error_on_missing = true
+
+        ret.basic_credentials = std::make_tuple(username.ToString(), password.ToString());
+        return ret;
+	}
+
+    auto bearer_match = secret_manager.LookupSecret(transaction, url.ToString(), "http_bearer");
+	if (bearer_match.HasMatch()) {
+		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(bearer_match.GetSecret());
+		auto token = kv_secret.TryGetValue("token", true); // error_on_missing = true
+		ret.bearer_token = token.ToString();
+	}
+
+	return ret;
+}
+
+HttpAuthType HttpAuthParams::AuthType() const
+{
+    if (basic_credentials.has_value()) {
+        return HttpAuthType::BASIC;
+    }
+    else if (bearer_token.has_value()) {
+        return HttpAuthType::BEARER;
+    }
+    return HttpAuthType::NONE;
+}
+
+std::optional<std::string> HttpAuthParams::BasicCredentialsBase64() const
+{
+    if (!basic_credentials.has_value()) {
+        return std::nullopt;
+    }
+
+    auto [username, password] = basic_credentials.value();
+    return Base64Encode(username + ":" + password);
+}
+
+std::string HttpAuthParams::Base64Encode(const std::string &input)
+{
+    auto result_str = std::string();
+    result_str.resize(duckdb::Blob::ToBase64Size(input));
+
+	duckdb::Blob::ToBase64(input, &result_str.front());
+
+    return result_str;
+}
+
+// ----------------------------------------------------------------------
+
 HttpMethod HttpMethod::FromString(const std::string &method)
 {
     std::string upperMethod = method;
@@ -333,6 +395,26 @@ void HttpRequest::HeadersFromMapArg(duckdb::Value &header_map)
 void HttpRequest::HeadersFromMapArg(const duckdb::Value &header_map)
 {
     HeadersFromMapArg(const_cast<duckdb::Value &>(header_map));
+}
+
+void HttpRequest::AuthHeadersFromParams(const HttpAuthParams &auth_params)
+{
+    if (auth_params.AuthType() == HttpAuthType::BASIC) {
+        headers.emplace("Authorization", "Basic " + auth_params.BasicCredentialsBase64().value());
+    }
+    else if (auth_params.AuthType() == HttpAuthType::BEARER) {
+        headers.emplace("Authorization", "Bearer " + auth_params.bearer_token.value());
+    }
+}
+
+std::string HttpRequest::ToCacheKey() const
+{
+    auto content_hasher = std::hash<std::string>();
+
+    auto strstream = std::stringstream();
+    strstream << method.ToString() << ":" << url.ToString() << ":" << content_hasher(content);
+
+    return strstream.str();
 }
 
 duckdb_httplib_openssl::Headers HttpRequest::HttplibHeaders()

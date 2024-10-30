@@ -41,6 +41,7 @@ set(EXTENSION_SOURCES
     src/erpl_odata_functions.cpp
     src/erpl_odata_storage.cpp
     src/erpl_odata_transaction_manager.cpp
+    src/erpl_secret_functions.cpp
     src/erpl_web_functions.cpp
     src/erpl_web_extension.cpp
     src/telemetry.cpp

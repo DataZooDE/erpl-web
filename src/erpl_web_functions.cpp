@@ -6,8 +6,8 @@
 namespace erpl_web {
 
 
-HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request) 
-    : TableFunctionData(), request(request), done(false)
+HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params) 
+    : TableFunctionData(), request(request), auth_params(auth_params), done(false)
 { }
 
 std::vector<std::string> HttpBindData::GetResultNames() 
@@ -50,7 +50,7 @@ unsigned int HttpBindData::FetchNextResult(DataChunk &output)
 // ----------------------------------------------------------------------
 
 static void PopulateHeadersFromHeadersParam(duckdb::named_parameter_map_t &named_params, 
-                                     duckdb::vector<duckdb::Value> &header_keys, 
+                                            duckdb::vector<duckdb::Value> &header_keys, 
                                      duckdb::vector<duckdb::Value> &header_vals)
 {
     if (! HasParam(named_params, "headers"))
@@ -113,31 +113,41 @@ static std::string CreateContentFromArgs(TableFunctionBindInput &input)
     return "";
 }
 
-static std::shared_ptr<HttpRequest> RequestFromInput(TableFunctionBindInput &input, HttpMethod method) 
+static std::shared_ptr<HttpRequest> RequestFromInput(const HttpAuthParams &auth_params, TableFunctionBindInput &input, HttpMethod method) 
 {
     auto args = input.inputs;
     auto url = args[0].ToString();
     auto request = std::make_shared<HttpRequest>(method, url);
+    request->AuthHeadersFromParams(auth_params);
     request->HeadersFromMapArg(CreateHttpHeaderFromArgs(input));
     
     return request;
 }
 
-static std::shared_ptr<HttpRequest> MutatingRequestFromInput(TableFunctionBindInput &input, HttpMethod method) 
+static std::shared_ptr<HttpRequest> MutatingRequestFromInput(const HttpAuthParams &auth_params, TableFunctionBindInput &input, HttpMethod method) 
 {
-    auto request = RequestFromInput(input, method);
+    auto request = RequestFromInput(auth_params, input, method);
     request->content = CreateContentFromArgs(input);
     
     return request;
 }
 
-static unique_ptr<FunctionData> HttpBind(ClientContext &context, 
-                                            TableFunctionBindInput &input, 
-                                            vector<LogicalType> &return_types, 
-                                            vector<string> &names,
-                                            HttpMethod method) 
+static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext &context, TableFunctionBindInput &input)
 {
-    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(input, method)); 
+    auto args = input.inputs;
+    auto url = args[0].ToString();
+    return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
+}
+
+
+static unique_ptr<FunctionData> HttpBind(duckdb::ClientContext &context, 
+                                         TableFunctionBindInput &input, 
+                                         vector<LogicalType> &return_types, 
+                                         vector<string> &names,
+                                         HttpMethod method) 
+{
+    auto auth_params = AuthParamsFromInput(context, input);
+    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, method), auth_params); 
 
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
@@ -169,7 +179,8 @@ static unique_ptr<FunctionData> HttpMutatingBind(ClientContext &context,
                                                  vector<string> &names,
                                                  HttpMethod method) 
 {
-    auto bind_data = make_uniq<HttpBindData>(MutatingRequestFromInput(input, method)); 
+    auto auth_params = AuthParamsFromInput(context, input);
+    auto bind_data = make_uniq<HttpBindData>(MutatingRequestFromInput(*auth_params, input, method), auth_params); 
 
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();

@@ -2,7 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
-
+#include <optional>
 #include "duckdb.hpp"
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.hpp"
@@ -94,6 +94,26 @@ struct HttpParams {
 
 // ----------------------------------------------------------------------
 
+enum class HttpAuthType {
+    NONE,
+    BASIC,
+    BEARER
+};
+
+struct HttpAuthParams 
+{
+    static HttpAuthParams FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url);
+
+    std::optional<std::tuple<std::string, std::string>> basic_credentials = std::nullopt;
+    std::optional<std::string> bearer_token = std::nullopt;
+
+    HttpAuthType AuthType() const;
+    std::optional<std::string> BasicCredentialsBase64() const;
+    static std::string Base64Encode(const std::string &str);
+};
+
+// ----------------------------------------------------------------------
+
 class HttpMethod 
 {
 public:
@@ -138,9 +158,9 @@ public:
     void HeadersFromMapArg(duckdb::Value &header_map);
     void HeadersFromMapArg(const duckdb::Value &header_map);
 
-    std::string ToCacheKey() const {
-        return method.ToString() + ":" + url.ToString() + ":" + content;
-    }
+    void AuthHeadersFromParams(const HttpAuthParams &auth_params);
+
+    std::string ToCacheKey() const;
 
 public:
     HttpMethod method;

@@ -17,7 +17,7 @@ namespace erpl_web {
 class HttpBindData : public TableFunctionData
 {
 public:
-    HttpBindData(std::shared_ptr<HttpRequest> request);
+    HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params);
 
     std::vector<std::string> GetResultNames();
     std::vector<LogicalType> GetResultTypes();
@@ -26,6 +26,7 @@ public:
 
 private :
     std::shared_ptr<HttpRequest> request;
+    std::shared_ptr<HttpAuthParams> auth_params;
     bool done;
 };
 
