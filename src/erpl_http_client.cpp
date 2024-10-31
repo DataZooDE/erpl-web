@@ -93,6 +93,15 @@ std::string HttpUrl::ToLower(const std::string& str) {
     return lowerStr;
 }
 
+HttpUrl HttpUrl::PopPath() 
+{
+    auto path = std::filesystem::path(Path());
+    auto new_path = path.parent_path();
+    auto new_url = *this;
+    new_url.Path(new_path.string());
+    return new_url;
+}
+
 std::filesystem::path HttpUrl::MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& rel_path) 
 {
     // Check if the relative path is actually an absolute path
@@ -722,7 +731,9 @@ bool HttpCache::IsInCache(const HttpRequest& request) const {
     
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto it = cache.find(cache_key);
-    return (it != cache.end() && it->second.expiry > std::chrono::steady_clock::now());
+    auto found = (it != cache.end());
+    auto expired = (found && it->second.expiry >= std::chrono::steady_clock::now());
+    return found && !expired;
 }
 
 void HttpCache::GarbageCollection() {

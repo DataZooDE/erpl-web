@@ -1,6 +1,6 @@
 # name: test/sql/erpl_odata_read.test
 # description: test erpl_odata extension
-# group: [erpl_odata_read]
+# group: [erpl_odata]
 
 
 # Require statement will ensure this test is run with this extension loaded

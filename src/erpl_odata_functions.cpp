@@ -8,10 +8,11 @@
 
 namespace erpl_web {
 
-duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const std::string& entity_set_url)
+duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const std::string& entity_set_url, 
+                                                                           std::shared_ptr<HttpAuthParams> auth_params)
 {
     auto http_client = std::make_shared<HttpClient>();
-    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, entity_set_url);
+    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, entity_set_url, auth_params);
     
     return duckdb::make_uniq<ODataReadBindData>(odata_client);
 }
@@ -123,10 +124,11 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown()
 
 // -------------------------------------------------------------------------------------------------
 
-duckdb::unique_ptr<ODataAttachBindData> ODataAttachBindData::FromUrl(const std::string& url)
+duckdb::unique_ptr<ODataAttachBindData> ODataAttachBindData::FromUrl(const std::string& url, 
+                                                                     std::shared_ptr<HttpAuthParams> auth_params)
 {
     auto http_client = std::make_shared<HttpClient>();
-    auto odata_client = std::make_shared<ODataServiceClient>(http_client, url);
+    auto odata_client = std::make_shared<ODataServiceClient>(http_client, url, auth_params);
 
     return duckdb::make_uniq<ODataAttachBindData>(odata_client);
 }
@@ -171,13 +173,21 @@ std::vector<ODataEntitySetReference> ODataAttachBindData::EntitySets()
 
 // -------------------------------------------------------------------------------------------------
 
+static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext &context, TableFunctionBindInput &input)
+{
+    auto args = input.inputs;
+    auto url = args[0].ToString();
+    return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
+}
+
 static duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context, 
                                                       TableFunctionBindInput &input, 
                                                       vector<LogicalType> &return_types, 
                                                       vector<string> &names) 
 {
+    auto auth_params = AuthParamsFromInput(context, input);
     auto url = input.inputs[0].GetValue<std::string>();
-    auto bind_data = ODataReadBindData::FromEntitySetRoot(url);
+    auto bind_data = ODataReadBindData::FromEntitySetRoot(url, auth_params);
 
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
@@ -229,8 +239,9 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
                                                vector<LogicalType> &return_types, 
                                                vector<string> &names) 
 {
+    auto auth_params = AuthParamsFromInput(context, input);
     auto url = input.inputs[0].GetValue<std::string>();
-    auto bind_data = ODataAttachBindData::FromUrl(url);
+    auto bind_data = ODataAttachBindData::FromUrl(url, auth_params);
 
     for (auto &kv : input.named_parameters) {
 		if (kv.first == "overwrite") {

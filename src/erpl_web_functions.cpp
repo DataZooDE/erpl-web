@@ -139,7 +139,6 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
     return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
 }
 
-
 static unique_ptr<FunctionData> HttpBind(duckdb::ClientContext &context, 
                                          TableFunctionBindInput &input, 
                                          vector<LogicalType> &return_types, 

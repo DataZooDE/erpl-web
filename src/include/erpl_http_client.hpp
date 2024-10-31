@@ -55,6 +55,8 @@ public:
     std::string Username() const;
     std::string Password() const;
 
+    HttpUrl PopPath();
+
     static HttpUrl MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::string& relative_url);
     static std::filesystem::path MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& relative_path);
 

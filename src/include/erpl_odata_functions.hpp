@@ -19,7 +19,8 @@ namespace erpl_web {
 class ODataReadBindData : public TableFunctionData
 {
 public: 
-    static duckdb::unique_ptr<ODataReadBindData> FromEntitySetRoot(const std::string& entity_set_url);
+    static duckdb::unique_ptr<ODataReadBindData> FromEntitySetRoot(const std::string& entity_set_url, 
+                                                                   std::shared_ptr<HttpAuthParams> auth_params);
 
 public:
     ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client);
@@ -51,7 +52,7 @@ private:
 class ODataAttachBindData : public TableFunctionData
 {
 public:
-    static duckdb::unique_ptr<ODataAttachBindData> FromUrl(const std::string& url);
+    static duckdb::unique_ptr<ODataAttachBindData> FromUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params);
 
 public:
     ODataAttachBindData(std::shared_ptr<ODataServiceClient> odata_client);

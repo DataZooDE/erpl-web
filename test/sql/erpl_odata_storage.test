@@ -1,6 +1,6 @@
 # name: test/sql/erpl_odata_storage.test
 # description: test erpl_odata extension
-# group: [erpl_odata_storage]
+# group: [erpl_odata]
 
 # Require statement will ensure this test is run with this extension loaded
 require erpl_web

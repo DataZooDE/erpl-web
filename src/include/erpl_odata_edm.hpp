@@ -262,7 +262,9 @@ public:
 
             // Parse Scale attribute
             const char* scale_attr = element.Attribute("Scale");
-            if (scale_attr) {
+            if (scale_attr && strcasecmp(scale_attr, "variable") == 0) {
+                parameter.scale = -1;
+            } else if (scale_attr) {
                 parameter.scale = std::stoi(scale_attr);
             }
 
@@ -660,7 +662,9 @@ public:
 
             // Parse Scale attribute
             const char* scale_attr = element.Attribute("Scale");
-            if (scale_attr) {
+            if (scale_attr && strcasecmp(scale_attr, "variable") == 0) {
+                property.scale = -1;
+            } else if (scale_attr) {
                 property.scale = std::stoi(scale_attr);
             }
 
@@ -1586,14 +1590,26 @@ public:
         return edmx;
     }
 
+    bool IsFullUrl(const std::string& type_name_or_url) const 
+    {
+        return type_name_or_url.find("http://") != std::string::npos || type_name_or_url.find("https://") != std::string::npos;
+    }
+
+    bool IsRelativeMetadataUrl(const std::string& type_name_or_url) const 
+    {
+        return type_name_or_url.rfind("$metadata", 0) == 0;
+    }
+
     std::string StripUrlIfNecessary(const std::string& type_name_or_url) const 
     {
-        if (type_name_or_url.find("http://") == std::string::npos && type_name_or_url.find("https://") == std::string::npos) {
+        if (IsFullUrl(type_name_or_url) || ! IsRelativeMetadataUrl(type_name_or_url)) 
+        {
             return type_name_or_url;
         }
 
         auto type_name_pos = type_name_or_url.find('#');
-        if (type_name_pos != std::string::npos) {
+        if (type_name_pos != std::string::npos) 
+        {
             auto type_name = type_name_or_url.substr(type_name_pos + 1);
             auto type_arg_pos = type_name.find('(');
             if (type_arg_pos != std::string::npos) {
@@ -1655,7 +1671,7 @@ public:
 
 private:
     static std::tuple<std::string, std::string> SplitNamespace(const std::string& type_name) {
-        size_t pos = type_name.find('.');
+        size_t pos = type_name.rfind('.');
         if (pos == std::string::npos) {
             return std::make_tuple("", type_name);
         }

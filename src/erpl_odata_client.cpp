@@ -35,11 +35,19 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetResponse::ToRows(std::vect
 // ----------------------------------------------------------------------
 
 ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx)
-    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, nullptr)
 { }
 
 ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url)
-    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, nullptr)
+{ }
+
+ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx, std::shared_ptr<HttpAuthParams> auth_params)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, auth_params)
+{ }
+
+ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, auth_params)
 { }
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
@@ -160,7 +168,11 @@ std::vector<ODataEntitySetReference> ODataServiceResponse::EntitySets()
 // ----------------------------------------------------------------------
 
 ODataServiceClient::ODataServiceClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url)
-    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, nullptr)
+{ }
+
+ODataServiceClient::ODataServiceClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params)
+    : ODataClient(std::make_shared<CachingHttpClient>(http_client), url, auth_params)
 { }
 
 std::shared_ptr<ODataServiceResponse> ODataServiceClient::Get(bool get_next)
