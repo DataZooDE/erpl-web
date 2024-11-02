@@ -1,0 +1,35 @@
+# name: test/sql/erpl_odata_sap_storage.test
+# description: test erpl_odata extension for SAP OData service, including ignore attach option
+# group: [erpl_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+CREATE SECRET (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD 'ABAPtr2022#00',
+    SCOPE 'http://localhost:50000/sap/'
+);
+
+statement ok
+ATTACH 'http://localhost:50000/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/' AS travel (TYPE odata, IGNORE 'I_Draft*')
+
+# Can query from attached table
+query I
+SELECT COUNT(*) FROM travel.Airline;
+----
+16
+
+# Can query from attached table with ignore pattern
+query I
+SELECT AirlineID FROM travel.Airline ORDER BY AirlineID LIMIT 1;
+----
+AA

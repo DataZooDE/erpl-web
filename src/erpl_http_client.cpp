@@ -225,14 +225,14 @@ HttpParams::HttpParams()
 
 // ----------------------------------------------------------------------
 
-std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url)
+std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const std::string &url)
 {
     auto ret = std::make_shared<HttpAuthParams>();
 
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     auto &secret_manager = duckdb::SecretManager::Get(context);
 
-    auto basic_match = secret_manager.LookupSecret(transaction, url.ToString(), "http_basic");
+    auto basic_match = secret_manager.LookupSecret(transaction, url, "http_basic");
 	if (basic_match.HasMatch()) {
         const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(basic_match.GetSecret());
 		auto username = kv_secret.TryGetValue("username", true); // error_on_missing = true
@@ -242,7 +242,7 @@ std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::Client
         return ret;
 	}
 
-    auto bearer_match = secret_manager.LookupSecret(transaction, url.ToString(), "http_bearer");
+    auto bearer_match = secret_manager.LookupSecret(transaction, url, "http_bearer");
 	if (bearer_match.HasMatch()) {
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(bearer_match.GetSecret());
 		auto token = kv_secret.TryGetValue("token", true); // error_on_missing = true
@@ -250,6 +250,11 @@ std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::Client
 	}
 
 	return ret;
+}
+
+std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url)
+{
+    return FromDuckDbSecrets(context, url.ToString());
 }
 
 HttpAuthType HttpAuthParams::AuthType() const
@@ -296,7 +301,7 @@ std::string HttpAuthParams::ToString() const
     else if (bearer_token.has_value()) {
         return "Bearer:" + CredsToStars(bearer_token.value());
     }
-    return "";
+    return "None";
 }
 
 // ----------------------------------------------------------------------

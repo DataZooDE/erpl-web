@@ -105,6 +105,7 @@ enum class HttpAuthType {
 class HttpAuthParams 
 {
 public:
+    static std::shared_ptr<HttpAuthParams> FromDuckDbSecrets(duckdb::ClientContext &context, const std::string &url);
     static std::shared_ptr<HttpAuthParams> FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url);
     HttpAuthParams() = default;
 

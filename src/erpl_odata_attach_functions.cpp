@@ -58,7 +58,7 @@ std::vector<ODataEntitySetReference> ODataAttachBindData::EntitySets()
 
     auto filtered_svc_references = std::vector<ODataEntitySetReference>();
     for (auto &svc_reference : svc_references) {
-        if (MatchPatterns(svc_reference.name, ignore_patterns)) {
+        if (MatchPattern(svc_reference.name, ignore_patterns)) {
             continue;
         }
 
@@ -75,7 +75,7 @@ bool ODataAttachBindData::MatchPattern(const std::string &str, const std::string
     return is_match;
 }
 
-bool ODataAttachBindData::MatchPatterns(const std::string &str, const std::vector<std::string> &ignore_patterns)
+bool ODataAttachBindData::MatchPattern(const std::string &str, const std::vector<std::string> &ignore_patterns)
 {
     for (auto &ignore_pattern : ignore_patterns) {
         if (MatchPattern(str, ignore_pattern)) {

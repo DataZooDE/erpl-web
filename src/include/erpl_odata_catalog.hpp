@@ -55,7 +55,10 @@ public:
 class ODataCatalog : public duckdb::Catalog
 {
 public:
-    ODataCatalog(duckdb::AttachedDatabase &db, const std::string &url);
+    ODataCatalog(duckdb::AttachedDatabase &db, 
+                 const std::string &url, 
+                 std::shared_ptr<HttpAuthParams> auth_params, 
+                 const std::string &ignore_pattern);
     ~ODataCatalog() = default;
 
     std::string GetCatalogType() override;
@@ -89,6 +92,7 @@ public: // OData specific methods
 
 protected:
     ODataServiceClient service_client;
+    const std::string ignore_pattern;
     std::unique_ptr<ODataSchemaEntry> main_schema;
 
 protected:
