@@ -33,12 +33,13 @@ set(EXTENSION_SOURCES
     src/duckdb_argument_helper.cpp
     src/charset_converter.cpp
     src/erpl_http_client.cpp
+    src/erpl_odata_attach_functions.cpp
     src/erpl_odata_catalog.cpp
     src/erpl_odata_client.cpp
     src/erpl_odata_content.cpp
     src/erpl_odata_edm.cpp
     src/erpl_odata_predicate_pushdown_helper.cpp
-    src/erpl_odata_functions.cpp
+    src/erpl_odata_read_functions.cpp
     src/erpl_odata_storage.cpp
     src/erpl_odata_transaction_manager.cpp
     src/erpl_secret_functions.cpp
