@@ -104,7 +104,7 @@ public:
 
     std::string Url() { return url.ToString(); }
     std::shared_ptr<HttpClient> GetHttpClient() { return http_client->GetHttpClient(); }
-
+    std::shared_ptr<HttpAuthParams> AuthParams() { return auth_params; }
 protected:
     std::shared_ptr<CachingHttpClient> http_client;
     HttpUrl url;

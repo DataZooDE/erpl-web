@@ -117,9 +117,10 @@ void ODataReadBindData::AddFilters(const duckdb::optional_ptr<duckdb::TableFilte
 void ODataReadBindData::UpdateUrlFromPredicatePushdown()
 {
     auto http_client = odata_client->GetHttpClient();
+    auto auth_params = odata_client->AuthParams();
     auto updated_url = PredicatePushdownHelper()->ApplyFiltersToUrl(odata_client->Url());
 
-    odata_client = std::make_shared<ODataEntitySetClient>(http_client, updated_url);
+    odata_client = std::make_shared<ODataEntitySetClient>(http_client, updated_url, auth_params);
 }
 
 std::shared_ptr<ODataPredicatePushdownHelper> ODataReadBindData::PredicatePushdownHelper()
@@ -137,7 +138,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
 {
     auto args = input.inputs;
     auto url = args[0].ToString();
-    return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
+    return HttpAuthParams::FromDuckDbSecrets(context, url);
 }
 
 static duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context, 
