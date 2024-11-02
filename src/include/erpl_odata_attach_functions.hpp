@@ -34,15 +34,14 @@ public:
 
     std::vector<ODataEntitySetReference> EntitySets();
 
+    static bool MatchPattern(const std::string &str, const std::string &ignore_pattern);
+    static bool MatchPattern(const std::string &str, const std::vector<std::string> &ignore_patterns);
+
 private:
     bool finished = false;
     bool overwrite = false;
     std::shared_ptr<ODataServiceClient> odata_client;
     std::vector<std::string> ignore_patterns;
-
-private:
-    static bool MatchPattern(const std::string &str, const std::string &ignore_pattern);
-    static bool MatchPatterns(const std::string &str, const std::vector<std::string> &ignore_patterns);
 };
 
 TableFunctionSet CreateODataAttachFunction();

@@ -18,12 +18,25 @@ static duckdb::unique_ptr<duckdb::Catalog> ODataAttach(duckdb::StorageExtensionI
         throw duckdb::BinderException("ODATA storage extension does not support write access");
     }
 
-    return duckdb::make_uniq<ODataCatalog>(db, info.path);
+    std::string ignore_pattern;
+    for (auto &entry : info.options) {
+		auto lower_name = StringUtil::Lower(entry.first);
+		if (lower_name == "type" || lower_name == "read_only") {
+			// already handled
+		} else if (lower_name == "ignore") {
+			ignore_pattern = entry.second.ToString();
+		} else {
+			throw duckdb::BinderException("Unrecognized option for OData attach: %s", entry.first);
+		}
+	}
+
+    auto auth_params = HttpAuthParams::FromDuckDbSecrets(context, info.path);
+    return duckdb::make_uniq<ODataCatalog>(db, info.path, auth_params, ignore_pattern);
 }
 
 static duckdb::unique_ptr<duckdb::TransactionManager> ODataCreateTransactionManager(duckdb::StorageExtensionInfo *storage_info,
-                                                                                  duckdb::AttachedDatabase &db, 
-                                                                                  duckdb::Catalog &catalog) 
+                                                                                    duckdb::AttachedDatabase &db, 
+                                                                                    duckdb::Catalog &catalog) 
 {
     auto &odata_catalog = catalog.Cast<ODataCatalog>();
 	return duckdb::make_uniq<ODataTransactionManager>(db, odata_catalog);

@@ -1,15 +1,15 @@
 #include "erpl_odata_catalog.hpp"
 #include "erpl_odata_read_functions.hpp"
+#include "erpl_odata_attach_functions.hpp"
 #include "erpl_odata_client.hpp"
 
 namespace erpl_web {
 
 
-
 // -------------------------------------------------------------------------------------------------
 
 ODataSchemaEntry::ODataSchemaEntry(duckdb::Catalog &catalog, duckdb::CreateSchemaInfo &info) 
-    : duckdb::SchemaCatalogEntry(catalog, info) 
+    : duckdb::SchemaCatalogEntry(catalog, info)
 { }
 
 void ODataSchemaEntry::Scan(duckdb::ClientContext &context, duckdb::CatalogType type, const std::function<void(duckdb::CatalogEntry &)> &callback)
@@ -140,9 +140,13 @@ void ODataTableEntry::BindUpdateConstraints(duckdb::Binder &binder, duckdb::Logi
 
 // -------------------------------------------------------------------------------------------------
 
-ODataCatalog::ODataCatalog(duckdb::AttachedDatabase &db, const std::string &url)
+ODataCatalog::ODataCatalog(duckdb::AttachedDatabase &db, 
+                           const std::string &url, 
+                           std::shared_ptr<HttpAuthParams> auth_params, 
+                           const std::string &ignore_pattern)
     : duckdb::Catalog(db), 
-      service_client(std::make_shared<HttpClient>(), HttpUrl(url))
+      service_client(std::make_shared<HttpClient>(), HttpUrl(url), auth_params),
+      ignore_pattern(ignore_pattern)
 { }
     
 std::string ODataCatalog::GetCatalogType()
@@ -216,6 +220,10 @@ std::vector<std::string> ODataCatalog::GetTableNames()
     auto svc_response = service_client.Get();
     std::vector<std::string> result;
     for (auto &entity_set_ref : svc_response->EntitySets()) {
+        if (ODataAttachBindData::MatchPattern(entity_set_ref.name, ignore_pattern)) {
+            continue;
+        }
+
         result.push_back(entity_set_ref.name);
     }
     return result;
@@ -246,7 +254,8 @@ void ODataCatalog::GetTableInfo(const std::string &table_name, duckdb::ColumnLis
     auto entity_set_url = HttpUrl::MergeWithBaseUrlIfRelative(service_client.Url(), entity_set_ref->url);
     auto entity_set_client = ODataEntitySetClient(
         std::dynamic_pointer_cast<HttpClient>(service_client.GetHttpClient()), 
-        entity_set_url
+        entity_set_url,
+        service_client.AuthParams()
     );
 
     auto result_names = entity_set_client.GetResultNames();

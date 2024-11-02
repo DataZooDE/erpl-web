@@ -123,7 +123,7 @@ protected:
             std::stringstream ss;
             ss << "Failed to get OData response: " << http_response->Code() << std::endl;
             ss << "Content: " << std::endl << http_response->Content() << std::endl;
-            ss << cpptrace::generate_trace().to_string() << std::endl;
+            ss << cpptrace::generate_trace(0, 10).to_string() << std::endl;
             throw std::runtime_error(ss.str());
         }
 
