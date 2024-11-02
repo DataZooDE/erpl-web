@@ -376,7 +376,12 @@ std::vector<ODataEntitySetReference> ODataServiceJsonContent::EntitySets()
     yyjson_val *json_row;
     yyjson_arr_foreach(json_values, i_row, max_row, json_row) 
     {
-        auto kind = GetStringProperty(json_row, "kind");
+        auto kind_property = yyjson_obj_get(json_row, "kind");
+        auto kind = std::string("EntitySet"); // by default we assume the reference is an entity set
+        if (kind_property != nullptr) {
+            kind = GetStringProperty(json_row, "kind");
+        }
+        
         if (kind != "EntitySet") {
             continue;
         }

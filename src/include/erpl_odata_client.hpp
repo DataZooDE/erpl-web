@@ -1,9 +1,10 @@
 #pragma once
+#include "cpptrace/cpptrace.hpp"
+#include "yyjson.hpp"
 
 #include "erpl_http_client.hpp"
 #include "erpl_odata_edm.hpp"
 #include "erpl_odata_content.hpp"
-#include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -85,6 +86,7 @@ public:
         auto metadata_url = GetMetadataContextUrl();
         auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);
         if (cached_edmx) {
+            //std::cout << "Using cached Metadata for: " << metadata_url << std::endl;
             return *cached_edmx;
         }
 
@@ -121,6 +123,7 @@ protected:
             std::stringstream ss;
             ss << "Failed to get OData response: " << http_response->Code() << std::endl;
             ss << "Content: " << std::endl << http_response->Content() << std::endl;
+            ss << cpptrace::generate_trace().to_string() << std::endl;
             throw std::runtime_error(ss.str());
         }
 
@@ -129,7 +132,7 @@ protected:
 
     std::unique_ptr<HttpResponse> DoMetadataHttpGet(const std::string& metadata_url_raw) 
     {
-        //std::cout << "Fetching Metadata From: " << metadata_url_raw << std::endl;
+        //std::cout << "Fetching Metadata from: " << metadata_url_raw << std::endl;
         auto current_svc_url = url;
         auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
         if (auth_params != nullptr) {

@@ -113,6 +113,7 @@ EntityType ODataEntitySetClient::GetCurrentEntityType()
 std::vector<std::string> ODataEntitySetClient::GetResultNames()
 {
     auto edmx = GetMetadata();
+    auto entity_set_type = GetCurrentEntitySetType();
     auto entity_type = GetCurrentEntityType();
 
     auto type_conv = DuckTypeConverter(edmx);

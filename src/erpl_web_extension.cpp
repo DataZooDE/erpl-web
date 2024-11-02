@@ -8,7 +8,8 @@
 #include "erpl_web_extension.hpp"
 #include "erpl_web_functions.hpp"
 #include "erpl_secret_functions.hpp"
-#include "erpl_odata_functions.hpp"
+#include "erpl_odata_attach_functions.hpp"
+#include "erpl_odata_read_functions.hpp"
 #include "erpl_odata_storage.hpp"
 
 #include "telemetry.hpp"

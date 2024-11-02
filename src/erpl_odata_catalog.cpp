@@ -1,5 +1,5 @@
 #include "erpl_odata_catalog.hpp"
-#include "erpl_odata_functions.hpp"
+#include "erpl_odata_read_functions.hpp"
 #include "erpl_odata_client.hpp"
 
 namespace erpl_web {
