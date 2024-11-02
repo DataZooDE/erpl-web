@@ -1,0 +1,31 @@
+# name: test/sql/erpl_odata_attach.test
+# description: test erpl_odata extension
+# group: [erpl_odata]
+
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+CREATE SECRET (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD 'ABAPtr2022#00',
+    SCOPE 'http://localhost:50000/sap/'
+);
+
+# Attach OData service to database
+statement ok
+CALL odata_attach('http://localhost:50000/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/', ignore=['I_Draft*']);
+
+# Can query from attached table
+query I
+SELECT COUNT(*) FROM Airline;
+----
+16

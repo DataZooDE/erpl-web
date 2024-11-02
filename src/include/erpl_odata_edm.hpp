@@ -1602,7 +1602,7 @@ public:
 
     std::string StripUrlIfNecessary(const std::string& type_name_or_url) const 
     {
-        if (IsFullUrl(type_name_or_url) || ! IsRelativeMetadataUrl(type_name_or_url)) 
+        if (! IsFullUrl(type_name_or_url) && ! IsRelativeMetadataUrl(type_name_or_url)) 
         {
             return type_name_or_url;
         }

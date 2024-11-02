@@ -2,7 +2,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
-#include "erpl_odata_functions.hpp"
+#include "erpl_odata_read_functions.hpp"
 
 #include "telemetry.hpp"
 
@@ -20,7 +20,7 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
 ODataReadBindData::ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client)
     : odata_client(odata_client)
 { 
-    predicate_pushdown_helper = std::make_shared<ODataPredicatePushdownHelper>(odata_client->GetResultNames());
+    predicate_pushdown_helper = nullptr;
 }
 
 std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns)
@@ -104,71 +104,31 @@ bool ODataReadBindData::HasMoreResults()
 void ODataReadBindData::ActivateColumns(const std::vector<duckdb::column_t> &column_ids)
 {
     active_column_ids = column_ids;
-    predicate_pushdown_helper->ConsumeColumnSelection(column_ids);
+    PredicatePushdownHelper()->ConsumeColumnSelection(column_ids);
 
-    //std::cout << "Select: " << predicate_pushdown_helper->SelectClause() << std::endl;
+    //std::cout << "Select: " << PredicatePushdownHelper()->SelectClause() << std::endl;
 }
 
 void ODataReadBindData::AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters)
 {
-    predicate_pushdown_helper->ConsumeFilters(filters);
+    PredicatePushdownHelper()->ConsumeFilters(filters);
 }
 
 void ODataReadBindData::UpdateUrlFromPredicatePushdown()
 {
     auto http_client = odata_client->GetHttpClient();
-    auto updated_url = predicate_pushdown_helper->ApplyFiltersToUrl(odata_client->Url());
+    auto updated_url = PredicatePushdownHelper()->ApplyFiltersToUrl(odata_client->Url());
 
     odata_client = std::make_shared<ODataEntitySetClient>(http_client, updated_url);
 }
 
-// -------------------------------------------------------------------------------------------------
-
-duckdb::unique_ptr<ODataAttachBindData> ODataAttachBindData::FromUrl(const std::string& url, 
-                                                                     std::shared_ptr<HttpAuthParams> auth_params)
+std::shared_ptr<ODataPredicatePushdownHelper> ODataReadBindData::PredicatePushdownHelper()
 {
-    auto http_client = std::make_shared<HttpClient>();
-    auto odata_client = std::make_shared<ODataServiceClient>(http_client, url, auth_params);
-
-    return duckdb::make_uniq<ODataAttachBindData>(odata_client);
-}
-
-ODataAttachBindData::ODataAttachBindData(std::shared_ptr<ODataServiceClient> odata_client)
-    : odata_client(odata_client)
-{ }
-
-
-bool ODataAttachBindData::IsFinished() const
-{
-    return finished;
-}
-
-void ODataAttachBindData::SetFinished()
-{
-    finished = true;
-}
-
-
-bool ODataAttachBindData::Overwrite() const
-{
-    return overwrite;
-}
-
-void ODataAttachBindData::SetOverwrite(bool overwrite)
-{
-    this->overwrite = overwrite;
-}
-
-std::vector<ODataEntitySetReference> ODataAttachBindData::EntitySets()
-{
-    auto svc_response = odata_client->Get();
-    auto svc_references = svc_response->EntitySets();
-
-    for (auto &svc_reference : svc_references) {
-        svc_reference.MergeWithBaseUrlIfRelative(odata_client->Url());
+    if (predicate_pushdown_helper == nullptr) {
+        predicate_pushdown_helper = std::make_shared<ODataPredicatePushdownHelper>(odata_client->GetResultNames());
     }
 
-    return svc_references;
+    return predicate_pushdown_helper;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -234,54 +194,5 @@ TableFunctionSet CreateODataReadFunction()
     return function_set;
 }
 
-static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context, 
-                                               TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, 
-                                               vector<string> &names) 
-{
-    auto auth_params = AuthParamsFromInput(context, input);
-    auto url = input.inputs[0].GetValue<std::string>();
-    auto bind_data = ODataAttachBindData::FromUrl(url, auth_params);
-
-    for (auto &kv : input.named_parameters) {
-		if (kv.first == "overwrite") {
-			bind_data->SetOverwrite(BooleanValue::Get(kv.second));
-		}
-	}
-
-    return_types.emplace_back(LogicalTypeId::BOOLEAN);
-    names.emplace_back("Success");
-
-    return std::move(bind_data);
-}
-
-static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) 
-{
-    auto &data = data_p.bind_data->CastNoConst<ODataAttachBindData>();
-	if (data.IsFinished()) {
-		return;
-	}
-
-    auto duck_conn = duckdb::Connection(context.db->GetDatabase(context));
-    
-    auto svc_references = data.EntitySets();
-    for (auto &svc_reference : svc_references) {
-        auto table_relation = duck_conn.TableFunction("odata_read", {Value(svc_reference.url)});
-        auto table_view = table_relation->CreateView(svc_reference.name, data.Overwrite(), false);
-    }
-	
-    data.SetFinished();
-}
-
-TableFunctionSet CreateODataAttachFunction()
-{
-    TableFunctionSet function_set("odata_attach");
-
-    TableFunction attach_service({LogicalType::VARCHAR}, ODataAttachScan, ODataAttachBind);
-    attach_service.named_parameters["overwrite"] = LogicalTypeId::BOOLEAN;
-
-    function_set.AddFunction(attach_service);
-    return function_set;
-}
 
 } // namespace erpl_web
