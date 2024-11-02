@@ -225,9 +225,9 @@ HttpParams::HttpParams()
 
 // ----------------------------------------------------------------------
 
-HttpAuthParams HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url)
+std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url)
 {
-    auto ret = HttpAuthParams();
+    auto ret = std::make_shared<HttpAuthParams>();
 
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     auto &secret_manager = duckdb::SecretManager::Get(context);
@@ -238,7 +238,7 @@ HttpAuthParams HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context,
 		auto username = kv_secret.TryGetValue("username", true); // error_on_missing = true
 		auto password = kv_secret.TryGetValue("password", true); // error_on_missing = true
 
-        ret.basic_credentials = std::make_tuple(username.ToString(), password.ToString());
+        ret->basic_credentials = std::make_tuple(username.ToString(), password.ToString());
         return ret;
 	}
 
@@ -246,7 +246,7 @@ HttpAuthParams HttpAuthParams::FromDuckDbSecrets(duckdb::ClientContext &context,
 	if (bearer_match.HasMatch()) {
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(bearer_match.GetSecret());
 		auto token = kv_secret.TryGetValue("token", true); // error_on_missing = true
-		ret.bearer_token = token.ToString();
+		ret->bearer_token = token.ToString();
 	}
 
 	return ret;
@@ -281,6 +281,22 @@ std::string HttpAuthParams::Base64Encode(const std::string &input)
 	duckdb::Blob::ToBase64(input, &result_str.front());
 
     return result_str;
+}
+
+std::string HttpAuthParams::CredsToStars(const std::string &creds) const
+{
+    return std::string(creds.size(), '*');
+}
+
+std::string HttpAuthParams::ToString() const
+{
+    if (basic_credentials.has_value()) {
+        return "Basic:" + CredsToStars(std::get<0>(basic_credentials.value()) + ":" + std::get<1>(basic_credentials.value()));
+    }
+    else if (bearer_token.has_value()) {
+        return "Bearer:" + CredsToStars(bearer_token.value());
+    }
+    return "";
 }
 
 // ----------------------------------------------------------------------

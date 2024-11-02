@@ -102,16 +102,23 @@ enum class HttpAuthType {
     BEARER
 };
 
-struct HttpAuthParams 
+class HttpAuthParams 
 {
-    static HttpAuthParams FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url);
+public:
+    static std::shared_ptr<HttpAuthParams> FromDuckDbSecrets(duckdb::ClientContext &context, const HttpUrl &url);
+    HttpAuthParams() = default;
 
     std::optional<std::tuple<std::string, std::string>> basic_credentials = std::nullopt;
     std::optional<std::string> bearer_token = std::nullopt;
 
     HttpAuthType AuthType() const;
     std::optional<std::string> BasicCredentialsBase64() const;
+
+    std::string ToString() const;
+private:
     static std::string Base64Encode(const std::string &str);
+
+    std::string CredsToStars(const std::string &creds) const;
 };
 
 // ----------------------------------------------------------------------

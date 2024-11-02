@@ -92,7 +92,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
 {
     auto args = input.inputs;
     auto url = args[0].ToString();
-    return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
+    return HttpAuthParams::FromDuckDbSecrets(context, url);
 }
 
 static std::vector<std::string> ParseIgnoreParameter(duckdb::Value &ignore)

@@ -122,7 +122,7 @@ TableFunction ODataTableEntry::GetScanFunction(duckdb::ClientContext &context, u
 
     auto base_url = odata_catalog.ServiceUrl();
     auto entity_set_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, name);
-    auto auth_params = std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, entity_set_url.ToString()));
+    auto auth_params = HttpAuthParams::FromDuckDbSecrets(context, entity_set_url.ToString());
     bind_data = std::move(ODataReadBindData::FromEntitySetRoot(entity_set_url, auth_params));
     
     auto result = CreateODataReadFunction();
