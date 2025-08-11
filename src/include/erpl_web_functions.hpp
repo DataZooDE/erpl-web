@@ -21,13 +21,13 @@ public:
 
     std::vector<std::string> GetResultNames();
     std::vector<LogicalType> GetResultTypes();
-    bool HasMoreResults();
-    unsigned int FetchNextResult(DataChunk &output); 
+    bool HasMoreResults() const;
+    unsigned int FetchNextResult(DataChunk &output) const; 
 
 private :
     std::shared_ptr<HttpRequest> request;
     std::shared_ptr<HttpAuthParams> auth_params;
-    bool done;
+    std::shared_ptr<bool> done;
 };
 
 LogicalType CreateHttpHeaderType();

@@ -1,0 +1,438 @@
+# name: test/sql/erpl_web_tracing_file.test
+# description: test erpl_web extension tracing file output functionality
+# group: [erpl_web]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# --------------------------------------------------------------------------------------------
+# Test file output configuration
+
+# Set file output
+statement ok
+SET erpl_trace_output = 'file';
+
+# Verify file output is set
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+file
+
+# --------------------------------------------------------------------------------------------
+# Test file path configuration
+
+# Set trace file path
+statement ok
+SET erpl_trace_file_path = '/tmp/erpl_trace_test.log';
+
+# Verify file path is set
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_file_path';
+----
+erpl_trace_file_path
+/tmp/erpl_trace_test.log
+
+# Test with current directory path
+statement ok
+SET erpl_trace_file_path = '.';
+
+# Verify current directory path is accepted
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_file_path';
+----
+erpl_trace_file_path
+.
+
+
+# --------------------------------------------------------------------------------------------
+# Test file size configuration
+
+# Set max file size
+statement ok
+SET erpl_trace_max_file_size = 1048576;
+
+# Verify file size is set
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
+----
+erpl_trace_max_file_size
+1048576
+
+# Test with larger file size
+statement ok
+SET erpl_trace_max_file_size = 5242880;
+
+# Verify larger file size is set
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
+----
+erpl_trace_max_file_size
+5242880
+
+# --------------------------------------------------------------------------------------------
+# Test rotation configuration
+
+# Enable rotation
+statement ok
+SET erpl_trace_rotation = TRUE;
+
+# Verify rotation is enabled
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_rotation';
+----
+erpl_trace_rotation
+true
+
+# Disable rotation
+statement ok
+SET erpl_trace_rotation = FALSE;
+
+# Verify rotation is disabled
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_rotation';
+----
+erpl_trace_rotation
+false
+
+# --------------------------------------------------------------------------------------------
+# Test file output with HTTP requests
+
+# Enable tracing with file output
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+statement ok
+SET erpl_trace_level = 'TRACE';
+
+statement ok
+SET erpl_trace_output = 'file';
+
+statement ok
+SET erpl_trace_file_path = '/tmp/erpl_trace_test.log';
+
+# Make HTTP requests to generate trace data
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
+----
+GET
+200
+application/json
+
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/status/200');
+----
+GET
+200
+application/json
+
+# Test POST request
+query IIII
+SELECT status,
+       content::JSON->'json'->>'test' as test_value,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_post('https://httpbun.com/anything', {'test': 'file tracing'}::JSON);
+----
+200
+file tracing
+https://httpbun.com/anything
+POST
+
+# --------------------------------------------------------------------------------------------
+# Test both output modes
+
+# Set to both output modes
+statement ok
+SET erpl_trace_output = 'both';
+
+# Verify both output is set
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+both
+
+# Make another request to test both outputs
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/bytes/100');
+----
+GET
+200
+application/octet-stream
+
+# --------------------------------------------------------------------------------------------
+# Test file output with different trace levels
+
+# Test with INFO level
+statement ok
+SET erpl_trace_level = 'INFO';
+
+statement ok
+SET erpl_trace_output = 'file';
+
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/response-headers?X-Test=value');
+----
+GET
+200
+application/json
+
+# Test with ERROR level
+statement ok
+SET erpl_trace_level = 'ERROR';
+
+query I
+SELECT status FROM http_get('https://invalid-domain-that-does-not-exist-12345.com/');
+----
+0
+
+# Test with DEBUG level
+statement ok
+SET erpl_trace_level = 'DEBUG';
+
+query III
+SELECT method, status, content_type FROM http_head('https://httpbun.com/response-headers?Content-Type=text/plain');
+----
+GET
+200
+text/plain
+
+# --------------------------------------------------------------------------------------------
+# Test file output with authentication
+
+# Test with basic auth
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/basic-auth/user/passwd', auth='user:passwd', auth_type='BASIC');
+----
+GET
+200
+application/json
+
+# Test with bearer token
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/bearer', auth='test-token-123', auth_type='BEARER');
+----
+GET
+200
+application/json
+
+# --------------------------------------------------------------------------------------------
+# Test file output with custom headers
+
+# Test with custom headers
+query IIII
+SELECT status,
+       content::JSON->'headers'->>'X-Custom-Header' as custom_header,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_get('https://httpbun.com/anything', headers={'X-Custom-Header': 'file-test-value'});
+----
+200
+file-test-value
+https://httpbun.com/anything
+GET
+
+# --------------------------------------------------------------------------------------------
+# Test file output with different HTTP methods
+
+# PUT request
+query IIII
+SELECT status,
+       content::JSON->'json'->>'data' as data,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_put('https://httpbun.com/anything', {'data': 'file put test'}::JSON);
+----
+200
+file put test
+https://httpbun.com/anything
+PUT
+
+# PATCH request
+query IIII
+SELECT status,
+       content::JSON->'json'->>'patch' as patch_data,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_patch('https://httpbun.com/anything', {'patch': 'file patch test'}::JSON);
+----
+200
+file patch test
+https://httpbun.com/anything
+PATCH
+
+# DELETE request
+query IIII
+SELECT status,
+       content::JSON->'json'->>'delete' as delete_data,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_delete('https://httpbun.com/anything', {'delete': 'file delete test'}::JSON);
+----
+200
+file delete test
+https://httpbun.com/anything
+DELETE
+
+# --------------------------------------------------------------------------------------------
+# Test file output with form data
+
+# Test POST with form data
+query IIII
+SELECT status,
+       content::json->'form'->>'key1' AS key1,
+       content::json->'form'->>'key2' AS key2,
+       content::json->>'method' AS method
+FROM http_post('https://httpbun.com/anything', 'key1=file_value1&key2=file_value2', 'application/x-www-form-urlencoded');
+----
+200
+file_value1
+file_value2
+POST
+
+# --------------------------------------------------------------------------------------------
+# Test file output with query parameters
+
+# Test GET with query parameters
+query IIII
+SELECT status,
+       content::JSON->'args'->>'param1' as param1,
+       content::JSON->'args'->>'param2' as param2,
+       content::JSON->>'method' as method
+FROM http_get('https://httpbun.com/anything?param1=file_value1&param2=file_value2');
+----
+200
+file_value1
+file_value2
+GET
+
+# --------------------------------------------------------------------------------------------
+# Test file output with timeout scenarios
+
+# Test with short timeout
+query I
+SELECT status FROM http_get('https://httpbun.com/delay/2', timeout=1000);
+----
+0
+
+# Test with longer timeout
+query I
+SELECT status FROM http_get('https://httpbun.com/delay/1', timeout=5000);
+----
+200
+
+# --------------------------------------------------------------------------------------------
+# Test file output with large responses
+
+# Test with large response
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/bytes/5000');
+----
+GET
+200
+application/octet-stream
+
+# --------------------------------------------------------------------------------------------
+# Test file output with redirects
+
+# Test with redirect
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/redirect/1');
+----
+GET
+200
+application/json
+
+# --------------------------------------------------------------------------------------------
+# Test file output with special characters
+
+# Test with URL containing special characters
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/anything?param=value with spaces&special=!@#$%^&*()');
+----
+GET
+200
+application/json
+
+# Test with unicode characters
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/anything?unicode=测试&emoji=🚀');
+----
+GET
+200
+application/json
+
+# --------------------------------------------------------------------------------------------
+# Test file output configuration validation
+
+# Test invalid file size (should fail)
+statement error
+SET erpl_trace_max_file_size = -1;
+----
+Whatever
+
+# Test very large file size
+statement ok
+SET erpl_trace_max_file_size = 1073741824;
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
+----
+erpl_trace_max_file_size
+1073741824
+
+# --------------------------------------------------------------------------------------------
+# Test file output with concurrent requests
+
+# Make multiple requests to test file output under load
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
+----
+GET
+200
+application/json
+
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/status/200');
+----
+GET
+200
+text/plain
+
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/bytes/100');
+----
+GET
+200
+application/octet-stream
+
+# --------------------------------------------------------------------------------------------
+# Test file output reset
+
+# Reset to console output
+statement ok
+SET erpl_trace_output = 'console';
+
+# Verify reset
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+console
+
+# Disable tracing
+statement ok
+SET erpl_trace_enabled = FALSE;
+
+# Verify tracing is disabled
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
+----
+0

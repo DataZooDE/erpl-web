@@ -1738,7 +1738,8 @@ class DuckTypeConverter
             } else if (type == erpl_web::GeographyPoint) {
                 return duckdb::LogicalType::LIST(duckdb::LogicalTypeId::DOUBLE);
             } else {
-                throw std::runtime_error("Unsupported PrimitiveType: " + type.name);
+                // Fallback for unknown primitive types - treat as VARCHAR
+                return duckdb::LogicalTypeId::VARCHAR;
             }
         }
 
@@ -1755,7 +1756,8 @@ class DuckTypeConverter
 
         duckdb::LogicalType operator()(const TypeDefinition &type) const 
         {
-            throw new std::runtime_error("TypeDefinition not supported");
+            // Fallback for TypeDefinition - treat as VARCHAR for now
+            return duckdb::LogicalTypeId::VARCHAR;
         }
 
         duckdb::LogicalType operator()(const ComplexType &type) const 

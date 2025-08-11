@@ -3,6 +3,7 @@
 #include "erpl_http_client.hpp"
 #include "erpl_odata_edm.hpp"
 #include "erpl_odata_content.hpp"
+#include "erpl_tracing.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
@@ -24,10 +25,17 @@ public:
     std::shared_ptr<TContent> Content()
     {
         if (parsed_content != nullptr) {
+            ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Returning cached parsed content");
             return parsed_content;
         }
 
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Parsing HTTP response content");
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content type: " + http_response->ContentType());
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content size: " + std::to_string(http_response->Content().length()) + " bytes");
+        
         parsed_content = CreateODataContent(http_response->Content());
+        
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Successfully parsed content");
         return parsed_content;
     }
 
@@ -111,6 +119,10 @@ protected:
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         auto http_request = HttpRequest(HttpMethod::GET, url);
+        
+        // Use simple Accept header that works
+        http_request.headers.emplace("Accept", "application/json");
+        
         if (auth_params != nullptr) {
             http_request.AuthHeadersFromParams(*auth_params);
         }
@@ -120,7 +132,7 @@ protected:
         if (http_response == nullptr || http_response->Code() != 200) {
             std::stringstream ss;
             ss << "Failed to get OData response: " << http_response->Code() << std::endl;
-            ss << "Content: " << std::endl << http_response->Content() << std::endl;
+            ss << "Content: " << http_response->Content() << std::endl;
             throw std::runtime_error(ss.str());
         }
 
@@ -132,15 +144,63 @@ protected:
         //std::cout << "Fetching Metadata From: " << metadata_url_raw << std::endl;
         auto current_svc_url = url;
         auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
+        
+        // Use simple Accept header that works
+        metadata_request.headers.emplace("Accept", "application/xml");
+        
         if (auth_params != nullptr) {
             metadata_request.AuthHeadersFromParams(*auth_params);
         }
-
+        
+        // Trace metadata request details
+        std::stringstream request_trace;
+        request_trace << "OData Metadata HTTP Request:" << std::endl;
+        request_trace << "  URL: " << HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw).ToString() << std::endl;
+        request_trace << "  Method: GET" << std::endl;
+        request_trace << "  Headers:";
+        for (const auto& header : metadata_request.headers) {
+            request_trace << std::endl << "    " << header.first << ": " << header.second;
+        }
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", request_trace.str());
+        
         std::unique_ptr<HttpResponse> metadata_response;
         for (size_t num_retries = 3; num_retries > 0; --num_retries) {
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " of 3");
+            
             metadata_response = http_client->SendRequest(metadata_request);
             if (metadata_response != nullptr && metadata_response->Code() == 200) {
+                // Trace successful metadata response
+                std::stringstream response_trace;
+                response_trace << "OData Metadata HTTP Success Response:" << std::endl;
+                response_trace << "  Status Code: " << metadata_response->Code() << std::endl;
+                response_trace << "  Content Type: " << metadata_response->ContentType() << std::endl;
+                response_trace << "  Response Headers:";
+                for (const auto& header : metadata_response->headers) {
+                    response_trace << std::endl << "    " << header.first << ": " << header.second;
+                }
+                response_trace << std::endl << "  Response Body Size: " << metadata_response->Content().length() << " bytes";
+                if (metadata_response->Content().length() > 0) {
+                    response_trace << std::endl << "  Response Body Preview (first 500 chars): " << metadata_response->Content().substr(0, 500);
+                }
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", response_trace.str());
+                
                 return metadata_response;
+            }
+
+            // Trace failed metadata response
+            if (metadata_response != nullptr) {
+                std::stringstream error_trace;
+                error_trace << "OData Metadata HTTP Error Response (attempt " + std::to_string(4 - num_retries) + "):" << std::endl;
+                error_trace << "  Status Code: " << metadata_response->Code() << std::endl;
+                error_trace << "  Content Type: " << metadata_response->ContentType() << std::endl;
+                error_trace << "  Response Headers:";
+                for (const auto& header : metadata_response->headers) {
+                    error_trace << std::endl << "    " << header.first << ": " << header.second;
+                }
+                error_trace << std::endl << "  Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+                ERPL_TRACE_WARN("ODATA_CLIENT", error_trace.str());
+            } else {
+                ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " failed: No response received");
             }
 
             // The OData v4 spec defines that the metadata document when given as a relative URL
@@ -149,11 +209,26 @@ protected:
             // try whether that is the service root URL.
             current_svc_url = current_svc_url.PopPath();
             metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Retrying metadata request with popped URL: " + current_svc_url.ToString());
+            
             if (auth_params != nullptr) {
                 metadata_request.AuthHeadersFromParams(*auth_params);
             }   
         }
 
+        // Trace final failure
+        std::stringstream final_error;
+        final_error << "All metadata request attempts failed. Final attempt details:" << std::endl;
+        final_error << "  Final URL: " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString() << std::endl;
+        if (metadata_response != nullptr) {
+            final_error << "  Final Status Code: " << metadata_response->Code() << std::endl;
+            final_error << "  Final Content Type: " << metadata_response->ContentType() << std::endl;
+            final_error << "  Final Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+        } else {
+            final_error << "  No response received on final attempt";
+        }
+        ERPL_TRACE_ERROR("ODATA_CLIENT", final_error.str());
+        
         std::stringstream ss;
         ss << "Failed to get OData metadata from " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString();
         if (metadata_response == nullptr) {

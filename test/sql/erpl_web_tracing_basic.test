@@ -1,0 +1,221 @@
+# name: test/sql/erpl_web_tracing_basic.test
+# description: basic test for erpl_web extension tracing functionality
+# group: [erpl_web]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# --------------------------------------------------------------------------------------------
+# Test basic tracing configuration
+
+# Check that tracing settings exist
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_trace%';
+----
+6
+
+# Verify core settings exist
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name IN ('erpl_trace_enabled', 'erpl_trace_level', 'erpl_trace_output');
+----
+3
+
+# --------------------------------------------------------------------------------------------
+# Test enabling/disabling tracing
+
+# Enable tracing
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+# Verify tracing is enabled
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
+----
+1
+
+# Disable tracing
+statement ok
+SET erpl_trace_enabled = FALSE;
+
+# Verify tracing is disabled
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
+----
+0
+
+# --------------------------------------------------------------------------------------------
+# Test trace levels
+
+# Test all valid trace levels
+statement ok
+SET erpl_trace_level = 'TRACE';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+TRACE
+
+statement ok
+SET erpl_trace_level = 'DEBUG';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+DEBUG
+
+statement ok
+SET erpl_trace_level = 'INFO';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+INFO
+
+statement ok
+SET erpl_trace_level = 'WARN';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+WARN
+
+statement ok
+SET erpl_trace_level = 'ERROR';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+ERROR
+
+# --------------------------------------------------------------------------------------------
+# Test trace output options
+
+# Test all valid output options
+statement ok
+SET erpl_trace_output = 'console';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+console
+
+statement ok
+SET erpl_trace_output = 'file';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+file
+
+statement ok
+SET erpl_trace_output = 'both';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+both
+
+# --------------------------------------------------------------------------------------------
+# Test basic HTTP request with tracing enabled
+
+# Enable tracing and make a simple request
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+statement ok
+SET erpl_trace_level = 'INFO';
+
+statement ok
+SET erpl_trace_output = 'console';
+
+# Make a simple HTTP request
+query III
+SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
+----
+GET
+200
+application/json
+
+# --------------------------------------------------------------------------------------------
+# Test different HTTP methods with tracing
+
+# POST request
+query IIII
+SELECT status,
+       content::JSON->'json'->>'test' as test_value,
+       content::JSON->>'url' as url,
+       content::JSON->>'method' as method
+FROM http_post('https://httpbun.com/anything', {'test': 'tracing'}::JSON);
+----
+200
+tracing
+https://httpbun.com/anything
+POST
+
+# --------------------------------------------------------------------------------------------
+# Test error conditions with tracing
+
+# Test with invalid URL (should generate error traces)
+statement ok
+SET erpl_trace_level = 'ERROR';
+
+statement error
+SELECT status FROM http_get('https://invalid-domain-that-does-not-exist-12345.com/');
+----
+IO Error: Could not establish connection error for HTTP GET to 'https://invalid-domain-that-does-not-exist-12345.com/'
+
+# Test with timeout
+statement ok
+SET erpl_trace_level = 'INFO';
+
+# --------------------------------------------------------------------------------------------
+# Test configuration persistence
+
+# Verify settings persist
+query II
+SELECT name, value FROM duckdb_settings() WHERE name IN ('erpl_trace_enabled', 'erpl_trace_level', 'erpl_trace_output') ORDER BY name;
+----
+erpl_trace_enabled
+true
+erpl_trace_level
+INFO
+erpl_trace_output
+console
+
+# --------------------------------------------------------------------------------------------
+# Test reset to defaults
+
+# Reset to default values
+statement ok
+SET erpl_trace_enabled = FALSE;
+
+statement ok
+SET erpl_trace_level = 'INFO';
+
+statement ok
+SET erpl_trace_output = 'console';
+
+# Verify reset
+query II
+SELECT name, value FROM duckdb_settings() WHERE name IN ('erpl_trace_enabled', 'erpl_trace_level', 'erpl_trace_output') ORDER BY name;
+----
+erpl_trace_enabled
+false
+erpl_trace_level
+INFO
+erpl_trace_output
+console
