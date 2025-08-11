@@ -18,8 +18,9 @@ class HttpClient; // forward declaration
 template <typename T>
 std::basic_string<T> ToLower(const std::basic_string<T>& s)
 {
-    std::basic_string<T> s2 = s;
-    std::transform(s2.begin(), s2.end(), s2.begin(),
+    std::basic_string<T> s2;
+    s2.reserve(s.size()); // Pre-allocate for efficiency
+    std::transform(s.begin(), s.end(), std::back_inserter(s2),
         [](const T v){ return static_cast<T>(std::tolower(v)); });
     return s2;
 }
@@ -59,6 +60,7 @@ public:
 
     static HttpUrl MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::string& relative_url);
     static std::filesystem::path MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& relative_path);
+    static std::string ToLower(const std::string& str);
 
 private:
     std::string scheme;
@@ -69,8 +71,6 @@ private:
     std::string fragment;
     std::string username;
     std::string password;
-
-    static std::string ToLower(const std::string& str);
 };
 
 // ----------------------------------------------------------------------
@@ -212,6 +212,7 @@ private:
                                                              duckdb_httplib_openssl::Response &response);
     
     duckdb::Value CreateHeaderMap() const;
+    static std::string Base64Encode(const std::string &input);
 };
 
 // ----------------------------------------------------------------------

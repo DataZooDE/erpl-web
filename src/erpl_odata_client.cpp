@@ -2,6 +2,7 @@
 #include <regex>
 
 #include "erpl_odata_client.hpp"
+#include "erpl_tracing.hpp"
 
 namespace erpl_web {
 
@@ -10,7 +11,10 @@ namespace erpl_web {
 
 ODataEntitySetResponse::ODataEntitySetResponse(std::unique_ptr<HttpResponse> http_response)
     : ODataResponse(std::move(http_response))
-{ }
+{ 
+    ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Created OData entity set response");
+    ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Response content type: " + ContentType());
+}
 
 std::string ODataEntitySetResponse::MetadataContextUrl()
 {
@@ -52,42 +56,63 @@ ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_clie
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
 {
-    Get();
-    return current_response->MetadataContextUrl();
+    // Extract service root URL from entity set URL
+    // For entity set URLs like https://services.odata.org/TripPinRESTierService/People?$top=1
+    // We need to get the service root: https://services.odata.org/TripPinRESTierService
+    auto service_root_url = url.PopPath();
+    
+    // Remove any query parameters from the service root
+    auto service_root_str = service_root_url.ToString();
+    auto query_pos = service_root_str.find('?');
+    if (query_pos != std::string::npos) {
+        service_root_str = service_root_str.substr(0, query_pos);
+    }
+    
+    return service_root_str + "/$metadata";
 }
 
 std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataContent(const std::string& content)
 {
+    ERPL_TRACE_DEBUG("ODATA_CONTENT", "Creating OData content from response");
+    ERPL_TRACE_DEBUG("ODATA_CONTENT", "Content type: " + ContentType());
+    ERPL_TRACE_DEBUG("ODATA_CONTENT", "Content size: " + std::to_string(content.length()) + " bytes");
+    
     if (ODataJsonContentMixin::IsJsonContentType(ContentType())) {
+        ERPL_TRACE_DEBUG("ODATA_CONTENT", "Creating JSON content");
         return std::make_shared<ODataEntitySetJsonContent>(content);
     }
         
+    ERPL_TRACE_ERROR("ODATA_CONTENT", "Unsupported content type: " + ContentType());
     throw std::runtime_error("Unsupported OData content type: " + ContentType());
 }
 
 std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
 {
     if (! get_next && current_response != nullptr) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Returning cached response");
         return current_response;
     }
 
-    //std::cout << "Fetching OData Request From: [" << (get_next ? "next" : "first") << "] "; 
-    //std::cout << url.ToString() << std::endl;
-    //cpptrace::generate_trace().print();
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Fetching OData request from: " + url.ToString() + " (get_next: " + std::to_string(get_next) + ")");
 
     if (get_next && current_response != nullptr) {
         auto next_url = current_response->NextUrl();
         if (!next_url) {
-            //std::cout << "Tried to get next URL: No next URL found" << std::endl;
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "No next URL available for pagination");
             return nullptr;
         }
 
         url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
-        //std::cout << "Tried to get next URL: " << url.ToString() << std::endl;
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using next URL: " + url.ToString());
     }
 
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Executing HTTP GET request");
     auto http_response = DoHttpGet(url);
+    
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Creating OData response object");
     current_response = std::make_shared<ODataEntitySetResponse>(std::move(http_response));
+    
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Successfully created OData response");
 
     return current_response;
 }
@@ -96,8 +121,33 @@ EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
 {
     auto edmx = GetMetadata();
 
-    auto metadata_url = current_response->MetadataContextUrl();
-    auto entity_set_type = edmx.FindEntitySet(metadata_url);
+    // Extract entity set name from the URL path
+    // For URLs like https://services.odata.org/TripPinRESTierService/People
+    // Extract "People" as the entity set name
+    auto path = url.Path();
+    if (path.empty() || path == "/") {
+        throw std::runtime_error("Invalid entity set URL: no path segment found");
+    }
+    
+    // Remove leading slash if present
+    if (path[0] == '/') {
+        path = path.substr(1);
+    }
+    
+    // Find the last path segment
+    auto last_slash_pos = path.find_last_of('/');
+    std::string entity_set_name;
+    if (last_slash_pos == std::string::npos) {
+        entity_set_name = path;
+    } else {
+        entity_set_name = path.substr(last_slash_pos + 1);
+    }
+    
+    if (entity_set_name.empty()) {
+        throw std::runtime_error("Invalid entity set URL: empty entity set name");
+    }
+    
+    auto entity_set_type = edmx.FindEntitySet(entity_set_name);
     return entity_set_type;
 }
 

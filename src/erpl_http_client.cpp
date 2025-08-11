@@ -12,6 +12,7 @@
 
 #include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
+#include "erpl_tracing.hpp"
 
 #include <mutex>
 #include <shared_mutex>
@@ -87,8 +88,9 @@ bool HttpUrl::Equals(const HttpUrl& other) const {
 }
 
 std::string HttpUrl::ToLower(const std::string& str) {
-    std::string lowerStr = str;
-    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(),
+    std::string lowerStr;
+    lowerStr.reserve(str.size()); // Pre-allocate for efficiency
+    std::transform(str.begin(), str.end(), std::back_inserter(lowerStr),
                    [](unsigned char c){ return std::tolower(c); });
     return lowerStr;
 }
@@ -176,8 +178,17 @@ HttpUrl HttpUrl::MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::
 
     // Handle path
     if (!rel_path.empty()) {
-        auto merged_path = MergePaths(base_url.Path(), rel_path);
-        merged_url.Path(merged_path.string());
+        if (rel_path[0] == '/') {
+            // Path starting with / should be treated as relative to base URL's root
+            // Remove the leading / and merge with base path
+            std::string rel_path_without_slash = rel_path.substr(1);
+            auto merged_path = MergePaths(base_url.Path(), rel_path_without_slash);
+            merged_url.Path(merged_path.string());
+        } else {
+            // Relative path - merge with base path
+            auto merged_path = MergePaths(base_url.Path(), rel_path);
+            merged_url.Path(merged_path.string());
+        }
     }
 
     // Handle query and fragment
@@ -278,7 +289,7 @@ std::string HttpAuthParams::Base64Encode(const std::string &input)
     auto result_str = std::string();
     result_str.resize(duckdb::Blob::ToBase64Size(input));
 
-	duckdb::Blob::ToBase64(input, &result_str.front());
+    duckdb::Blob::ToBase64(input, &result_str.front());
 
     return result_str;
 }
@@ -376,29 +387,46 @@ void HttpRequest::HeadersFromMapArg(duckdb::Value &header_map)
         return;
     }
 
-    if (header_map.type() != HttpResponse::DuckDbHeaderType())
-    {
+    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Processing headers from type: " + header_map.type().ToString());
+
+    if (header_map.type().id() == LogicalTypeId::MAP) {
+        // Map case: MAP{'key': 'value', 'key2': 'value2'}
+        auto map_entries = MapValue::GetChildren(header_map);
+        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Processing " + std::to_string(map_entries.size()) + " map entries");
+        
+        // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
+        for (size_t i = 0; i < map_entries.size(); i++) {
+            auto entry = map_entries[i];
+            if (entry.type().id() == LogicalTypeId::STRUCT) {
+                auto struct_entries = StructValue::GetChildren(entry);
+                auto struct_types = StructType::GetChildTypes(entry.type());
+                
+                // Find the key and value fields
+                std::string key, value;
+                for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
+                    if (struct_types[j].first == "key") {
+                        key = struct_entries[j].ToString();
+                    } else if (struct_types[j].first == "value") {
+                        value = struct_entries[j].ToString();
+                    }
+                }
+                
+                if (!key.empty() && !value.empty()) {
+                    headers.emplace(key, value);
+                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + value);
+
+                    if (ToLower(key) == "content-type") {
+                        content_type = value;
+                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Updated content_type to: " + value);
+                    }
+                }
+            }
+        }
+    } else {
         throw std::runtime_error("Header map must be a MAP<VARCHAR, VARCHAR> type");
     }
 
-    // MAP is a LIST(STRUCT(K,V))
-    auto map_entries = ListValue::GetChildren(header_map);
-    for (auto &el : map_entries)
-    {
-        auto struct_entries = StructValue::GetChildren(el);
-        if (struct_entries.size() != 2)
-        {
-            throw std::runtime_error("Header map must contain key-value pairs");
-        }
-
-        auto key = struct_entries[0].ToString();
-        auto value = struct_entries[1].ToString();
-        headers.emplace(key, value);
-
-        if (ToLower(key) == "content-type") {
-            content_type = value;
-        }
-    }
+    ERPL_TRACE_INFO("HTTP_HEADERS", "Final headers count: " + std::to_string(headers.size()));
 }
 
 void HttpRequest::HeadersFromMapArg(const duckdb::Value &header_map)
@@ -441,34 +469,60 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     auto path_str = url.ToPathQuery();
     auto headers = HttplibHeaders();
 
+    // Log HTTP request details
+    ERPL_TRACE_INFO("HTTP_REQUEST", "Executing " + method.ToString() + " request to: " + path_str);
+    ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request headers:");
+    for (const auto& header : headers) {
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "  " + header.first + ": " + header.second);
+    }
+    if (!content.empty()) {
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request content (" + std::to_string(content.length()) + " bytes): " + content);
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Content-Type: " + content_type);
+    }
+
+    duckdb_httplib_openssl::Result result;
     if (method == HttpMethod::GET)
     {
-        return client.Get(path_str.c_str(), headers);
+        result = client.Get(path_str.c_str(), headers);
     }
     else if (method == HttpMethod::POST)
     {
-        return client.Post(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Post(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::PUT)
     {
-        return client.Put(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Put(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::PATCH)
     {
-        return client.Patch(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Patch(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::_DELETE)
     {
-        return client.Delete(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Delete(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::HEAD)
     {
-        return client.Head(path_str.c_str(), headers);
+        result = client.Head(path_str.c_str(), headers);
     }
     else
     {
         throw std::runtime_error("Invalid HTTP method");
     }
+
+    // Log HTTP response details
+    if (result) {
+        ERPL_TRACE_INFO("HTTP_RESPONSE", "Response status: " + std::to_string(result->status));
+        ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response headers:");
+        for (const auto& header : result->headers) {
+            ERPL_TRACE_DEBUG("HTTP_RESPONSE", "  " + header.first + ": " + header.second);
+        }
+        ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (" + std::to_string(result->body.length()) + " bytes)");
+    } else {
+        ERPL_TRACE_ERROR("HTTP_RESPONSE", "Request failed: " + to_string(result.error()));
+    }
+
+    return result;
 }
 
 // ----------------------------------------------------------------------
@@ -554,9 +608,34 @@ duckdb::Value HttpResponse::CreateHeaderMap() const
     );
 }
 
+std::string HttpResponse::Base64Encode(const std::string &input)
+{
+    auto result_str = std::string();
+    result_str.resize(duckdb::Blob::ToBase64Size(input));
+
+    duckdb::Blob::ToBase64(input, &result_str.front());
+
+    return result_str;
+}
+
 std::vector<duckdb::Value> HttpResponse::ToRow() const
 {
 	auto conv = CharsetConverter(content_type);
+
+    // For binary content types, convert to base64 to avoid UTF-8 validation issues
+    std::string content_to_return;
+    if (content_type.find("application/octet-stream") != std::string::npos ||
+        content_type.find("application/pdf") != std::string::npos ||
+        content_type.find("image/") != std::string::npos ||
+        content_type.find("video/") != std::string::npos ||
+        content_type.find("audio/") != std::string::npos ||
+        content_type.find("font/") != std::string::npos) {
+        // Convert binary content to base64
+        content_to_return = "BINARY_CONTENT_BASE64:" + Base64Encode(content);
+    } else {
+        // Use normal charset conversion for text content
+        content_to_return = conv.convert(content);
+    }
 
     return {
         duckdb::Value(method.ToString()),
@@ -564,7 +643,7 @@ std::vector<duckdb::Value> HttpResponse::ToRow() const
         duckdb::Value(url.ToString()),
         CreateHeaderMap(),
         duckdb::Value(content_type),
-        duckdb::Value(conv.convert(content))
+        duckdb::Value(content_to_return)
     };
 }
 
@@ -665,8 +744,11 @@ std::unique_ptr<HttpResponse> HttpClient::Head(const std::string &url)
 
 std::unique_ptr<HttpResponse> HttpClient::Get(const std::string &url)
 {
+    ERPL_TRACE_DEBUG("HTTP_CLIENT", "Executing HTTP GET request to: " + url);
     auto req = HttpRequest(HttpMethod::GET, url);
-    return SendRequest(req);
+    auto response = SendRequest(req);
+    ERPL_TRACE_INFO("HTTP_CLIENT", "HTTP GET response received with status: " + std::to_string(response->Code()));
+    return response;
 }
 
 std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(const HttpParams &http_params,

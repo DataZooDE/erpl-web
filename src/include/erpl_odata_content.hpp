@@ -73,6 +73,10 @@ protected:
     duckdb::Value DeserializeJsonObject(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
 
     std::string GetStringProperty(yyjson_val *json_value, const std::string &property_name) const;
+
+    // JSON path evaluation for complex expressions like AddressInfo[1].City."Name"
+    yyjson_val* EvaluateJsonPath(yyjson_val* root, const std::string& path);
+    std::vector<std::string> ParseJsonPath(const std::string& path);
 };
 
 // -------------------------------------------------------------------------------------------------

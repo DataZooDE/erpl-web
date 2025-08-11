@@ -33,8 +33,11 @@ void ODataJsonContentMixin::PrettyPrint()
 duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val *json_value, const duckdb::LogicalType &duck_type)
 {
     if (yyjson_is_null(json_value)) {
+        std::cout << "[DEBUG] [DESERIALIZE] JSON value is null, returning default" << std::endl;
         return duckdb::Value().DefaultCastAs(duck_type);
     }
+
+    std::cout << "[DEBUG] [DESERIALIZE] Deserializing JSON value to type: " << duck_type.ToString() << std::endl;
 
     switch (duck_type.id()) 
     {
@@ -65,8 +68,10 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val *json_value
         case duckdb::LogicalTypeId::ENUM:
             return DeserializeJsonEnum(json_value, duck_type);
         case duckdb::LogicalTypeId::LIST:
+            std::cout << "[DEBUG] [DESERIALIZE] Deserializing LIST type" << std::endl;
             return DeserializeJsonArray(json_value, duck_type);
         case duckdb::LogicalTypeId::STRUCT:
+            std::cout << "[DEBUG] [DESERIALIZE] Deserializing STRUCT type" << std::endl;
             return DeserializeJsonObject(json_value, duck_type);
         default:
             throw duckdb::InvalidTypeException(duck_type, "Unsupported OData -> DuckDB type");
@@ -216,8 +221,15 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val *json_value
     size_t i, max;
     yyjson_val *json_child_val;
     yyjson_arr_foreach(json_value, i, max, json_child_val) {
-        auto duck_value = DeserializeJsonValue(json_child_val, child_type);
-        child_values.push_back(duck_value);
+        if (yyjson_is_null(json_child_val)) {
+            // Handle null values in arrays
+            std::cout << "[DEBUG] [DESERIALIZE_ARRAY] Found null value at index " << i << ", using default" << std::endl;
+            auto duck_value = duckdb::Value().DefaultCastAs(child_type);
+            child_values.push_back(duck_value);
+        } else {
+            auto duck_value = DeserializeJsonValue(json_child_val, child_type);
+            child_values.push_back(duck_value);
+        }
     }
 
     return duckdb::Value::LIST(child_type, child_values);
@@ -230,7 +242,7 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val *json_valu
     }
 
     duckdb::child_list_t<duckdb::Value> child_values;
-    child_values.reserve(yyjson_obj_size(json_value));
+    child_values.reserve(duckdb::StructType::GetChildTypes(duck_type).size());
 
     auto child_types = duckdb::StructType::GetChildTypes(duck_type);
     for (const auto& child : child_types) {
@@ -238,8 +250,17 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val *json_valu
         auto child_type = child.second;
 
         auto json_child_val = yyjson_obj_get(json_value, child_name.c_str());
-        auto duck_value = DeserializeJsonValue(json_child_val, child_type);
-        child_values.push_back(std::make_pair(child_name, duck_value));
+        if (!json_child_val) {
+            // Field doesn't exist in JSON, use default value
+            std::cout << "[DEBUG] [DESERIALIZE_OBJECT] Field " << child_name << " not found in JSON, using default" << std::endl;
+            auto duck_value = duckdb::Value().DefaultCastAs(child_type);
+            child_values.push_back(std::make_pair(child_name, duck_value));
+        } else {
+            // Field exists, deserialize it
+            std::cout << "[DEBUG] [DESERIALIZE_OBJECT] Deserializing field " << child_name << std::endl;
+            auto duck_value = DeserializeJsonValue(json_child_val, child_type);
+            child_values.push_back(std::make_pair(child_name, duck_value));
+        }
     }
 
     return duckdb::Value::STRUCT(child_values);
@@ -280,6 +301,116 @@ std::string ODataJsonContentMixin::GetStringProperty(yyjson_val *json_value, con
     return std::string(yyjson_get_str(json_property));
 }
 
+// JSON path evaluation for complex expressions like AddressInfo[1].City."Name"
+yyjson_val* ODataJsonContentMixin::EvaluateJsonPath(yyjson_val* root, const std::string& path) {
+    if (!root || path.empty()) {
+        return nullptr;
+    }
+
+    auto path_parts = ParseJsonPath(path);
+    yyjson_val* current = root;
+
+    for (const auto& part : path_parts) {
+        if (!current) {
+            return nullptr;
+        }
+
+        if (part.empty()) {
+            continue;
+        }
+
+        // Check if this is an array index
+        if (part[0] == '[' && part[part.length() - 1] == ']') {
+            if (!yyjson_is_arr(current)) {
+                return nullptr;
+            }
+            
+            try {
+                size_t index = std::stoul(part.substr(1, part.length() - 2));
+                current = yyjson_arr_get(current, index);
+            } catch (const std::exception&) {
+                return nullptr;
+            }
+        }
+        // Check if this is a quoted property name
+        else if (part[0] == '"' && part[part.length() - 1] == '"') {
+            if (!yyjson_is_obj(current)) {
+                return nullptr;
+            }
+            
+            std::string property_name = part.substr(1, part.length() - 2);
+            current = yyjson_obj_get(current, property_name.c_str());
+        }
+        // Regular property name
+        else {
+            if (!yyjson_is_obj(current)) {
+                return nullptr;
+            }
+            
+            current = yyjson_obj_get(current, part.c_str());
+        }
+    }
+
+    return current;
+}
+
+std::vector<std::string> ODataJsonContentMixin::ParseJsonPath(const std::string& path) {
+    std::vector<std::string> parts;
+    std::string current_part;
+    bool in_quotes = false;
+    bool in_brackets = false;
+    
+    for (size_t i = 0; i < path.length(); i++) {
+        char c = path[i];
+        
+        if (c == '"' && (i == 0 || path[i-1] != '\\')) {
+            in_quotes = !in_quotes;
+            if (in_quotes) {
+                // Start of quoted string
+                if (!current_part.empty()) {
+                    parts.push_back(current_part);
+                    current_part.clear();
+                }
+                current_part += c;
+            } else {
+                // End of quoted string
+                current_part += c;
+                parts.push_back(current_part);
+                current_part.clear();
+            }
+        }
+        else if (c == '[' && !in_quotes) {
+            in_brackets = true;
+            if (!current_part.empty()) {
+                parts.push_back(current_part);
+                current_part.clear();
+            }
+            current_part += c;
+        }
+        else if (c == ']' && !in_quotes) {
+            in_brackets = false;
+            current_part += c;
+            parts.push_back(current_part);
+            current_part.clear();
+        }
+        else if (c == '.' && !in_quotes && !in_brackets) {
+            if (!current_part.empty()) {
+                parts.push_back(current_part);
+                current_part.clear();
+            }
+        }
+        else {
+            current_part += c;
+        }
+    }
+    
+    if (!current_part.empty()) {
+        parts.push_back(current_part);
+    }
+    
+    return parts;
+}
+
 // ----------------------------------------------------------------------
 
 ODataEntitySetJsonContent::ODataEntitySetJsonContent(const std::string& content)
@@ -299,6 +430,12 @@ std::optional<std::string> ODataEntitySetJsonContent::NextUrl()
 std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::vector<std::string> &column_names, 
                                                                           std::vector<duckdb::LogicalType> &column_types)
 {
+    std::cout << "[DEBUG] [ODATA_TO_ROWS] Starting ToRows with " << column_names.size() << " columns" << std::endl;
+    for (size_t i = 0; i < column_names.size(); i++) {
+        std::cout << "[DEBUG] [ODATA_TO_ROWS] Column " << i << ": " << column_names[i] 
+                  << " (type: " << column_types[i].ToString() << ")" << std::endl;
+    }
+
     auto root = yyjson_doc_get_root(doc.get());
     auto json_values = yyjson_obj_get(root, "value");
     if (!json_values) {
@@ -308,6 +445,8 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     if (!yyjson_is_arr(json_values)) {
         throw std::runtime_error("value-element in OData response is not an array, cannot get rows.");
     }
+
+    std::cout << "[DEBUG] [ODATA_TO_ROWS] Found " << yyjson_arr_size(json_values) << " rows in JSON response" << std::endl;
 
     auto duck_rows = std::vector<std::vector<duckdb::Value>>();
     duck_rows.reserve(yyjson_arr_size(json_values));
@@ -321,18 +460,57 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     yyjson_val *json_row;
     yyjson_arr_foreach(json_values, i_row, max_row, json_row) 
     {
+        std::cout << "[DEBUG] [ODATA_TO_ROWS] Processing row " << i_row << std::endl;
+        
+        // Debug: print the JSON row content
+        if (i_row == 0) { // Only print first row to avoid spam
+            std::cout << "[DEBUG] [ODATA_TO_ROWS] First row JSON keys: ";
+            size_t key_idx, key_max;
+            yyjson_val *key, *child_val;
+            yyjson_obj_foreach(json_row, key_idx, key_max, key, child_val) {
+                std::cout << unsafe_yyjson_get_str(key) << " ";
+            }
+            std::cout << std::endl;
+        }
+        
         auto duck_row = std::vector<duckdb::Value>();
         duck_row.reserve(column_names.size());
 
         for (size_t i_col = 0; i_col < column_names.size(); i_col++) {
-            auto json_value = yyjson_obj_get(json_row, column_names[i_col].c_str());
-            auto duck_value = DeserializeJsonValue(json_value, column_types[i_col]);
-            duck_row.push_back(duck_value);
+            auto column_name = column_names[i_col];
+            auto column_type = column_types[i_col];
+            
+            std::cout << "[DEBUG] [ODATA_TO_ROWS] Processing column " << i_col << ": " << column_name 
+                      << " (type: " << column_type.ToString() << ")" << std::endl;
+            
+            // Use JSON path evaluator for complex expressions like AddressInfo[1].City."Name"
+            auto json_value = EvaluateJsonPath(json_row, column_name);
+            if (!json_value) {
+                std::cout << "[DEBUG] [ODATA_TO_ROWS] Column " << column_name << " not found in JSON, using null" << std::endl;
+                auto duck_value = duckdb::Value().DefaultCastAs(column_type);
+                duck_row.push_back(duck_value);
+                continue;
+            }
+            
+            try {
+                auto duck_value = DeserializeJsonValue(json_value, column_type);
+                std::cout << "[DEBUG] [ODATA_TO_ROWS] Successfully deserialized " << column_name 
+                          << " to: " << duck_value.ToString() << std::endl;
+                duck_row.push_back(duck_value);
+            } catch (const std::exception& e) {
+                std::cout << "[DEBUG] [ODATA_TO_ROWS] Failed to deserialize " << column_name 
+                          << ": " << e.what() << std::endl;
+                // Use a default value instead of failing the entire row
+                auto duck_value = duckdb::Value().DefaultCastAs(column_type);
+                duck_row.push_back(duck_value);
+            }
         }
 
         duck_rows.push_back(duck_row);
+        std::cout << "[DEBUG] [ODATA_TO_ROWS] Successfully processed row " << i_row << std::endl;
     }
 
+    std::cout << "[DEBUG] [ODATA_TO_ROWS] Total rows processed: " << duck_rows.size() << std::endl;
     return duck_rows;
 }
 

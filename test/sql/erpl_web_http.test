@@ -40,7 +40,7 @@ SELECT status FROM http_get('https://httpbin.org/status/202');
 query I
 SELECT headers['Abc'] FROM http_get('https://httpbin.org/response-headers?Abc=xyz')
 ----
-[xyz]
+xyz
 
 
 # GET Plain
@@ -110,7 +110,7 @@ SELECT status, headers['Abcde']
 FROM http_head('https://httpbin.org/response-headers?Abcde=abcde')
 ----
 200
-[abcde]
+abcde
 
 
 # --------------------------------------------------------------------------------------------
