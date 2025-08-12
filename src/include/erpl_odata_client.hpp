@@ -33,7 +33,8 @@ public:
         ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content type: " + http_response->ContentType());
         ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content size: " + std::to_string(http_response->Content().length()) + " bytes");
         
-        parsed_content = CreateODataContent(http_response->Content());
+        // For now, use default v4 version - the derived classes will override this
+        parsed_content = CreateODataContent(http_response->Content(), ODataVersion::V4);
         
         ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Successfully parsed content");
         return parsed_content;
@@ -44,12 +45,12 @@ protected:
     std::shared_ptr<TContent> parsed_content;
 
 private:
-    virtual std::shared_ptr<TContent> CreateODataContent(const std::string& content) = 0;
+    virtual std::shared_ptr<TContent> CreateODataContent(const std::string& content, ODataVersion odata_version) = 0;
 };
 
 class ODataEntitySetResponse : public ODataResponse<ODataEntitySetContent> {
 public:
-    ODataEntitySetResponse(std::unique_ptr<HttpResponse> http_response);
+    ODataEntitySetResponse(std::unique_ptr<HttpResponse> http_response, ODataVersion odata_version = ODataVersion::V4);
     virtual ~ODataEntitySetResponse() = default; 
         
     std::string MetadataContextUrl();
@@ -57,22 +58,29 @@ public:
 
     std::vector<std::vector<duckdb::Value>> ToRows(std::vector<std::string> &column_names, 
                                                    std::vector<duckdb::LogicalType> &column_types);
+    
+    ODataVersion GetODataVersion() const { return odata_version; }
 private:
-    std::shared_ptr<ODataEntitySetContent> CreateODataContent(const std::string& content) override;
+    std::shared_ptr<ODataEntitySetContent> CreateODataContent(const std::string& content, ODataVersion odata_version) override;
+    
+    ODataVersion odata_version;
 };
 
 // ----------------------------------------------------------------------
 
 class ODataServiceResponse : public ODataResponse<ODataServiceContent> {
 public:
-    ODataServiceResponse(std::unique_ptr<HttpResponse> http_response);
+    ODataServiceResponse(std::unique_ptr<HttpResponse> http_response, ODataVersion odata_version = ODataVersion::V4);
     virtual ~ODataServiceResponse() = default;
 
     std::string MetadataContextUrl();
     std::vector<ODataEntitySetReference> EntitySets();
-
+    
+    ODataVersion GetODataVersion() const { return odata_version; }
 private:
-    std::shared_ptr<ODataServiceContent> CreateODataContent(const std::string& content) override;
+    std::shared_ptr<ODataServiceContent> CreateODataContent(const std::string& content, ODataVersion odata_version) override;
+    
+    ODataVersion odata_version;
 };
 
 // ----------------------------------------------------------------------
@@ -84,9 +92,17 @@ public:
         : http_client(http_client)
         , url(url) 
         , auth_params(auth_params)
+        , odata_version(ODataVersion::UNKNOWN) // Start with unknown version, will be detected from metadata
     {}
 
     virtual ~ODataClient() = default;
+
+    // OData version support
+    void SetODataVersion(ODataVersion version) { odata_version = version; }
+    ODataVersion GetODataVersion() const { return odata_version; }
+    
+    // Auto-detect OData version from metadata
+    void DetectODataVersion();
 
     virtual Edmx GetMetadata()
     {    
@@ -100,6 +116,11 @@ public:
 
         auto content = metadata_response->Content();
         auto edmx = Edmx::FromXml(content);
+        
+        // Auto-detect version from metadata if not already set
+        if (odata_version == ODataVersion::UNKNOWN) {
+            DetectODataVersion();
+        }
 
         EdmCache::GetInstance().Set(metadata_url, edmx);
         return edmx;
@@ -116,12 +137,14 @@ protected:
     HttpUrl url;
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<TResponse> current_response;
+    ODataVersion odata_version;
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         auto http_request = HttpRequest(HttpMethod::GET, url);
         
-        // Use simple Accept header that works
-        http_request.headers.emplace("Accept", "application/json");
+        // Set OData version and add appropriate headers
+        http_request.SetODataVersion(odata_version);
+        http_request.AddODataVersionHeaders();
         
         if (auth_params != nullptr) {
             http_request.AuthHeadersFromParams(*auth_params);
@@ -145,8 +168,16 @@ protected:
         auto current_svc_url = url;
         auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
         
-        // Use simple Accept header that works
-        metadata_request.headers.emplace("Accept", "application/xml");
+        // For metadata requests, don't use version-specific headers since we don't know the version yet
+        // This allows us to detect the version from the metadata response
+        if (odata_version != ODataVersion::UNKNOWN) {
+            // Only use version-specific headers if we already know the version
+            metadata_request.SetODataVersion(odata_version);
+            metadata_request.AddODataVersionHeaders();
+        }
+        
+        // Override Accept header for metadata (XML is standard for both v2 and v4)
+        metadata_request.headers["Accept"] = "application/xml";
         
         if (auth_params != nullptr) {
             metadata_request.AuthHeadersFromParams(*auth_params);

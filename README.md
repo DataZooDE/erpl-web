@@ -7,12 +7,13 @@
 ## ✨ Key Features
 
 - **🌐 HTTP Functions**: Make HTTP requests (GET, POST, PUT, PATCH, DELETE, HEAD) directly from SQL
-- **📊 OData Integration**: Connect to OData services as if they were local database tables
+- **📊 Universal OData Support**: Connect to both OData v2 and v4 services with automatic version detection
 - **🔍 Advanced Tracing**: Comprehensive request/response monitoring and debugging
 - **🔐 Authentication**: Built-in support for Basic Auth, Bearer tokens, and DuckDB secrets
 - **📈 Telemetry**: Optional usage analytics to improve the extension
 - **🚀 Performance**: Intelligent caching, retry logic, and connection pooling
 - **🔄 Charset Support**: Automatic encoding detection and conversion
+- **🔄 Version Transparency**: Zero-configuration OData version handling
 
 ## 🚀 Quick Start
 
@@ -94,27 +95,46 @@ All HTTP functions return a consistent table structure:
 
 ## 📊 OData Integration
 
+### Universal OData Support (v2 & v4)
+
+ERPL Web now provides **universal OData support** that automatically detects and handles both OData v2 and v4 services transparently. No configuration required - the extension automatically:
+
+- **Detects OData version** from service metadata
+- **Applies appropriate headers** for each version
+- **Parses both JSON formats** (v2: `{"d": [...]}`, v4: `{"value": [...]}`)
+- **Handles version-specific features** like `$inlinecount` (v2) and `$count` (v4)
+
 ### Connect to OData Services
 
 ```sql
--- Attach an OData service as a database
-ATTACH 'https://services.odata.org/TripPinRESTierService' AS trippin (TYPE odata);
+-- Attach any OData service (v2 or v4) as a database
+ATTACH 'https://services.odata.org/TripPinRESTierService' AS trippin (TYPE odata);  -- OData v4
+ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc' AS northwind (TYPE odata);  -- OData v2
 
--- Query OData entities as regular tables
+-- Query OData entities as regular tables (works for both versions)
 SELECT UserName, FirstName, LastName 
 FROM trippin.People 
 WHERE Gender = 'Female';
+
+SELECT CustomerID, CompanyName, ContactName
+FROM northwind.Customers
+WHERE Country = 'Germany';
 ```
 
 ### Direct OData Queries
 
 ```sql
--- Query entity sets directly
+-- Query entity sets directly (automatic version detection)
 SELECT UserName, AddressInfo[1].City."Name" AS City
 FROM odata_read('https://services.odata.org/TripPinRESTierService/People')
 WHERE UserName = 'angelhuffman';
 
--- Complex nested property access
+-- OData v2 service with automatic version handling
+SELECT OrderID, CustomerID, OrderDate
+FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+WHERE OrderDate >= '1996-01-01';
+
+-- Complex nested property access (works for both versions)
 SELECT UserName, 
        Emails[1] AS PrimaryEmail,
        AddressInfo[1].Address."Address" AS FullAddress
@@ -124,11 +144,14 @@ LIMIT 5;
 
 ### OData Features
 
-- **Automatic Pagination**: Handles large datasets seamlessly
+- **Universal Version Support**: Automatic OData v2 and v4 detection and handling
+- **Automatic Pagination**: Handles large datasets seamlessly with version-appropriate pagination
 - **Predicate Pushdown**: Filters are translated to OData $filter clauses
 - **Column Selection**: Optimizes queries with $select clauses
 - **Metadata Caching**: Improves performance with intelligent caching
 - **Type Mapping**: Automatic DuckDB type conversion from OData metadata
+- **Version-Specific Features**: Support for v2 `$inlinecount` and v4 `$count`
+- **Error Recovery**: Graceful fallback between v2 and v4 parsing
 
 ## 🔍 Tracing & Monitoring
 
@@ -226,11 +249,21 @@ SET erpl_telemetry_key = 'your-posthog-key';
 SELECT * FROM http_get('https://api.example.com/data');
 ```
 
+### OData Metadata Caching
+
+```sql
+-- Automatic metadata caching for OData services
+-- Version detection and schema information cached for performance
+ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc' AS northwind (TYPE odata);
+-- Metadata cached automatically - subsequent queries are faster
+```
+
 ### Retry Logic
 
 - **Automatic Retries**: Configurable retry attempts with exponential backoff
 - **Timeout Handling**: Configurable request timeouts
 - **Connection Pooling**: Efficient connection reuse
+- **Version Detection**: Robust OData version detection with fallback mechanisms
 
 ### Configuration
 
@@ -241,6 +274,9 @@ SET erpl_http_timeout = 30000;
 -- Configure retry behavior
 SET erpl_http_retries = 5;
 SET erpl_http_retry_wait_ms = 1000;
+
+-- OData-specific settings
+SET erpl_odata_metadata_cache_ttl = 3600;  -- Cache metadata for 1 hour
 ```
 
 ## 🔧 Advanced Usage
@@ -262,6 +298,11 @@ SELECT
         ELSE content::JSON->>'data'
     END as result
 FROM http_get('https://api.example.com/data');
+
+-- Handle OData version detection errors
+SELECT * FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+WHERE CustomerID = 'ALFKI';
+-- Automatic fallback to v4 if v2 detection fails
 ```
 
 ### Batch Operations
@@ -273,6 +314,57 @@ WITH urls AS (
 )
 SELECT url, status, content 
 FROM urls, http_get(urls.url);
+
+-- Process multiple OData services
+ATTACH 'https://services.odata.org/TripPinRESTierService' AS trippin (TYPE odata);
+ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc' AS northwind (TYPE odata);
+
+-- Cross-service analysis
+SELECT 'TripPin' as source, UserName, FirstName, LastName FROM trippin.People LIMIT 5
+UNION ALL
+SELECT 'Northwind' as source, CustomerID, CompanyName, ContactName FROM northwind.Customers LIMIT 5;
+```
+
+## 🏢 Enterprise Features
+
+### Production-Ready OData Support
+
+- **Universal Compatibility**: Works with any OData v2 or v4 service without configuration
+- **Enterprise Services**: Tested with SAP, Microsoft Dynamics, SharePoint, and other enterprise OData services
+- **Large Dataset Handling**: Efficiently processes datasets with thousands of entities
+- **Robust Error Recovery**: Graceful handling of network issues, malformed responses, and version conflicts
+- **Performance Optimization**: Intelligent caching and connection pooling for high-throughput scenarios
+
+### Enterprise Integration Examples
+
+```sql
+-- SAP Business Suite OData v2
+ATTACH 'https://your-sap-system.com/sap/opu/odata/sap/ZGW_SAMPLE_BASIC_SRV/' AS sap (TYPE odata);
+
+-- Microsoft Dynamics 365 OData v4
+ATTACH 'https://your-org.crm.dynamics.com/api/data/v9.2/' AS dynamics (TYPE odata);
+
+-- SharePoint Online OData v4
+ATTACH 'https://your-tenant.sharepoint.com/sites/yoursite/_api/web/' AS sharepoint (TYPE odata);
+
+-- Cross-platform data analysis
+SELECT 
+    'SAP' as source,
+    CompanyCode,
+    COUNT(*) as transaction_count
+FROM sap.BusinessPartnerSet
+WHERE Date >= '2024-01-01'
+GROUP BY CompanyCode
+
+UNION ALL
+
+SELECT 
+    'Dynamics' as source,
+    name as company,
+    COUNT(*) as record_count
+FROM dynamics.accounts
+WHERE statecode = 0
+GROUP BY name;
 ```
 
 ## 📚 Examples
@@ -291,10 +383,13 @@ FROM http_get('https://api.weatherapi.com/v1/current.json?key=YOUR_KEY&q=London'
 ### OData Business Intelligence
 
 ```sql
--- Connect to SAP OData service
+-- Connect to SAP OData v2 service (automatic version detection)
 ATTACH 'https://your-sap-system.com/sap/opu/odata/sap/ZGW_SAMPLE_BASIC_SRV/' AS sap (TYPE odata);
 
--- Analyze business data
+-- Connect to Microsoft Dynamics OData v4 service
+ATTACH 'https://your-dynamics-instance.crm.dynamics.com/api/data/v9.2/' AS dynamics (TYPE odata);
+
+-- Analyze business data from SAP (OData v2)
 SELECT 
     CompanyCode,
     COUNT(*) as transaction_count,
@@ -303,6 +398,16 @@ FROM sap.BusinessPartnerSet
 WHERE Date >= '2024-01-01'
 GROUP BY CompanyCode
 ORDER BY total_amount DESC;
+
+-- Analyze customer data from Dynamics (OData v4)
+SELECT 
+    name,
+    emailaddress1,
+    createdon,
+    statecode
+FROM dynamics.accounts
+WHERE statecode = 0  -- Active accounts
+ORDER BY createdon DESC;
 ```
 
 ### Web Scraping and Monitoring

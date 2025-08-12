@@ -228,25 +228,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
     return std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, url));
 }
 
-static unique_ptr<FunctionData> HttpBind(duckdb::ClientContext &context, 
-                                         TableFunctionBindInput &input, 
-                                         vector<LogicalType> &return_types, 
-                                         vector<string> &names,
-                                         HttpMethod method) 
-{
-    ERPL_TRACE_INFO("HTTP_BIND", "Binding HTTP " + method.ToString() + " function");
-    
-    try {
-        auto auth_params = AuthParamsFromInput(context, input);
-        auto request = RequestFromInput(*auth_params, input, method);
-        
-        ERPL_TRACE_DEBUG("HTTP_BIND", "Successfully bound HTTP " + method.ToString() + " function");
-        return make_uniq<HttpBindData>(request, auth_params);
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("HTTP_BIND", "Failed to bind HTTP " + method.ToString() + " function: " + e.what());
-        throw;
-    }
-}
+
 
 static unique_ptr<FunctionData> HttpGetBind(ClientContext &context, 
                                             TableFunctionBindInput &input, 

@@ -35,6 +35,19 @@ public:
     void AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters);
 
     void UpdateUrlFromPredicatePushdown();
+    
+    // OData v2-specific options
+    void EnableInlineCount(bool enabled = true) { 
+        if (predicate_pushdown_helper) {
+            predicate_pushdown_helper->SetInlineCount(enabled);
+        }
+    }
+    
+    void SetSkipToken(const std::string& token) {
+        if (predicate_pushdown_helper) {
+            predicate_pushdown_helper->SetSkipToken(token);
+        }
+    }
 
 private:
     bool first_fetch = true;

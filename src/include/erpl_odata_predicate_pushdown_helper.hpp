@@ -7,10 +7,12 @@
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "erpl_http_client.hpp"
+#include "erpl_odata_edm.hpp"
 #include <string>
 #include <vector>
 #include <optional>
 #include <sstream>
+#include <map>
 
 namespace erpl_web {
 
@@ -25,11 +27,25 @@ public:
 
     std::string SelectClause() const;
     std::string FilterClause() const;
+    
+    // OData v2-specific query options
+    void SetInlineCount(bool enabled) { inline_count_enabled = enabled; }
+    void SetSkipToken(const std::string& token) { skip_token = token; }
+    void SetODataVersion(ODataVersion version) { odata_version = version; }
+    
+    std::string InlineCountClause() const;
+    std::string SkipTokenClause() const;
+
 private:
     std::vector<std::string> all_column_names;
     std::vector<duckdb::column_t> column_selection;
     std::string select_clause;
     std::string filter_clause;
+    
+    // OData v2-specific options
+    bool inline_count_enabled = false;
+    std::optional<std::string> skip_token;
+    ODataVersion odata_version = ODataVersion::V4;
 
     std::string BuildSelectClause(const std::vector<duckdb::column_t> &column_ids) const;
     std::string BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) const;
