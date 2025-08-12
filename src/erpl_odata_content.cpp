@@ -15,6 +15,73 @@ bool ODataJsonContentMixin::IsJsonContentType(const std::string& content_type)
     return content_type.find("application/json") != std::string::npos;
 }
 
+ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& content)
+{
+    std::cout << "[DEBUG] [DETECT_VERSION] Starting OData version detection" << std::endl;
+    
+    // Parse the JSON content to detect OData version
+    auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(content.c_str(), content.size(), 0), yyjson_doc_free);
+    if (!doc) {
+        std::cout << "[DEBUG] [DETECT_VERSION] Failed to parse JSON, defaulting to V4" << std::endl;
+        // If we can't parse JSON, default to v4
+        return ODataVersion::V4;
+    }
+    
+    auto root = yyjson_doc_get_root(doc.get());
+    if (!root || !yyjson_is_obj(root)) {
+        std::cout << "[DEBUG] [DETECT_VERSION] Root is not an object, defaulting to V4" << std::endl;
+        return ODataVersion::V4;
+    }
+    
+    // Simple and reliable version detection based on top-level elements
+    // OData v4: {"value": [...]}
+    // OData v2: {"d": [...]}
+    
+    auto value_element = yyjson_obj_get(root, "value");
+    if (value_element && yyjson_is_arr(value_element)) {
+        std::cout << "[DEBUG] [DETECT_VERSION] Found 'value' array, detecting as V4" << std::endl;
+        return ODataVersion::V4;
+    }
+    
+    auto d_element = yyjson_obj_get(root, "d");
+    if (d_element && yyjson_is_arr(d_element)) {
+        std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' array, detecting as V2" << std::endl;
+        return ODataVersion::V2;
+    }
+    
+    // Check for other v4 indicators
+    auto context = yyjson_obj_get(root, "@odata.context");
+    if (context && yyjson_is_str(context)) {
+        std::cout << "[DEBUG] [DETECT_VERSION] Found '@odata.context', detecting as V4" << std::endl;
+        return ODataVersion::V4;
+    }
+    
+    // Check for other v2 indicators
+    if (d_element && yyjson_is_obj(d_element)) {
+        // Check if d contains results array (typical for v2 collections)
+        auto results = yyjson_obj_get(d_element, "results");
+        if (results && yyjson_is_arr(results)) {
+            std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' object with 'results' array, detecting as V2" << std::endl;
+            return ODataVersion::V2;
+        }
+        
+        // Check if d contains __metadata (typical for v2 single entities)
+        auto metadata = yyjson_obj_get(d_element, "__metadata");
+        if (metadata && yyjson_is_obj(metadata)) {
+            std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' object with '__metadata', detecting as V2" << std::endl;
+            return ODataVersion::V2;
+        }
+        
+        // If we have a 'd' wrapper but can't determine the structure, assume V2
+        std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' wrapper, assuming V2" << std::endl;
+        return ODataVersion::V2;
+    }
+    
+    std::cout << "[DEBUG] [DETECT_VERSION] No clear indicators found, defaulting to V4" << std::endl;
+    // Default to v4 if we can't determine
+    return ODataVersion::V4;
+}
+
 void ODataJsonContentMixin::ThrowTypeError(yyjson_val *json_value, const std::string &expected)
 {
     auto actual = yyjson_get_type_desc(json_value);
@@ -269,26 +336,13 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val *json_valu
 std::string ODataJsonContentMixin::MetadataContextUrl()
 {
     auto root = yyjson_doc_get_root(doc.get());
-    auto context = yyjson_obj_get(root, "@odata.context");
-    if (!context) {
-        throw std::runtime_error("No @odata.context found in OData response, cannot get EDMX metadata.");
-    }
-
-    auto context_url = yyjson_get_str(context);
-
-    return std::string(context_url);
+    return GetMetadataContextUrl(root);
 }
 
 std::optional<std::string> ODataJsonContentMixin::NextUrl()
 {
     auto root = yyjson_doc_get_root(doc.get());
-    auto next_link = yyjson_obj_get(root, "@odata.nextLink");
-    if (!next_link) {
-        return std::nullopt;
-    }
-
-    auto next_url = yyjson_get_str(next_link);
-    return std::string(next_url);
+    return GetNextUrl(root);
 }
 
 std::string ODataJsonContentMixin::GetStringProperty(yyjson_val *json_value, const std::string &property_name) const
@@ -411,11 +465,114 @@ std::vector<std::string> ODataJsonContentMixin::ParseJsonPath(const std::string&
     return parts;
 }
 
+// Version-aware JSON parsing methods
+yyjson_val* ODataJsonContentMixin::GetValueArray(yyjson_val* root) {
+    std::cout << "[DEBUG] [GET_VALUE_ARRAY] OData version: " << (odata_version == ODataVersion::V2 ? "V2" : "V4") << std::endl;
+    
+    if (odata_version == ODataVersion::V2) {
+        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Processing OData v2 structure" << std::endl;
+        
+        // OData v2: {"d": [...]} or {"d": {"results": [...]}}
+        auto d_wrapper = yyjson_obj_get(root, "d");
+        if (!d_wrapper) {
+            std::cout << "[DEBUG] [GET_VALUE_ARRAY] No 'd' wrapper found in OData v2 response" << std::endl;
+            throw std::runtime_error("No 'd' wrapper found in OData v2 response.");
+        }
+        
+        // Check if d is directly an array (common case)
+        if (yyjson_is_arr(d_wrapper)) {
+            std::cout << "[DEBUG] [GET_VALUE_ARRAY] Found 'd' as direct array with " << yyjson_arr_size(d_wrapper) << " items" << std::endl;
+            return d_wrapper;
+        }
+        
+        // Check if d contains a "results" array (traditional v2 format)
+        if (yyjson_is_obj(d_wrapper)) {
+            auto results = yyjson_obj_get(d_wrapper, "results");
+            if (results && yyjson_is_arr(results)) {
+                std::cout << "[DEBUG] [GET_VALUE_ARRAY] Found 'd' object with 'results' array containing " << yyjson_arr_size(results) << " items" << std::endl;
+                return results;
+            }
+        }
+        
+        std::cout << "[DEBUG] [GET_VALUE_ARRAY] 'd' element is neither an array nor contains 'results' array" << std::endl;
+        throw std::runtime_error("'d' element in OData v2 response is not an array or doesn't contain a 'results' array.");
+    } else {
+        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Processing OData v4 structure" << std::endl;
+        // OData v4: {"value": [...]}
+        auto value_array = yyjson_obj_get(root, "value");
+        if (!value_array) {
+            std::cout << "[DEBUG] [GET_VALUE_ARRAY] No 'value' element found in OData v4 response" << std::endl;
+            throw std::runtime_error("No 'value' element found in OData v4 response.");
+        }
+        
+        if (!yyjson_is_arr(value_array)) {
+            std::cout << "[DEBUG] [GET_VALUE_ARRAY] 'value' element in OData v4 response is not an array" << std::endl;
+            throw std::runtime_error("'value' element in OData v4 response is not an array.");
+        }
+        
+        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Successfully found v4 value array with " << yyjson_arr_size(value_array) << " items" << std::endl;
+        return value_array;
+    }
+}
+
+std::string ODataJsonContentMixin::GetMetadataContextUrl(yyjson_val* root) {
+    if (odata_version == ODataVersion::V2) {
+        // OData v2: Check for context in the root or d wrapper
+        auto context = yyjson_obj_get(root, "@odata.context");
+        if (!context) {
+            auto d_wrapper = yyjson_obj_get(root, "d");
+            if (d_wrapper) {
+                context = yyjson_obj_get(d_wrapper, "@odata.context");
+            }
+        }
+        
+        if (!context) {
+            throw std::runtime_error("No @odata.context found in OData v2 response, cannot get EDMX metadata.");
+        }
+        
+        return std::string(yyjson_get_str(context));
+    } else {
+        // OData v4: {"@odata.context": "..."}
+        auto context = yyjson_obj_get(root, "@odata.context");
+        if (!context) {
+            throw std::runtime_error("No @odata.context found in OData v4 response, cannot get EDMX metadata.");
+        }
+        
+        return std::string(yyjson_get_str(context));
+    }
+}
+
+std::optional<std::string> ODataJsonContentMixin::GetNextUrl(yyjson_val* root) {
+    if (odata_version == ODataVersion::V2) {
+        // OData v2: Check for __next in the d wrapper
+        auto d_wrapper = yyjson_obj_get(root, "d");
+        if (d_wrapper) {
+            auto next_link = yyjson_obj_get(d_wrapper, "__next");
+            if (next_link) {
+                return std::string(yyjson_get_str(next_link));
+            }
+        }
+        return std::nullopt;
+    } else {
+        // OData v4: {"@odata.nextLink": "..."}
+        auto next_link = yyjson_obj_get(root, "@odata.nextLink");
+        if (!next_link) {
+            return std::nullopt;
+        }
+        
+        return std::string(yyjson_get_str(next_link));
+    }
+}
+
 // ----------------------------------------------------------------------
 
 ODataEntitySetJsonContent::ODataEntitySetJsonContent(const std::string& content)
     : ODataJsonContentMixin(content)
-{ }
+{ 
+    // Auto-detect and set OData version
+    auto detected_version = DetectODataVersion(content);
+    SetODataVersion(detected_version);
+}
 
 std::string ODataEntitySetJsonContent::MetadataContextUrl()
 {
@@ -437,13 +594,9 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     }
 
     auto root = yyjson_doc_get_root(doc.get());
-    auto json_values = yyjson_obj_get(root, "value");
+    auto json_values = GetValueArray(root);
     if (!json_values) {
-        throw std::runtime_error("No value-element found in OData response, cannot get rows.");
-    }
-
-    if (!yyjson_is_arr(json_values)) {
-        throw std::runtime_error("value-element in OData response is not an array, cannot get rows.");
+        throw std::runtime_error("No value array found in OData response, cannot get rows.");
     }
 
     std::cout << "[DEBUG] [ODATA_TO_ROWS] Found " << yyjson_arr_size(json_values) << " rows in JSON response" << std::endl;
@@ -523,7 +676,11 @@ void ODataEntitySetJsonContent::PrettyPrint()
 
 ODataServiceJsonContent::ODataServiceJsonContent(const std::string& content)
     : ODataJsonContentMixin(content)
-{ }
+{ 
+    // Auto-detect and set OData version
+    auto detected_version = DetectODataVersion(content);
+    SetODataVersion(detected_version);
+}
 
 std::string ODataServiceJsonContent::MetadataContextUrl()
 {
@@ -538,13 +695,9 @@ void ODataServiceJsonContent::PrettyPrint()
 std::vector<ODataEntitySetReference> ODataServiceJsonContent::EntitySets()
 {
     auto root = yyjson_doc_get_root(doc.get());
-    auto json_values = yyjson_obj_get(root, "value");
+    auto json_values = GetValueArray(root);
     if (!json_values) {
-        throw std::runtime_error("No value-element found in OData response, cannot get entity sets for service.");
-    }
-
-    if (!yyjson_is_arr(json_values)) {
-        throw std::runtime_error("value-element in OData response is not an array, cannot get entity sets for service.");
+        throw std::runtime_error("No value array found in OData response, cannot get entity sets for service.");
     }
 
     auto ret = std::vector<ODataEntitySetReference>();

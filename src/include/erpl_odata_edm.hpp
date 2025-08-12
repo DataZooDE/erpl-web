@@ -19,6 +19,13 @@
 namespace erpl_web 
 {
 
+// OData Version enum ---------------------------------------------------
+enum class ODataVersion {
+    UNKNOWN,
+    V2,
+    V4
+};
+
 // PrimitiveType class ---------------------------------------------------
 class PrimitiveType 
 {
@@ -41,6 +48,7 @@ public:
             "Edm.Boolean",
             "Edm.Byte",
             "Edm.Date",
+            "Edm.DateTime",
             "Edm.DateTimeOffset",
             "Edm.Decimal",
             "Edm.Double",
@@ -92,6 +100,7 @@ const PrimitiveType Binary("Edm.Binary");
 const PrimitiveType Boolean("Edm.Boolean");
 const PrimitiveType Byte("Edm.Byte");
 const PrimitiveType Date("Edm.Date");
+const PrimitiveType DateTime("Edm.DateTime");
 const PrimitiveType DateTimeOffset("Edm.DateTimeOffset");
 const PrimitiveType Decimal("Edm.Decimal");
 const PrimitiveType Double("Edm.Double");
@@ -250,28 +259,48 @@ public:
 
             // Parse MaxLength attribute
             const char* max_length_attr = element.Attribute("MaxLength");
-            if (max_length_attr) {
-                parameter.max_length = std::stoi(max_length_attr);
+            if (max_length_attr && strlen(max_length_attr) > 0) {
+                try {
+                    parameter.max_length = std::stoi(max_length_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    parameter.max_length = -1;
+                }
             }
 
             // Parse Precision attribute
             const char* precision_attr = element.Attribute("Precision");
-            if (precision_attr) {
-                parameter.precision = std::stoi(precision_attr);
+            if (precision_attr && strlen(precision_attr) > 0) {
+                try {
+                    parameter.precision = std::stoi(precision_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    parameter.precision = -1;
+                }
             }
 
             // Parse Scale attribute
             const char* scale_attr = element.Attribute("Scale");
             if (scale_attr && strcasecmp(scale_attr, "variable") == 0) {
                 parameter.scale = -1;
-            } else if (scale_attr) {
-                parameter.scale = std::stoi(scale_attr);
+            } else if (scale_attr && strlen(scale_attr) > 0) {
+                try {
+                    parameter.scale = std::stoi(scale_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    parameter.scale = -1;
+                }
             }
 
             // Parse SRID attribute
             const char* SRID_attr = element.Attribute("SRID");
-            if (SRID_attr) {
-                parameter.SRID = std::stoi(SRID_attr);
+            if (SRID_attr && strlen(SRID_attr) > 0) {
+                try {
+                    parameter.SRID = std::stoi(SRID_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    parameter.SRID = 0;
+                }
             }
 
             // Parse Unicode attribute
@@ -393,8 +422,13 @@ public:
 
             // Parse Value attribute
             const char* value_attr = element.Attribute("Value");
-            if (value_attr) {
-                member.value = std::stoi(value_attr);
+            if (value_attr && strlen(value_attr) > 0) {
+                try {
+                    member.value = std::stoi(value_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    member.value = 0;
+                }
             }
 
             // Parse Annotation elements
@@ -460,8 +494,13 @@ public:
                     member.name = name_attr;
                 }
                 const char* value_attr = member_el->Attribute("Value");
-                if (value_attr) {
-                    member.value = std::stoi(value_attr);
+                if (value_attr && strlen(value_attr) > 0) {
+                    try {
+                        member.value = std::stoi(value_attr);
+                    } catch (const std::exception&) {
+                        // If conversion fails, set to default value
+                        member.value = 0;
+                    }
                 }
                 enumType.members.push_back(member);
             }
@@ -543,10 +582,26 @@ public:
                 nav_prop.name = name_attr;
             }
 
-            // Parse Type attribute
+            // Parse Type attribute (OData v4)
             const char* type_attr = element.Attribute("Type");
             if (type_attr) {
                 nav_prop.type = type_attr;
+            }
+
+            // Parse OData v2 specific attributes
+            const char* relationship_attr = element.Attribute("Relationship");
+            if (relationship_attr) {
+                nav_prop.relationship = relationship_attr;
+            }
+
+            const char* from_role_attr = element.Attribute("FromRole");
+            if (from_role_attr) {
+                nav_prop.from_role = from_role_attr;
+            }
+
+            const char* to_role_attr = element.Attribute("ToRole");
+            if (to_role_attr) {
+                nav_prop.to_role = to_role_attr;
             }
 
             // Parse Nullable attribute
@@ -599,9 +654,146 @@ public:
     bool nullable = true;
     std::string partner;
     bool contains_target = false;
+    
+    // OData v2 specific attributes
+    std::string relationship;
+    std::string from_role;
+    std::string to_role;
+    
     std::vector<ReferentialConstraint> referential_constraints;
     std::vector<Annotation> annotations;
 
+};
+
+// AssociationEnd class --------------------------------------------------
+class AssociationEnd : public EdmItemBase<AssociationEnd>
+{
+public:
+    std::string type;
+    std::string multiplicity;
+    std::string role;
+};
+
+// AssociationSetEnd class -----------------------------------------------
+class AssociationSetEnd : public EdmItemBase<AssociationSetEnd>
+{
+public:
+    std::string entity_set;
+    std::string role;
+};
+
+// Association class ------------------------------------------------------
+class Association : public EdmItemBase<Association> 
+{
+public:
+    Association() {}
+
+    static Association FromXml(const tinyxml2::XMLElement& element) {
+        try {
+            Association association;
+
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                association.name = name_attr;
+            }
+
+            // Parse End elements
+            for (const tinyxml2::XMLElement* end_el = element.FirstChildElement("End");
+                end_el != nullptr;
+                end_el = end_el->NextSiblingElement("End")) 
+            {
+                AssociationEnd end;
+                const char* type_attr = end_el->Attribute("Type");
+                if (type_attr) {
+                    end.type = type_attr;
+                }
+                const char* multiplicity_attr = end_el->Attribute("Multiplicity");
+                if (multiplicity_attr) {
+                    end.multiplicity = multiplicity_attr;
+                }
+                const char* role_attr = end_el->Attribute("Role");
+                if (role_attr) {
+                    end.role = role_attr;
+                }
+                association.ends.push_back(end);
+            }
+
+            // Parse ReferentialConstraint elements
+            for (const tinyxml2::XMLElement* constraint_el = element.FirstChildElement("ReferentialConstraint");
+                constraint_el != nullptr;
+                constraint_el = constraint_el->NextSiblingElement("ReferentialConstraint")) 
+            {
+                association.referential_constraints.push_back(ReferentialConstraint::FromXml(*constraint_el));
+            }
+
+            return association;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing Association: " << e.what() << std::endl;
+            std::cerr << "Association XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
+    }
+
+public:
+    std::string name;
+    std::vector<AssociationEnd> ends;
+    std::vector<ReferentialConstraint> referential_constraints;
+};
+
+// AssociationSet class --------------------------------------------------
+class AssociationSet : public EdmItemBase<AssociationSet> 
+{
+public:
+    AssociationSet() {}
+
+    static AssociationSet FromXml(const tinyxml2::XMLElement& element) {
+        try {
+            AssociationSet association_set;
+
+            // Parse Name attribute
+            const char* name_attr = element.Attribute("Name");
+            if (name_attr) {
+                association_set.name = name_attr;
+            }
+
+            // Parse Association attribute
+            const char* association_attr = element.Attribute("Association");
+            if (association_attr) {
+                association_set.association = association_attr;
+            }
+
+            // Parse End elements (OData v2 uses default namespace)
+            for (const tinyxml2::XMLElement* end_el = element.FirstChildElement();
+                end_el != nullptr;
+                end_el = end_el->NextSiblingElement()) 
+            {
+                if (std::string(end_el->Name()) == "End") {
+                    AssociationSetEnd end;
+                    const char* entity_set_attr = end_el->Attribute("EntitySet");
+                    if (entity_set_attr) {
+                        end.entity_set = entity_set_attr;
+                    }
+                    const char* role_attr = end_el->Attribute("Role");
+                    if (role_attr) {
+                        end.role = role_attr;
+                    }
+                    association_set.ends.push_back(end);
+                }
+            }
+
+            return association_set;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "Error parsing AssociationSet: " << e.what() << std::endl;
+            std::cerr << "AssociationSet XML: " << std::endl << element.Value() << std::endl;
+            throw e;
+        }
+    }
+
+public:
+    std::string name;
+    std::string association;
+    std::vector<AssociationSetEnd> ends;
 };
 
 // Property class ---------------------------------------------------------
@@ -640,38 +832,59 @@ public:
 
             // Parse MaxLength attribute
             const char* max_length_attr = element.Attribute("MaxLength");
-            if (max_length_attr) {
-                if (std::string(max_length_attr) == "max") {
-                    property.max_length = -1;
-                } else {
+            if (max_length_attr && strlen(max_length_attr) > 0) {
+                try {
                     property.max_length = std::stoi(max_length_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    property.max_length = -1;
                 }
             }
 
             // Parse FixedLength attribute
             const char* fixed_length_attr = element.Attribute("FixedLength");
-            if (fixed_length_attr) {
-                property.fixed_length = std::stoi(fixed_length_attr);
+            if (fixed_length_attr && strlen(fixed_length_attr) > 0) {
+                try {
+                    property.fixed_length = std::stoi(fixed_length_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    property.fixed_length = -1;
+                }
             }
 
             // Parse Precision attribute
             const char* precision_attr = element.Attribute("Precision");
-            if (precision_attr) {
-                property.precision = std::stoi(precision_attr);
+            if (precision_attr && strlen(precision_attr) > 0) {
+                try {
+                    property.precision = std::stoi(precision_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    property.precision = -1;
+                }
             }
 
             // Parse Scale attribute
             const char* scale_attr = element.Attribute("Scale");
             if (scale_attr && strcasecmp(scale_attr, "variable") == 0) {
                 property.scale = -1;
-            } else if (scale_attr) {
-                property.scale = std::stoi(scale_attr);
+            } else if (scale_attr && strlen(scale_attr) > 0) {
+                try {
+                    property.scale = std::stoi(scale_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    property.scale = -1;
+                }
             }
 
             // Parse SRID attribute
             const char* SRID_attr = element.Attribute("SRID");
-            if (SRID_attr) {
-                property.SRID = std::stoi(SRID_attr);
+            if (SRID_attr && strlen(SRID_attr) > 0) {
+                try {
+                    property.SRID = std::stoi(SRID_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    property.SRID = 0;
+                }
             }
 
             // Parse Unicode attribute
@@ -994,8 +1207,13 @@ public:
 
             // Parse MaxLength attribute
             const char* maxLength_attr = element.Attribute("MaxLength");
-            if (maxLength_attr) {
-                type_definition.maxLength = std::stoi(maxLength_attr);
+            if (maxLength_attr && strlen(maxLength_attr) > 0) {
+                try {
+                    type_definition.maxLength = std::stoi(maxLength_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    type_definition.maxLength = -1;
+                }
             }
 
             // Parse Unicode attribute
@@ -1006,20 +1224,35 @@ public:
 
             // Parse Precision attribute
             const char* precision_attr = element.Attribute("Precision");
-            if (precision_attr) {
-                type_definition.precision = std::stoi(precision_attr);
+            if (precision_attr && strlen(precision_attr) > 0) {
+                try {
+                    type_definition.precision = std::stoi(precision_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    type_definition.precision = -1;
+                }
             }
 
             // Parse Scale attribute
             const char* scale_attr = element.Attribute("Scale");
-            if (scale_attr) {
-                type_definition.scale = std::stoi(scale_attr);
+            if (scale_attr && strlen(scale_attr) > 0) {
+                try {
+                    type_definition.scale = std::stoi(scale_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    type_definition.scale = -1;
+                }
             }
 
             // Parse SRID attribute
             const char* SRID_attr = element.Attribute("SRID");
-            if (SRID_attr) {
-                type_definition.SRID = std::stoi(SRID_attr);
+            if (SRID_attr && strlen(SRID_attr) > 0) {
+                try {
+                    type_definition.SRID = std::stoi(SRID_attr);
+                } catch (const std::exception&) {
+                    // If conversion fails, set to default value
+                    type_definition.SRID = 0;
+                }
             }
 
             // Parse Annotation elements
@@ -1229,6 +1462,24 @@ public:
                 entity_container.entity_sets.push_back(entitySet);
             }
 
+            // Parse AssociationSet elements
+            for (const tinyxml2::XMLElement* associationSet_el = element.FirstChildElement("AssociationSet");
+                associationSet_el != nullptr;
+                associationSet_el = associationSet_el->NextSiblingElement("AssociationSet")) 
+            {
+                entity_container.association_sets.push_back(AssociationSet::FromXml(*associationSet_el));
+            }
+            
+            // Also try to find AssociationSet elements in the default namespace
+            for (const tinyxml2::XMLElement* child_el = element.FirstChildElement();
+                child_el != nullptr;
+                child_el = child_el->NextSiblingElement()) 
+            {
+                if (std::string(child_el->Name()) == "AssociationSet") {
+                    entity_container.association_sets.push_back(AssociationSet::FromXml(*child_el));
+                }
+            }
+
             // Parse ActionImport elements
             for (const tinyxml2::XMLElement* actionImport_el = element.FirstChildElement("ActionImport");
                 actionImport_el != nullptr;
@@ -1274,6 +1525,7 @@ public:
 public:
     std::string name;
     std::vector<EntitySet> entity_sets;
+    std::vector<AssociationSet> association_sets;
     std::vector<ActionImport> action_imports;
     std::vector<FunctionImport> function_imports;
 };
@@ -1348,6 +1600,22 @@ public:
                 schema.entity_types.push_back(entity_type);
             }
 
+            // Parse Association elements (OData v2)
+            for (const tinyxml2::XMLElement* association_el = element.FirstChildElement("Association");
+                association_el != nullptr;
+                association_el = association_el->NextSiblingElement("Association")) 
+            {
+                schema.associations.push_back(Association::FromXml(*association_el));
+            }
+
+            // Parse AssociationSet elements (OData v2)
+            for (const tinyxml2::XMLElement* associationSet_el = element.FirstChildElement("AssociationSet");
+                associationSet_el != nullptr;
+                associationSet_el = associationSet_el->NextSiblingElement("AssociationSet")) 
+            {
+                schema.association_sets.push_back(AssociationSet::FromXml(*associationSet_el));
+            }
+
             /*
             // Parse Action elements
             for (const tinyxml2::XMLElement* action_el = element.FirstChildElement("Action");
@@ -1381,6 +1649,9 @@ public:
             {
                 schema.annotations.push_back(Annotations::FromXml(*annotations_el));
             }
+
+            // Resolve OData v2 navigation property types from associations
+            schema.ResolveV2NavigationPropertyTypes();
 
             return schema;
         } catch (const std::runtime_error& e) {
@@ -1420,6 +1691,37 @@ public:
         return primitive_type;
     }
 
+    // Resolve OData v2 navigation property types from associations
+    void ResolveV2NavigationPropertyTypes() {
+        for (auto& entity_type : entity_types) {
+            for (auto& nav_prop : entity_type.navigation_properties) {
+                if (!nav_prop.relationship.empty() && nav_prop.type.empty()) {
+                    // Find the association referenced by this navigation property
+                    for (const auto& association : associations) {
+                        if (association.name == nav_prop.relationship.substr(nav_prop.relationship.find_last_of('.') + 1)) {
+                            // Find the end that matches the ToRole
+                            for (const auto& end : association.ends) {
+                                if (end.role == nav_prop.to_role) {
+                                    // Extract the entity type name from the full type path
+                                    std::string entity_type_name = end.type.substr(end.type.find_last_of('.') + 1);
+                                    
+                                    // Set the type based on multiplicity
+                                    if (end.multiplicity == "*") {
+                                        nav_prop.type = "Collection(" + entity_type_name + ")";
+                                    } else {
+                                        nav_prop.type = entity_type_name;
+                                    }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 public:
     std::string ns;
     std::string alias;
@@ -1427,8 +1729,10 @@ public:
     std::vector<TypeDefinition> type_definitions;
     std::vector<ComplexType> complex_types;
     std::vector<EntityType> entity_types;
-    //std::vector<Action> actions;
+    std::vector<Association> associations;
+    std::vector<AssociationSet> association_sets;
     std::vector<Function> functions;
+    //std::vector<Action> actions;
     std::vector<EntityContainer> entity_containers;
     std::vector<Annotations> annotations;
 
@@ -1560,35 +1864,42 @@ public:
     }
 
     static Edmx FromXml(const tinyxml2::XMLDocument& doc) {
-        Edmx edmx;
-
         const tinyxml2::XMLElement* edmx_el = doc.RootElement();
         if (edmx_el == nullptr) {
             throw std::runtime_error("Missing Edmx root element");
         }
 
-        // Parse Edmx version
+        // Auto-detect OData version
         const char* version_attr = edmx_el->Attribute("Version");
         if (version_attr) {
-            edmx.version = version_attr;
+            std::string version_str(version_attr);
+            if (version_str == "1.0" || version_str == "2.0") {
+                return FromXmlV2(doc);
+            } else if (version_str == "4.0") {
+                return FromXmlV4(doc);
+            }
         }
 
-        // Parse DataServices element
-        const tinyxml2::XMLElement* data_svc_el = edmx_el->FirstChildElement("edmx:DataServices");
-        if (data_svc_el) {
-            edmx.data_services = DataServices::FromXml(*data_svc_el);
+        // Fallback: detect from namespace
+        const char* xmlns_attr = edmx_el->Attribute("xmlns");
+        if (xmlns_attr) {
+            std::string xmlns(xmlns_attr);
+            if (xmlns.find("schemas.microsoft.com/ado") != std::string::npos) {
+                return FromXmlV2(doc);
+            } else if (xmlns.find("docs.oasis-open.org/odata") != std::string::npos) {
+                return FromXmlV4(doc);
+            }
         }
 
-        // Parse Reference elements
-        for (const tinyxml2::XMLElement* ref_el = edmx_el->FirstChildElement("Reference");
-            ref_el != nullptr;
-            ref_el = ref_el->NextSiblingElement("Reference")) 
-        {
-            edmx.references.push_back(Reference::FromXml(*ref_el));
-        }
-
-        return edmx;
+        // Default to v4 for backward compatibility
+        return FromXmlV4(doc);
     }
+    
+    // Version-specific parsing methods
+    static Edmx FromXmlV2(const std::string& xml);
+    static Edmx FromXmlV4(const std::string& xml);
+    static Edmx FromXmlV2(const tinyxml2::XMLDocument& doc);
+    static Edmx FromXmlV4(const tinyxml2::XMLDocument& doc);
 
     bool IsFullUrl(const std::string& type_name_or_url) const 
     {
@@ -1689,7 +2000,16 @@ public:
     DataServices data_services;
     std::vector<Reference> references;
 
-   
+    // OData version support
+    ODataVersion GetVersion() const { return version_enum; }
+    void SetVersion(ODataVersion version) { version_enum = version; }
+
+private:
+    ODataVersion version_enum = ODataVersion::V4;
+    
+    // Helper methods for v2 parsing
+    static void ParseV2Associations(const tinyxml2::XMLElement& element, Schema& schema);
+    static void ParseV2NavigationProperties(const tinyxml2::XMLElement& element, EntityType& entity_type);
 };
 
 // TypeVariant Handling ----------------------------------------------------

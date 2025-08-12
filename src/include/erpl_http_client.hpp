@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <optional>
 #include "duckdb.hpp"
+#include "erpl_odata_edm.hpp"
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.hpp"
 
@@ -161,6 +162,11 @@ public:
     void HeadersFromMapArg(const duckdb::Value &header_map);
 
     void AuthHeadersFromParams(const HttpAuthParams &auth_params);
+    
+    // OData version support
+    void SetODataVersion(ODataVersion version);
+    ODataVersion GetODataVersion() const;
+    void AddODataVersionHeaders();
 
     std::string ToCacheKey() const;
 
@@ -171,6 +177,9 @@ public:
     HeaderMap headers;
     std::string content_type;
     std::string content;
+    
+private:
+    ODataVersion odata_version = ODataVersion::V4; // Default to v4 for backward compatibility
 
 private:
     duckdb_httplib_openssl::Headers HttplibHeaders();

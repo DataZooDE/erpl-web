@@ -22,29 +22,71 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     HttpUrl result = base_url;
     std::string existing_query = result.Query();
     
-    // Build the new query string
-    std::string new_query = existing_query;
+    // Parse existing query parameters to avoid duplicates
+    std::map<std::string, std::string> existing_params;
+    if (!existing_query.empty() && existing_query != "?") {
+        std::string query_str = existing_query;
+        if (query_str[0] == '?') {
+            query_str = query_str.substr(1);
+        }
+        
+        std::istringstream iss(query_str);
+        std::string param;
+        while (std::getline(iss, param, '&')) {
+            size_t pos = param.find('=');
+            if (pos != std::string::npos) {
+                std::string key = param.substr(0, pos);
+                std::string value = param.substr(pos + 1);
+                existing_params[key] = value;
+            }
+        }
+    }
     
-    if (!select_clause.empty() || !filter_clause.empty()) {
-        // If there are existing query parameters, add & separator
-        // Note: existing_query already contains the ? if it exists
-        if (!new_query.empty() && new_query != "?") {
-            new_query += "&";
-        } else if (new_query.empty()) {
-            // No existing query parameters, add ? to start
+    // Build the new query string
+    std::string new_query = "";
+    
+    // Collect all query clauses
+    std::vector<std::string> clauses;
+    
+    // Handle $select - only add if not already present in URL
+    if (!select_clause.empty() && existing_params.find("$select") == existing_params.end()) {
+        clauses.push_back(select_clause);
+    }
+    
+    if (!filter_clause.empty()) {
+        clauses.push_back(filter_clause);
+    }
+    
+    // Add OData v2-specific options
+    std::string inline_count = InlineCountClause();
+    if (!inline_count.empty()) {
+        clauses.push_back(inline_count);
+    }
+    
+    std::string skip_token = SkipTokenClause();
+    if (!skip_token.empty()) {
+        clauses.push_back(skip_token);
+    }
+    
+    // Build the final query string
+    if (!clauses.empty()) {
+        // Start with existing query parameters
+        if (!existing_query.empty() && existing_query != "?") {
+            new_query = existing_query;
+        } else {
             new_query = "?";
         }
-    }
-
-    if (!select_clause.empty()) {
-        new_query += select_clause;
-    }
-
-    if (!filter_clause.empty()) {
-        if (!select_clause.empty()) {
-            new_query += "&";
+        
+        // Add new clauses
+        for (size_t i = 0; i < clauses.size(); ++i) {
+            if (new_query != "?" && !new_query.empty()) {
+                new_query += "&";
+            }
+            new_query += clauses[i];
         }
-        new_query += filter_clause;
+    } else {
+        // No new clauses, keep existing query
+        new_query = existing_query;
     }
 
     result.Query(new_query);
@@ -158,6 +200,34 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
     }
     
     return filter_clause.str();
+}
+
+std::string ODataPredicatePushdownHelper::InlineCountClause() const {
+    if (!inline_count_enabled) {
+        return "";
+    }
+    
+    if (odata_version == ODataVersion::V2) {
+        // OData v2: $inlinecount=allpages
+        return "$inlinecount=allpages";
+    } else {
+        // OData v4: $count=true
+        return "$count=true";
+    }
+}
+
+std::string ODataPredicatePushdownHelper::SkipTokenClause() const {
+    if (!skip_token.has_value()) {
+        return "";
+    }
+    
+    if (odata_version == ODataVersion::V2) {
+        // OData v2: $skiptoken=value
+        return "$skiptoken=" + skip_token.value();
+    } else {
+        // OData v4: $skip=value (or use @odata.nextLink)
+        return "$skip=" + skip_token.value();
+    }
 }
 
 std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const {

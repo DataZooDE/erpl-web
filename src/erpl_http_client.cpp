@@ -444,6 +444,31 @@ void HttpRequest::AuthHeadersFromParams(const HttpAuthParams &auth_params)
     }
 }
 
+void HttpRequest::SetODataVersion(ODataVersion version)
+{
+    odata_version = version;
+}
+
+ODataVersion HttpRequest::GetODataVersion() const
+{
+    return odata_version;
+}
+
+void HttpRequest::AddODataVersionHeaders()
+{
+    if (odata_version == ODataVersion::V2) {
+        // OData v2 headers
+        headers.emplace("DataServiceVersion", "2.0");
+        headers.emplace("MaxDataServiceVersion", "2.0");
+        headers.emplace("Accept", "application/json;odata=verbose");
+    } else {
+        // OData v4 headers
+        headers.emplace("OData-Version", "4.0");
+        headers.emplace("OData-MaxVersion", "4.0");
+        headers.emplace("Accept", "application/json;odata.metadata=minimal");
+    }
+}
+
 std::string HttpRequest::ToCacheKey() const
 {
     auto content_hasher = std::hash<std::string>();

@@ -23,6 +23,9 @@ ODataReadBindData::ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata
     : odata_client(odata_client)
 { 
     predicate_pushdown_helper = std::make_shared<ODataPredicatePushdownHelper>(odata_client->GetResultNames());
+    
+    // Set the OData version in the predicate pushdown helper for version-specific query options
+    predicate_pushdown_helper->SetODataVersion(odata_client->GetODataVersion());
 }
 
 std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns)
