@@ -1,0 +1,29 @@
+# name: test/sql/erpl_odata_v2.test
+# description: Test OData v2 functionality with Northwind service
+# group: [erpl_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# Enable tracing to debug the issue
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+statement ok
+SET erpl_trace_level = 'TRACE';
+
+statement ok
+SET erpl_trace_output = 'console';
+
+# Test 1: Basic OData v2 service connection
+# Connect to the OData v2 Northwind service and get a simple result
+query I
+SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=1&$format=json') LIMIT 1;
+----
+1

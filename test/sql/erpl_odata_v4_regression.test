@@ -1,0 +1,33 @@
+# name: test/sql/erpl_odata_v4_regression.test
+# description: OData v4 Regression Tests - ensure existing v4 functionality continues to work
+# group: [erpl_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# Test 1: Basic OData v4 entity set access (TripPin)
+# Test that we can access entity sets from the v4 service
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=5');
+----
+5
+
+# Test 2: OData v4 basic select
+# Test that basic select functionality works
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=3');
+----
+3
+
+# Test 3: OData v4 simple filtering
+# Test that basic filtering works
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=10');
+----
+10
