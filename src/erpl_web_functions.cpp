@@ -8,7 +8,7 @@ namespace erpl_web {
 
 
 HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params) 
-    : TableFunctionData(), request(request), auth_params(auth_params), done(std::make_shared<bool>(false))
+    : TableFunctionData(), request(std::move(request)), auth_params(std::move(auth_params)), done(std::make_shared<bool>(false))
 { }
 
 std::vector<std::string> HttpBindData::GetResultNames() 
@@ -21,7 +21,8 @@ std::vector<LogicalType> HttpBindData::GetResultTypes()
     std::vector<LogicalType> ret;
     
     auto child_types = StructType::GetChildTypes(HttpResponse::DuckDbResponseType());
-    for (auto &type : child_types) {
+    ret.reserve(child_types.size()); // Pre-allocate for efficiency
+    for (const auto &type : child_types) {
         ret.push_back(type.second);
     }
 
@@ -67,6 +68,10 @@ static void PopulateHeadersFromHeadersParam(duckdb::named_parameter_map_t &named
         // Map case: MAP{'key': 'value', 'key2': 'value2'}
         auto map_entries = MapValue::GetChildren(headers_value);
         ERPL_TRACE_DEBUG("HTTP_HEADERS", "Found " + std::to_string(map_entries.size()) + " map entries");
+        
+        // Pre-allocate for efficiency
+        header_keys.reserve(map_entries.size());
+        header_vals.reserve(map_entries.size());
         
         // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
         for (size_t i = 0; i < map_entries.size(); i++) {

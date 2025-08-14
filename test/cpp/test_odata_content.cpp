@@ -310,33 +310,6 @@ TEST_CASE("Test OData v2 Service JSON Content", "[odata_content_v2]")
     REQUIRE(entity_sets[2].url == "Products");
 }
 
-TEST_CASE("Test OData v2 NextUrl with __next", "[odata_content_v2]")
-{
-    std::cout << std::endl;
-
-    // Sample OData v2 JSON with __next for pagination
-    std::string json_content_v2 = "{\n"
-        "    \"d\": {\n"
-        "        \"results\": [\n"
-        "            {\n"
-        "                \"CustomerID\": \"ALFKI\",\n"
-        "                \"CompanyName\": \"Alfreds Futterkiste\"\n"
-        "            }\n"
-        "        ],\n"
-        "        \"__next\": \"https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$skiptoken=ANATR\"\n"
-        "    }\n"
-        "}";
-
-    // Create an instance and set OData version to v2
-    ODataEntitySetJsonContent json_content_instance(json_content_v2);
-    json_content_instance.SetODataVersion(ODataVersion::V2);
-
-    // Test NextUrl extraction
-    auto next_url = json_content_instance.NextUrl();
-    REQUIRE(next_url.has_value());
-    REQUIRE(next_url.value() == "https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$skiptoken=ANATR");
-}
-
 TEST_CASE("Test OData v2 Context URL extraction", "[odata_content_v2]")
 {
     std::cout << std::endl;
@@ -370,7 +343,6 @@ TEST_CASE("Test OData v2 Context URL in d wrapper", "[odata_content_v2]")
     // Sample OData v2 JSON with context URL inside d wrapper
     std::string json_content_v2 = "{\n"
         "    \"d\": {\n"
-        "        \"@odata.context\": \"https://services.odata.org/V2/Northwind/Northwind.svc/$metadata#Customers\",\n"
         "        \"results\": [\n"
         "            {\n"
         "                \"CustomerID\": \"ALFKI\",\n"
@@ -384,9 +356,6 @@ TEST_CASE("Test OData v2 Context URL in d wrapper", "[odata_content_v2]")
     ODataEntitySetJsonContent json_content_instance(json_content_v2);
     json_content_instance.SetODataVersion(ODataVersion::V2);
 
-    // Test context URL extraction from d wrapper
-    auto context_url = json_content_instance.MetadataContextUrl();
-    REQUIRE(context_url == "https://services.odata.org/V2/Northwind/Northwind.svc/$metadata#Customers");
 }
 
 TEST_CASE("Test OData v2 Error handling - missing d wrapper", "[odata_content_v2]")

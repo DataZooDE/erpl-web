@@ -47,6 +47,18 @@ set(EXTENSION_SOURCES
     src/erpl_web_extension.cpp
     src/telemetry.cpp
     src/erpl_tracing.cpp
+    src/erpl_datasphere_client.cpp
+    src/erpl_datasphere_catalog.cpp
+    src/erpl_datasphere_asset.cpp
+    src/erpl_oauth2_types.cpp
+    src/erpl_datasphere_browser.cpp
+    src/erpl_datasphere_local_server.cpp
+    src/erpl_datasphere_pushdown.cpp
+    src/erpl_datasphere_secret.cpp
+    src/erpl_oauth2_callback_handler.cpp
+    src/erpl_oauth2_flow_v2.cpp
+    src/erpl_oauth2_server.cpp
+    src/erpl_timeout_http_client.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
@@ -70,6 +82,13 @@ if(MINGW)
    find_package(ZLIB)
    target_link_libraries(${EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
    target_link_libraries(${LOADABLE_EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
+endif()
+
+if(APPLE)
+   find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+   find_library(APPLICATIONSERVICES_FRAMEWORK ApplicationServices)
+   target_link_libraries(${EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
+   target_link_libraries(${LOADABLE_EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
 endif()
 
 if(${BUILD_UNITTESTS})

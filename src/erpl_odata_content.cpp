@@ -1,4 +1,5 @@
 #include "erpl_odata_content.hpp"
+#include "erpl_tracing.hpp"
 
 namespace erpl_web {
 
@@ -17,19 +18,24 @@ bool ODataJsonContentMixin::IsJsonContentType(const std::string& content_type)
 
 ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& content)
 {
-    std::cout << "[DEBUG] [DETECT_VERSION] Starting OData version detection" << std::endl;
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "Starting OData version detection");
+    
+    if (content.empty()) {
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Empty content, defaulting to V4");
+        return ODataVersion::V4;
+    }
     
     // Parse the JSON content to detect OData version
     auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(content.c_str(), content.size(), 0), yyjson_doc_free);
     if (!doc) {
-        std::cout << "[DEBUG] [DETECT_VERSION] Failed to parse JSON, defaulting to V4" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Failed to parse JSON, defaulting to V4");
         // If we can't parse JSON, default to v4
         return ODataVersion::V4;
     }
     
     auto root = yyjson_doc_get_root(doc.get());
     if (!root || !yyjson_is_obj(root)) {
-        std::cout << "[DEBUG] [DETECT_VERSION] Root is not an object, defaulting to V4" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Root is not an object, defaulting to V4");
         return ODataVersion::V4;
     }
     
@@ -39,20 +45,20 @@ ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& conten
     
     auto value_element = yyjson_obj_get(root, "value");
     if (value_element && yyjson_is_arr(value_element)) {
-        std::cout << "[DEBUG] [DETECT_VERSION] Found 'value' array, detecting as V4" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Found 'value' array, detecting as V4");
         return ODataVersion::V4;
     }
     
     auto d_element = yyjson_obj_get(root, "d");
     if (d_element && yyjson_is_arr(d_element)) {
-        std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' array, detecting as V2" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Found 'd' array, detecting as V2");
         return ODataVersion::V2;
     }
     
     // Check for other v4 indicators
     auto context = yyjson_obj_get(root, "@odata.context");
     if (context && yyjson_is_str(context)) {
-        std::cout << "[DEBUG] [DETECT_VERSION] Found '@odata.context', detecting as V4" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Found '@odata.context', detecting as V4");
         return ODataVersion::V4;
     }
     
@@ -61,287 +67,521 @@ ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& conten
         // Check if d contains results array (typical for v2 collections)
         auto results = yyjson_obj_get(d_element, "results");
         if (results && yyjson_is_arr(results)) {
-            std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' object with 'results' array, detecting as V2" << std::endl;
+            ERPL_TRACE_DEBUG("DETECT_VERSION", "Found 'd' object with 'results' array, detecting as V2");
             return ODataVersion::V2;
         }
         
         // Check if d contains __metadata (typical for v2 single entities)
         auto metadata = yyjson_obj_get(d_element, "__metadata");
         if (metadata && yyjson_is_obj(metadata)) {
-            std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' object with '__metadata', detecting as V2" << std::endl;
+            ERPL_TRACE_DEBUG("DETECT_VERSION", "Found 'd' object with '__metadata', detecting as V2");
             return ODataVersion::V2;
         }
         
         // If we have a 'd' wrapper but can't determine the structure, assume V2
-        std::cout << "[DEBUG] [DETECT_VERSION] Found 'd' wrapper, assuming V2" << std::endl;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Found 'd' wrapper, assuming V2");
         return ODataVersion::V2;
     }
     
-    std::cout << "[DEBUG] [DETECT_VERSION] No clear indicators found, defaulting to V4" << std::endl;
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "No clear indicators found, defaulting to V4");
     // Default to v4 if we can't determine
     return ODataVersion::V4;
 }
 
-void ODataJsonContentMixin::ThrowTypeError(yyjson_val *json_value, const std::string &expected)
+void ODataJsonContentMixin::ThrowTypeError(yyjson_val* json_value, const std::string& expected)
 {
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
     auto actual = yyjson_get_type_desc(json_value);
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << "Expected JSON type '" << expected << "', but got type: '" << actual << "'";
     throw duckdb::ParserException(ss.str());
 }
 
 void ODataJsonContentMixin::PrettyPrint()
 {
+    if (!doc) {
+        ERPL_TRACE_DEBUG("ODATA_CONTENT", "No document to pretty print");
+        return;
+    }
+    
     auto flags = YYJSON_WRITE_PRETTY | YYJSON_WRITE_ESCAPE_UNICODE;
     auto json_doc_str = yyjson_write(doc.get(), flags, nullptr);
-    std::cout << std::endl << json_doc_str << std::endl << std::endl;
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val *json_value, const duckdb::LogicalType &duck_type)
-{
-    if (yyjson_is_null(json_value)) {
-        std::cout << "[DEBUG] [DESERIALIZE] JSON value is null, returning default" << std::endl;
-        return duckdb::Value().DefaultCastAs(duck_type);
-    }
-
-    std::cout << "[DEBUG] [DESERIALIZE] Deserializing JSON value to type: " << duck_type.ToString() << std::endl;
-
-    switch (duck_type.id()) 
-    {
-        case duckdb::LogicalTypeId::BOOLEAN:
-            return DeserializeJsonBool(json_value);
-        case duckdb::LogicalTypeId::TINYINT:
-            return DeserializeJsonSignedInt8(json_value);
-        case duckdb::LogicalTypeId::UTINYINT:
-            return DeserializeJsonUnsignedInt8(json_value);
-        case duckdb::LogicalTypeId::SMALLINT:
-            return DeserializeJsonSignedInt16(json_value);
-        case duckdb::LogicalTypeId::USMALLINT:
-            return DeserializeJsonUnsignedInt16(json_value);
-        case duckdb::LogicalTypeId::INTEGER:
-            return DeserializeJsonSignedInt32(json_value);
-        case duckdb::LogicalTypeId::UINTEGER:
-            return DeserializeJsonUnsignedInt32(json_value);
-        case duckdb::LogicalTypeId::BIGINT:
-            return DeserializeJsonSignedInt64(json_value);
-        case duckdb::LogicalTypeId::UBIGINT:
-            return DeserializeJsonUnsignedInt64(json_value);
-        case duckdb::LogicalTypeId::FLOAT:
-            return DeserializeJsonFloat(json_value);
-        case duckdb::LogicalTypeId::DOUBLE:
-            return DeserializeJsonDouble(json_value);
-        case duckdb::LogicalTypeId::VARCHAR:
-            return DeserializeJsonString(json_value);
-        case duckdb::LogicalTypeId::ENUM:
-            return DeserializeJsonEnum(json_value, duck_type);
-        case duckdb::LogicalTypeId::LIST:
-            std::cout << "[DEBUG] [DESERIALIZE] Deserializing LIST type" << std::endl;
-            return DeserializeJsonArray(json_value, duck_type);
-        case duckdb::LogicalTypeId::STRUCT:
-            std::cout << "[DEBUG] [DESERIALIZE] Deserializing STRUCT type" << std::endl;
-            return DeserializeJsonObject(json_value, duck_type);
-        default:
-            throw duckdb::InvalidTypeException(duck_type, "Unsupported OData -> DuckDB type");
+    if (json_doc_str) {
+        ERPL_TRACE_DEBUG("ODATA_CONTENT", "Pretty print: " + std::string(json_doc_str));
+        free(json_doc_str);
+    } else {
+        ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to generate pretty print");
     }
 }
 
-duckdb::Value ODataJsonContentMixin::DeserializeJsonBool(yyjson_val *json_value)
+duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val* json_value, const duckdb::LogicalType& duck_type)
 {
-    if (!yyjson_is_bool(json_value)) {
-        ThrowTypeError(json_value, "bool");
-    }
-
-    return duckdb::Value(yyjson_get_bool(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt8(yyjson_val *json_value)
-{
-    if (!yyjson_is_int(json_value)) {
-        ThrowTypeError(json_value, "int8_t");
-    }
-
-    return duckdb::Value::TINYINT(yyjson_get_sint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt8(yyjson_val *json_value)
-{
-    if (!yyjson_is_uint(json_value)) {
-        ThrowTypeError(json_value, "uint8_t");
-    }
-
-    return duckdb::Value::UTINYINT(yyjson_get_uint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt16(yyjson_val *json_value)
-{
-    if (!yyjson_is_int(json_value)) {
-        ThrowTypeError(json_value, "int16_t");
-    }
-
-    return duckdb::Value::SMALLINT(yyjson_get_sint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt16(yyjson_val *json_value)
-{
-    if (!yyjson_is_uint(json_value)) {
-        ThrowTypeError(json_value, "uint16_t");
-    }
-
-    return duckdb::Value::USMALLINT(yyjson_get_uint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt32(yyjson_val *json_value)
-{
-    if (!yyjson_is_int(json_value)) {
-        ThrowTypeError(json_value, "int32_t");
-    }
-
-    return duckdb::Value::INTEGER(yyjson_get_sint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt32(yyjson_val *json_value)
-{
-    if (!yyjson_is_uint(json_value)) {
-        ThrowTypeError(json_value, "uint32_t");
-    }
-
-    return duckdb::Value::UINTEGER(yyjson_get_uint(json_value));
-}   
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt64(yyjson_val *json_value)
-{
-    if (!yyjson_is_int(json_value)) {
-        ThrowTypeError(json_value, "int64_t");
-    }
-
-    return duckdb::Value::BIGINT(yyjson_get_sint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt64(yyjson_val *json_value)
-{
-    if (!yyjson_is_uint(json_value)) {
-        ThrowTypeError(json_value, "uint64_t");
-    }
-
-    return duckdb::Value::UBIGINT(yyjson_get_uint(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonFloat(yyjson_val *json_value)
-{
-    if (!yyjson_is_real(json_value)) {
-        ThrowTypeError(json_value, "float");
-    }
-
-    return duckdb::Value::FLOAT(yyjson_get_real(json_value));
-}   
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonDouble(yyjson_val *json_value)
-{
-    if (!yyjson_is_real(json_value)) {
-        ThrowTypeError(json_value, "double");
-    }
-
-    return duckdb::Value::DOUBLE(yyjson_get_real(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonString(yyjson_val *json_value)
-{
-    if (!yyjson_is_str(json_value)) {
-        ThrowTypeError(json_value, "string");
-    }
-
-    return duckdb::Value(yyjson_get_str(json_value));
-}
-
-duckdb::Value ODataJsonContentMixin::DeserializeJsonEnum(yyjson_val *json_value, const duckdb::LogicalType &duck_type)
-{
-    if (!yyjson_is_str(json_value)) {
-        ThrowTypeError(json_value, "string");
-    }
-
-    std::vector<std::string> enum_values;
-    for (idx_t i = 0; i < duckdb::EnumType::GetSize(duck_type); i++) {
-        auto enum_str = duckdb::EnumType::GetString(duck_type, i).GetString();
-        enum_values.push_back(enum_str);
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
     }
     
-    auto json_str = yyjson_get_str(json_value);
-    auto enum_index = std::find(enum_values.begin(), enum_values.end(), json_str);
-    if (enum_index == enum_values.end()) {
-        ThrowTypeError(json_value, "enum");
+    try {
+        switch (duck_type.id()) {
+            case duckdb::LogicalTypeId::BOOLEAN:
+                return DeserializeJsonBool(json_value);
+            case duckdb::LogicalTypeId::TINYINT:
+                return DeserializeJsonSignedInt8(json_value);
+            case duckdb::LogicalTypeId::UTINYINT:
+                return DeserializeJsonUnsignedInt8(json_value);
+            case duckdb::LogicalTypeId::SMALLINT:
+                return DeserializeJsonSignedInt16(json_value);
+            case duckdb::LogicalTypeId::USMALLINT:
+                return DeserializeJsonUnsignedInt16(json_value);
+            case duckdb::LogicalTypeId::INTEGER:
+                return DeserializeJsonSignedInt32(json_value);
+            case duckdb::LogicalTypeId::UINTEGER:
+                return DeserializeJsonUnsignedInt32(json_value);
+            case duckdb::LogicalTypeId::BIGINT:
+                return DeserializeJsonSignedInt64(json_value);
+            case duckdb::LogicalTypeId::UBIGINT:
+                return DeserializeJsonUnsignedInt64(json_value);
+            case duckdb::LogicalTypeId::FLOAT:
+                return DeserializeJsonFloat(json_value);
+            case duckdb::LogicalTypeId::DOUBLE:
+                return DeserializeJsonDouble(json_value);
+            case duckdb::LogicalTypeId::VARCHAR:
+                return DeserializeJsonString(json_value);
+            case duckdb::LogicalTypeId::ENUM:
+                return DeserializeJsonEnum(json_value, duck_type);
+            case duckdb::LogicalTypeId::LIST:
+                return DeserializeJsonArray(json_value, duck_type);
+            case duckdb::LogicalTypeId::STRUCT:
+                return DeserializeJsonObject(json_value, duck_type);
+            default:
+                throw duckdb::ParserException("Unsupported DuckDB type: " + duck_type.ToString());
+        }
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize JSON value: " + std::string(e.what()));
+        throw;
     }
-
-    return duckdb::Value::ENUM(enum_index - enum_values.begin(), duck_type);
 }
 
-duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val *json_value, const duckdb::LogicalType &list_type)
+duckdb::Value ODataJsonContentMixin::DeserializeJsonBool(yyjson_val* json_value)
 {
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_bool(json_value)) {
+        return duckdb::Value::BOOLEAN(yyjson_get_bool(json_value));
+    } else if (yyjson_is_str(json_value)) {
+        std::string str_val = yyjson_get_str(json_value);
+        if (str_val == "true" || str_val == "1") {
+            return duckdb::Value::BOOLEAN(true);
+        } else if (str_val == "false" || str_val == "0") {
+            return duckdb::Value::BOOLEAN(false);
+        }
+    }
+    
+    ThrowTypeError(json_value, "boolean");
+    return duckdb::Value::BOOLEAN(false); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt8(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= INT8_MIN && val <= INT8_MAX) {
+            return duckdb::Value::TINYINT(static_cast<int8_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            int8_t val = static_cast<int8_t>(std::stoi(yyjson_get_str(json_value)));
+            return duckdb::Value::TINYINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "signed int8");
+    return duckdb::Value::TINYINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt8(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= 0 && val <= UINT8_MAX) {
+            return duckdb::Value::UTINYINT(static_cast<uint8_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            uint8_t val = static_cast<uint8_t>(std::stoul(yyjson_get_str(json_value)));
+            return duckdb::Value::UTINYINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "unsigned int8");
+    return duckdb::Value::UTINYINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt16(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= INT16_MIN && val <= INT16_MAX) {
+            return duckdb::Value::SMALLINT(static_cast<int16_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            int16_t val = static_cast<int16_t>(std::stoi(yyjson_get_str(json_value)));
+            return duckdb::Value::SMALLINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "signed int16");
+    return duckdb::Value::SMALLINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt16(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= 0 && val <= UINT16_MAX) {
+            return duckdb::Value::USMALLINT(static_cast<uint16_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            uint16_t val = static_cast<uint16_t>(std::stoul(yyjson_get_str(json_value)));
+            return duckdb::Value::USMALLINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "unsigned int16");
+    return duckdb::Value::USMALLINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt32(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= INT32_MIN && val <= INT32_MAX) {
+            return duckdb::Value::INTEGER(static_cast<int32_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            int32_t val = static_cast<int32_t>(std::stoi(yyjson_get_str(json_value)));
+            return duckdb::Value::INTEGER(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "signed int32");
+    return duckdb::Value::INTEGER(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt32(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= 0 && val <= UINT32_MAX) {
+            return duckdb::Value::UINTEGER(static_cast<uint32_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            uint32_t val = static_cast<uint32_t>(std::stoul(yyjson_get_str(json_value)));
+            return duckdb::Value::UINTEGER(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "unsigned int32");
+    return duckdb::Value::UINTEGER(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt64(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        return duckdb::Value::BIGINT(yyjson_get_int(json_value));
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            int64_t val = std::stoll(yyjson_get_str(json_value));
+            return duckdb::Value::BIGINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "signed int64");
+    return duckdb::Value::BIGINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonUnsignedInt64(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_int(json_value)) {
+        int64_t val = yyjson_get_int(json_value);
+        if (val >= 0) {
+            return duckdb::Value::UBIGINT(static_cast<uint64_t>(val));
+        }
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            uint64_t val = std::stoull(yyjson_get_str(json_value));
+            return duckdb::Value::UBIGINT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "unsigned int64");
+    return duckdb::Value::UBIGINT(0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonFloat(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_real(json_value)) {
+        return duckdb::Value::FLOAT(static_cast<float>(yyjson_get_real(json_value)));
+    } else if (yyjson_is_int(json_value)) {
+        return duckdb::Value::FLOAT(static_cast<float>(yyjson_get_int(json_value)));
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            float val = std::stof(yyjson_get_str(json_value));
+            return duckdb::Value::FLOAT(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "float");
+    return duckdb::Value::FLOAT(0.0f); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonDouble(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_real(json_value)) {
+        return duckdb::Value::DOUBLE(yyjson_get_real(json_value));
+    } else if (yyjson_is_int(json_value)) {
+        return duckdb::Value::DOUBLE(static_cast<double>(yyjson_get_int(json_value)));
+    } else if (yyjson_is_str(json_value)) {
+        try {
+            double val = std::stod(yyjson_get_str(json_value));
+            return duckdb::Value::DOUBLE(val);
+        } catch (const std::exception&) {
+            // Fall through to error
+        }
+    }
+    
+    ThrowTypeError(json_value, "double");
+    return duckdb::Value::DOUBLE(0.0); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonString(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_str(json_value)) {
+        const char* str_ptr = yyjson_get_str(json_value);
+        size_t str_len = yyjson_get_len(json_value);
+        
+        if (!str_ptr) {
+            ERPL_TRACE_DEBUG("ODATA_CONTENT", "String pointer is null, returning empty string");
+            return duckdb::Value("");
+        }
+        
+        // Create a safe copy of the string
+        std::string safe_string(str_ptr, str_len);
+        
+        try {
+            return duckdb::Value(safe_string);
+        } catch (const std::exception& e) {
+            ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to create VARCHAR value: " + std::string(e.what()));
+            return duckdb::Value("");
+        }
+    } else if (yyjson_is_int(json_value)) {
+        return duckdb::Value(std::to_string(yyjson_get_int(json_value)));
+    } else if (yyjson_is_real(json_value)) {
+        return duckdb::Value(std::to_string(yyjson_get_real(json_value)));
+    } else if (yyjson_is_bool(json_value)) {
+        return duckdb::Value(yyjson_get_bool(json_value) ? "true" : "false");
+    } else if (yyjson_is_null(json_value)) {
+        return duckdb::Value(); // Return proper null value instead of empty string
+    }
+    
+    ThrowTypeError(json_value, "string");
+    return duckdb::Value(""); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonEnum(yyjson_val* json_value, const duckdb::LogicalType& duck_type)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
+    if (yyjson_is_str(json_value)) {
+        std::string enum_value = yyjson_get_str(json_value);
+        try {
+            // Find the enum index for the given value
+            uint64_t enum_index = 0;
+            for (idx_t i = 0; i < duckdb::EnumType::GetSize(duck_type); i++) {
+                if (duckdb::EnumType::GetString(duck_type, i).GetString() == enum_value) {
+                    enum_index = i;
+                    break;
+                }
+            }
+            return duckdb::Value::ENUM(enum_index, duck_type);
+        } catch (const std::exception& e) {
+            ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to create ENUM value: " + std::string(e.what()));
+            return duckdb::Value(enum_value);
+        }
+    }
+    
+    ThrowTypeError(json_value, "enum");
+    return duckdb::Value(""); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val* json_value, const duckdb::LogicalType& duck_type)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
     if (!yyjson_is_arr(json_value)) {
         ThrowTypeError(json_value, "array");
+        return duckdb::Value::LIST({}); // Unreachable
     }
     
-    duckdb::vector<duckdb::Value> child_values;
-    child_values.reserve(yyjson_arr_size(json_value));
-
-    auto child_type = duckdb::ListType::GetChildType(list_type);
-
-    size_t i, max;
-    yyjson_val *json_child_val;
-    yyjson_arr_foreach(json_value, i, max, json_child_val) {
-        if (yyjson_is_null(json_child_val)) {
-            // Handle null values in arrays
-            std::cout << "[DEBUG] [DESERIALIZE_ARRAY] Found null value at index " << i << ", using default" << std::endl;
-            auto duck_value = duckdb::Value().DefaultCastAs(child_type);
-            child_values.push_back(duck_value);
-        } else {
-            auto duck_value = DeserializeJsonValue(json_child_val, child_type);
-            child_values.push_back(duck_value);
+    auto child_type = duckdb::ListType::GetChildType(duck_type);
+    duckdb::vector<duckdb::Value> list_values;
+    
+    size_t idx, max;
+    yyjson_val* json_child_val;
+    yyjson_arr_foreach(json_value, idx, max, json_child_val) {
+        try {
+            auto child_value = DeserializeJsonValue(json_child_val, child_type);
+            list_values.push_back(child_value);
+        } catch (const std::exception& e) {
+            ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize array element " + std::to_string(idx) + ": " + std::string(e.what()));
+            // Continue with other elements
         }
     }
-
-    return duckdb::Value::LIST(child_type, child_values);
+    
+    return duckdb::Value::LIST(list_values);
 }
 
-duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val *json_value, const duckdb::LogicalType &duck_type)
+duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val* json_value, const duckdb::LogicalType& duck_type)
 {
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    
     if (!yyjson_is_obj(json_value)) {
         ThrowTypeError(json_value, "object");
+        return duckdb::Value::STRUCT({}); // Unreachable
     }
-
-    duckdb::child_list_t<duckdb::Value> child_values;
-    child_values.reserve(duckdb::StructType::GetChildTypes(duck_type).size());
-
+    
     auto child_types = duckdb::StructType::GetChildTypes(duck_type);
-    for (const auto& child : child_types) {
-        auto child_name = child.first;
-        auto child_type = child.second;
-
-        auto json_child_val = yyjson_obj_get(json_value, child_name.c_str());
-        if (!json_child_val) {
-            // Field doesn't exist in JSON, use default value
-            std::cout << "[DEBUG] [DESERIALIZE_OBJECT] Field " << child_name << " not found in JSON, using default" << std::endl;
-            auto duck_value = duckdb::Value().DefaultCastAs(child_type);
-            child_values.push_back(std::make_pair(child_name, duck_value));
-        } else {
-            // Field exists, deserialize it
-            std::cout << "[DEBUG] [DESERIALIZE_OBJECT] Deserializing field " << child_name << std::endl;
-            auto duck_value = DeserializeJsonValue(json_child_val, child_type);
-            child_values.push_back(std::make_pair(child_name, duck_value));
+    duckdb::child_list_t<duckdb::Value> struct_values;
+    
+    size_t idx, max;
+    yyjson_val* json_key, *json_val;
+    yyjson_obj_foreach(json_value, idx, max, json_key, json_val) {
+        if (yyjson_is_str(json_key)) {
+            std::string key = yyjson_get_str(json_key);
+            
+            // Find matching child type
+            duckdb::LogicalType child_type = duckdb::LogicalType::VARCHAR; // Default
+            for (const auto& child_type_pair : child_types) {
+                if (child_type_pair.first == key) {
+                    child_type = child_type_pair.second;
+                    break;
+                }
+            }
+            
+            try {
+                auto value = DeserializeJsonValue(json_val, child_type);
+                struct_values.emplace_back(key, value);
+            } catch (const std::exception& e) {
+                ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize object field '" + key + "': " + std::string(e.what()));
+                // Continue with other fields
+            }
         }
     }
-
-    return duckdb::Value::STRUCT(child_values);
+    
+    return duckdb::Value::STRUCT(struct_values);
 }
 
 std::string ODataJsonContentMixin::MetadataContextUrl()
 {
+    if (!doc) {
+        return "";
+    }
+    
     auto root = yyjson_doc_get_root(doc.get());
+    if (!root || !yyjson_is_obj(root)) {
+        return "";
+    }
+    
     return GetMetadataContextUrl(root);
 }
 
 std::optional<std::string> ODataJsonContentMixin::NextUrl()
 {
+    if (!doc) {
+        return std::nullopt;
+    }
+    
     auto root = yyjson_doc_get_root(doc.get());
+    if (!root || !yyjson_is_obj(root)) {
+        return std::nullopt;
+    }
+    
     return GetNextUrl(root);
 }
 
@@ -467,21 +707,21 @@ std::vector<std::string> ODataJsonContentMixin::ParseJsonPath(const std::string&
 
 // Version-aware JSON parsing methods
 yyjson_val* ODataJsonContentMixin::GetValueArray(yyjson_val* root) {
-    std::cout << "[DEBUG] [GET_VALUE_ARRAY] OData version: " << (odata_version == ODataVersion::V2 ? "V2" : "V4") << std::endl;
+    ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "OData version: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
     
     if (odata_version == ODataVersion::V2) {
-        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Processing OData v2 structure" << std::endl;
+        ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Processing OData v2 structure");
         
         // OData v2: {"d": [...]} or {"d": {"results": [...]}}
         auto d_wrapper = yyjson_obj_get(root, "d");
         if (!d_wrapper) {
-            std::cout << "[DEBUG] [GET_VALUE_ARRAY] No 'd' wrapper found in OData v2 response" << std::endl;
+            ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "No 'd' wrapper found in OData v2 response");
             throw std::runtime_error("No 'd' wrapper found in OData v2 response.");
         }
         
         // Check if d is directly an array (common case)
         if (yyjson_is_arr(d_wrapper)) {
-            std::cout << "[DEBUG] [GET_VALUE_ARRAY] Found 'd' as direct array with " << yyjson_arr_size(d_wrapper) << " items" << std::endl;
+            ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Found 'd' as direct array with " + std::to_string(yyjson_arr_size(d_wrapper)) + " items");
             return d_wrapper;
         }
         
@@ -489,79 +729,62 @@ yyjson_val* ODataJsonContentMixin::GetValueArray(yyjson_val* root) {
         if (yyjson_is_obj(d_wrapper)) {
             auto results = yyjson_obj_get(d_wrapper, "results");
             if (results && yyjson_is_arr(results)) {
-                std::cout << "[DEBUG] [GET_VALUE_ARRAY] Found 'd' object with 'results' array containing " << yyjson_arr_size(results) << " items" << std::endl;
+                ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Found 'd' object with 'results' array containing " + std::to_string(yyjson_arr_size(results)) + " items");
                 return results;
             }
         }
         
-        std::cout << "[DEBUG] [GET_VALUE_ARRAY] 'd' element is neither an array nor contains 'results' array" << std::endl;
+        ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "'d' element is neither an array nor contains 'results' array");
         throw std::runtime_error("'d' element in OData v2 response is not an array or doesn't contain a 'results' array.");
     } else {
-        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Processing OData v4 structure" << std::endl;
+        ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Processing OData v4 structure");
         // OData v4: {"value": [...]}
         auto value_array = yyjson_obj_get(root, "value");
         if (!value_array) {
-            std::cout << "[DEBUG] [GET_VALUE_ARRAY] No 'value' element found in OData v4 response" << std::endl;
+            ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "No 'value' element found in OData v4 response");
             throw std::runtime_error("No 'value' element found in OData v4 response.");
         }
         
         if (!yyjson_is_arr(value_array)) {
-            std::cout << "[DEBUG] [GET_VALUE_ARRAY] 'value' element in OData v4 response is not an array" << std::endl;
+            ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "'value' element in OData v4 response is not an array");
             throw std::runtime_error("'value' element in OData v4 response is not an array.");
         }
         
-        std::cout << "[DEBUG] [GET_VALUE_ARRAY] Successfully found v4 value array with " << yyjson_arr_size(value_array) << " items" << std::endl;
+        ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Successfully found v4 value array with " + std::to_string(yyjson_arr_size(value_array)) + " items");
         return value_array;
     }
 }
 
 std::string ODataJsonContentMixin::GetMetadataContextUrl(yyjson_val* root) {
-    if (odata_version == ODataVersion::V2) {
-        // OData v2: Check for context in the root or d wrapper
-        auto context = yyjson_obj_get(root, "@odata.context");
-        if (!context) {
-            auto d_wrapper = yyjson_obj_get(root, "d");
-            if (d_wrapper) {
-                context = yyjson_obj_get(d_wrapper, "@odata.context");
-            }
-        }
-        
-        if (!context) {
-            throw std::runtime_error("No @odata.context found in OData v2 response, cannot get EDMX metadata.");
-        }
-        
-        return std::string(yyjson_get_str(context));
-    } else {
-        // OData v4: {"@odata.context": "..."}
-        auto context = yyjson_obj_get(root, "@odata.context");
-        if (!context) {
-            throw std::runtime_error("No @odata.context found in OData v4 response, cannot get EDMX metadata.");
-        }
-        
-        return std::string(yyjson_get_str(context));
+    if (!root) {
+        return "";
     }
+    
+    auto context = yyjson_obj_get(root, "@odata.context");
+    if (context && yyjson_is_str(context)) {
+        return yyjson_get_str(context);
+    }
+    
+    return "";
 }
 
 std::optional<std::string> ODataJsonContentMixin::GetNextUrl(yyjson_val* root) {
-    if (odata_version == ODataVersion::V2) {
-        // OData v2: Check for __next in the d wrapper
-        auto d_wrapper = yyjson_obj_get(root, "d");
-        if (d_wrapper) {
-            auto next_link = yyjson_obj_get(d_wrapper, "__next");
-            if (next_link) {
-                return std::string(yyjson_get_str(next_link));
-            }
-        }
+    if (!root) {
         return std::nullopt;
-    } else {
-        // OData v4: {"@odata.nextLink": "..."}
-        auto next_link = yyjson_obj_get(root, "@odata.nextLink");
-        if (!next_link) {
-            return std::nullopt;
-        }
-        
-        return std::string(yyjson_get_str(next_link));
     }
+    
+    auto next_link = yyjson_obj_get(root, "@odata.nextLink");
+    if (next_link && yyjson_is_str(next_link)) {
+        return yyjson_get_str(next_link);
+    }
+    
+    // Check for v2 next link
+    auto next_link_v2 = yyjson_obj_get(root, "__next");
+    if (next_link_v2 && yyjson_is_str(next_link_v2)) {
+        return yyjson_get_str(next_link_v2);
+    }
+    
+    return std::nullopt;
 }
 
 // ----------------------------------------------------------------------
@@ -587,10 +810,10 @@ std::optional<std::string> ODataEntitySetJsonContent::NextUrl()
 std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::vector<std::string> &column_names, 
                                                                           std::vector<duckdb::LogicalType> &column_types)
 {
-    std::cout << "[DEBUG] [ODATA_TO_ROWS] Starting ToRows with " << column_names.size() << " columns" << std::endl;
+    ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Starting ToRows with " + std::to_string(column_names.size()) + " columns");
     for (size_t i = 0; i < column_names.size(); i++) {
-        std::cout << "[DEBUG] [ODATA_TO_ROWS] Column " << i << ": " << column_names[i] 
-                  << " (type: " << column_types[i].ToString() << ")" << std::endl;
+        ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Column " + std::to_string(i) + ": " + column_names[i] 
+                  + " (type: " + column_types[i].ToString() + ")");
     }
 
     auto root = yyjson_doc_get_root(doc.get());
@@ -599,7 +822,7 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
         throw std::runtime_error("No value array found in OData response, cannot get rows.");
     }
 
-    std::cout << "[DEBUG] [ODATA_TO_ROWS] Found " << yyjson_arr_size(json_values) << " rows in JSON response" << std::endl;
+    ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Found " + std::to_string(yyjson_arr_size(json_values)) + " rows in JSON response");
 
     auto duck_rows = std::vector<std::vector<duckdb::Value>>();
     duck_rows.reserve(yyjson_arr_size(json_values));
@@ -613,17 +836,17 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     yyjson_val *json_row;
     yyjson_arr_foreach(json_values, i_row, max_row, json_row) 
     {
-        std::cout << "[DEBUG] [ODATA_TO_ROWS] Processing row " << i_row << std::endl;
+        ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Processing row " + std::to_string(i_row));
         
         // Debug: print the JSON row content
         if (i_row == 0) { // Only print first row to avoid spam
-            std::cout << "[DEBUG] [ODATA_TO_ROWS] First row JSON keys: ";
+            std::string keys_str = "";
             size_t key_idx, key_max;
             yyjson_val *key, *child_val;
             yyjson_obj_foreach(json_row, key_idx, key_max, key, child_val) {
-                std::cout << unsafe_yyjson_get_str(key) << " ";
+                keys_str += std::string(unsafe_yyjson_get_str(key)) + " ";
             }
-            std::cout << std::endl;
+            ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "First row JSON keys: " + keys_str);
         }
         
         auto duck_row = std::vector<duckdb::Value>();
@@ -633,13 +856,13 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
             auto column_name = column_names[i_col];
             auto column_type = column_types[i_col];
             
-            std::cout << "[DEBUG] [ODATA_TO_ROWS] Processing column " << i_col << ": " << column_name 
-                      << " (type: " << column_type.ToString() << ")" << std::endl;
+            ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Processing column " + std::to_string(i_col) + ": " + column_name 
+                      + " (type: " + column_type.ToString() + ")");
             
             // Use JSON path evaluator for complex expressions like AddressInfo[1].City."Name"
             auto json_value = EvaluateJsonPath(json_row, column_name);
             if (!json_value) {
-                std::cout << "[DEBUG] [ODATA_TO_ROWS] Column " << column_name << " not found in JSON, using null" << std::endl;
+                ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Column " + column_name + " not found in JSON, using null");
                 auto duck_value = duckdb::Value().DefaultCastAs(column_type);
                 duck_row.push_back(duck_value);
                 continue;
@@ -647,12 +870,27 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
             
             try {
                 auto duck_value = DeserializeJsonValue(json_value, column_type);
-                std::cout << "[DEBUG] [ODATA_TO_ROWS] Successfully deserialized " << column_name 
-                          << " to: " << duck_value.ToString() << std::endl;
+                ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Successfully deserialized " + column_name 
+                          + " to: " + duck_value.ToString());
+                
+                // Additional validation for string values
+                if (column_type.id() == duckdb::LogicalTypeId::VARCHAR) {
+                    ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Validating string value for column " + column_name);
+                    try {
+                        // Test if the value can be converted to string without issues
+                        auto test_str = duck_value.ToString();
+                        ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "String validation passed for " + column_name + ": " + test_str);
+                    } catch (const std::exception& e) {
+                        ERPL_TRACE_ERROR("ODATA_TO_ROWS", "String validation failed for " + column_name + ": " + std::string(e.what()));
+                        // Use empty string instead of problematic value
+                        duck_value = duckdb::Value("");
+                    }
+                }
+                
                 duck_row.push_back(duck_value);
             } catch (const std::exception& e) {
-                std::cout << "[DEBUG] [ODATA_TO_ROWS] Failed to deserialize " << column_name 
-                          << ": " << e.what() << std::endl;
+                ERPL_TRACE_ERROR("ODATA_TO_ROWS", "Failed to deserialize " + column_name 
+                          + ": " + std::string(e.what()));
                 // Use a default value instead of failing the entire row
                 auto duck_value = duckdb::Value().DefaultCastAs(column_type);
                 duck_row.push_back(duck_value);
@@ -660,10 +898,10 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
         }
 
         duck_rows.push_back(duck_row);
-        std::cout << "[DEBUG] [ODATA_TO_ROWS] Successfully processed row " << i_row << std::endl;
+        ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Successfully processed row " + std::to_string(i_row));
     }
 
-    std::cout << "[DEBUG] [ODATA_TO_ROWS] Total rows processed: " << duck_rows.size() << std::endl;
+    ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Total rows processed: " + std::to_string(duck_rows.size()));
     return duck_rows;
 }
 
