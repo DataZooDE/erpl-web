@@ -11,6 +11,9 @@
 #include "erpl_secret_functions.hpp"
 #include "erpl_odata_functions.hpp"
 #include "erpl_odata_storage.hpp"
+#include "erpl_datasphere_catalog.hpp"
+#include "erpl_datasphere_asset.hpp"
+#include "erpl_datasphere_secret.hpp"
 
 #include "telemetry.hpp"
 #include "erpl_tracing.hpp"
@@ -210,6 +213,23 @@ static void RegisterODataFunctions(DatabaseInstance &instance)
     instance.SetExtensionLoaded("odata", extension_install_info);
 }
 
+static void RegisterDatasphereFunctions(DatabaseInstance &instance)
+{
+    // Register catalog discovery functions
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereShowSpacesFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereShowAssetsFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereDescribeSpaceFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereDescribeAssetFunction());
+    
+    // Register asset consumption functions
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereAssetFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereAnalyticalFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereRelationalFunction());
+    
+    // Register Datasphere secret management functions
+    erpl_web::CreateDatasphereSecretFunctions::Register(instance);
+}
+
 static void RegisterTracingPragmas(DatabaseInstance &instance)
 {
     // Register tracing pragma functions
@@ -233,6 +253,7 @@ void ErplWebExtension::Load(DuckDB &db)
 	RegisterConfiguration(*db.instance);
     RegisterWebFunctions(*db.instance);
     RegisterODataFunctions(*db.instance);
+    RegisterDatasphereFunctions(*db.instance);
     RegisterTracingPragmas(*db.instance);
 }
 std::string ErplWebExtension::Name() 

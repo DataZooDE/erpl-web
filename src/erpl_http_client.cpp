@@ -1,9 +1,12 @@
 #include <algorithm>
-
 #include <regex>
 #include <sstream>
 #include <vector>
 #include <numeric>
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
+#include <condition_variable>
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -13,11 +16,6 @@
 #include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
 #include "erpl_tracing.hpp"
-
-#include <mutex>
-#include <shared_mutex>
-#include <unordered_map>
-#include <condition_variable>
 
 using namespace duckdb;
 
@@ -46,7 +44,7 @@ void HttpUrl::ParseUrl(const std::string& url) {
 }
 
 std::string HttpUrl::ToSchemeHostAndPort() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << scheme << "://" << host;
     if (!port.empty()) {
         ss << ":" << port;
@@ -55,19 +53,19 @@ std::string HttpUrl::ToSchemeHostAndPort() const {
 }
 
 std::string HttpUrl::ToPathQuery() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << (path.empty() ? "/" : path) << query;
     return ss.str();
 }
 
 std::string HttpUrl::ToPathQueryFragment() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << ToPathQuery() << fragment;
     return ss.str();
 }
 
 std::string HttpUrl::ToString() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << ToSchemeHostAndPort() << ToPathQueryFragment();
     return ss.str();
 }
@@ -97,8 +95,8 @@ std::string HttpUrl::ToLower(const std::string& str) {
 
 HttpUrl HttpUrl::PopPath() 
 {
-    auto path = std::filesystem::path(Path());
-    auto new_path = path.parent_path();
+    auto path_obj = std::filesystem::path(Path());
+    auto new_path = path_obj.parent_path();
     auto new_url = *this;
     new_url.Path(new_path.string());
     return new_url;
@@ -113,13 +111,15 @@ std::filesystem::path HttpUrl::MergePaths(const std::filesystem::path& base_path
 
     // Decompose the paths into their respective components
     std::vector<std::string> base_parts;
+    base_parts.reserve(std::distance(base_path.begin(), base_path.end()));
     for (const auto& part : base_path) {
-        base_parts.push_back(part.string());
+        base_parts.emplace_back(part.string());
     }
 
     std::vector<std::string> rel_parts;
+    rel_parts.reserve(std::distance(rel_path.begin(), rel_path.end()));
     for (const auto& part : rel_path) {
-        rel_parts.push_back(part.string());
+        rel_parts.emplace_back(part.string());
     }
 
     // Find the overlap between the end of base_parts and the beginning of rel_parts
@@ -373,7 +373,7 @@ std::string HttpMethod::ToString() const
 // ----------------------------------------------------------------------
 
 HttpRequest::HttpRequest(HttpMethod method, const std::string &url, std::string content_type, std::string content)
-    : method(method), url(HttpUrl(url)), content_type(content_type), content(content)
+    : method(method), url(HttpUrl(url)), content_type(std::move(content_type)), content(std::move(content))
 { }
 
 HttpRequest::HttpRequest(HttpMethod method, const std::string &url)
@@ -482,7 +482,8 @@ std::string HttpRequest::ToCacheKey() const
 duckdb_httplib_openssl::Headers HttpRequest::HttplibHeaders()
 {
     duckdb_httplib_openssl::Headers ret;
-    for (auto &header : headers)
+    // Note: std::multimap doesn't have reserve(), but we can optimize by using emplace
+    for (const auto &header : headers)
     {
         ret.emplace(header.first, header.second);
     }
@@ -543,6 +544,16 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
             ERPL_TRACE_DEBUG("HTTP_RESPONSE", "  " + header.first + ": " + header.second);
         }
         ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (" + std::to_string(result->body.length()) + " bytes)");
+        
+        // Log the actual response body content for debugging
+        if (!result->body.empty()) {
+            // Truncate very long responses to avoid overwhelming the logs
+            if (result->body.length() > 1000) {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + result->body.substr(0, 1000) + "...");
+            } else {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body: " + result->body);
+            }
+        }
     } else {
         ERPL_TRACE_ERROR("HTTP_RESPONSE", "Request failed: " + to_string(result.error()));
     }
@@ -553,11 +564,11 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
 // ----------------------------------------------------------------------
 
 HttpResponse::HttpResponse(HttpMethod method, HttpUrl url, int code, std::string content_type, std::string content)
-    : method(method), url(url), code(code), content_type(content_type), content(content)
+    : method(method), url(std::move(url)), code(code), content_type(std::move(content_type)), content(std::move(content))
 { }
 
 HttpResponse::HttpResponse(HttpMethod method, HttpUrl url, int code)
-    : HttpResponse(method, url, code, std::string(), std::string())
+    : HttpResponse(method, std::move(url), code, std::string(), std::string())
 { }
 
 std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &method,
@@ -566,7 +577,8 @@ std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &meth
 {
     auto content_type = response.get_header_value("Content-Type");
     auto ret =  std::make_unique<HttpResponse>(method, url, response.status, content_type, response.body);
-    for (auto &header : response.headers)
+    ret->headers.reserve(response.headers.size()); // Pre-allocate for efficiency
+    for (const auto &header : response.headers)
     {
         ret->headers.emplace(header.first, header.second);
     }
@@ -577,12 +589,12 @@ std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &meth
 duckdb::LogicalType HttpResponse::DuckDbResponseType()
 {
     child_list_t<LogicalType> children;
-    children.push_back(std::make_pair("method", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("status", duckdb::LogicalTypeId::INTEGER));
-    children.push_back(std::make_pair("url", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("headers", DuckDbHeaderType()));
-    children.push_back(std::make_pair("content_type", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("content", duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("method", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("status", duckdb::LogicalTypeId::INTEGER);
+    children.emplace_back("url", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("headers", DuckDbHeaderType());
+    children.emplace_back("content_type", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("content", duckdb::LogicalTypeId::VARCHAR);
 
     return duckdb::LogicalType::STRUCT(children);
 }
@@ -603,12 +615,12 @@ std::vector<std::string> HttpResponse::DuckDbResponseNames()
 duckdb::Value HttpResponse::ToValue() const
 {
     child_list_t<duckdb::Value> children;
-    children.push_back(std::make_pair("method", method.ToString()));
-    children.push_back(std::make_pair("status", code));
-    children.push_back(std::make_pair("url", url.ToString()));
-    children.push_back(std::make_pair("headers", CreateHeaderMap()));
-    children.push_back(std::make_pair("content_type", content_type));
-    children.push_back(std::make_pair("content", content));
+    children.emplace_back("method", method.ToString());
+    children.emplace_back("status", code);
+    children.emplace_back("url", url.ToString());
+    children.emplace_back("headers", CreateHeaderMap());
+    children.emplace_back("content_type", content_type);
+    children.emplace_back("content", content);
 
     return duckdb::Value::STRUCT(children);
 }
@@ -619,7 +631,10 @@ duckdb::Value HttpResponse::CreateHeaderMap() const
 
     duckdb::vector<duckdb::Value> keys;
     duckdb::vector<duckdb::Value> values;
-    for (auto &header : headers)
+    keys.reserve(headers.size()); // Pre-allocate for efficiency
+    values.reserve(headers.size());
+    
+    for (const auto &header : headers)
     {
         keys.emplace_back(header.first);
         values.emplace_back(header.second);
@@ -899,7 +914,7 @@ std::unique_ptr<HttpResponse> CachingHttpClient::SendRequest(HttpRequest& reques
     auto response = http_client->SendRequest(request);
     
     // Cache the response if successful
-    if (response && response->code >= 200 && response->code < 300) {
+    if (response && response->Code() >= 200 && response->Code() < 300) {
         cache.EmplaceCacheResponse(request, std::make_unique<HttpResponse>(*response), cache_duration);
     }
     

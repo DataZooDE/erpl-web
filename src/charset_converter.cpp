@@ -6,20 +6,20 @@ namespace erpl_web
 
 // Constants for charset detection
 namespace {
-    constexpr const char* CHARSET_ISO8859_1 = "charset=ISO-8859-1";
-    constexpr const char* CHARSET_ISO8859_15 = "charset=ISO-8859-15";
-    constexpr const char* CHARSET_WINDOWS_1252 = "charset=windows-1252";
-    constexpr const char* CHARSET_UTF8 = "charset=utf-8";
+    constexpr std::string_view CHARSET_ISO8859_1 = "charset=ISO-8859-1";
+    constexpr std::string_view CHARSET_ISO8859_15 = "charset=ISO-8859-15";
+    constexpr std::string_view CHARSET_WINDOWS_1252 = "charset=windows-1252";
+    constexpr std::string_view CHARSET_UTF8 = "charset=utf-8";
     
-    // Binary content type patterns
-    constexpr const char* BINARY_PATTERNS[] = {
+    // Binary content type patterns - use string_view for better performance
+    constexpr std::array<std::string_view, 6> BINARY_PATTERNS = {{
         "application/octet-stream",
         "application/pdf",
         "image/",
         "video/",
         "audio/",
         "font/"
-    };
+    }};
     
     // ISO-8859-15 special character mappings
     constexpr unsigned char EURO_SIGN = 0xA4;
@@ -32,18 +32,18 @@ namespace {
     constexpr unsigned char Y_WITH_DIAERESIS = 0xBE;
     
     // Windows-1252 special character table (0x80-0x9F)
-    constexpr wchar_t WINDOWS_1252_TABLE[32] = {
+    constexpr std::array<wchar_t, 32> WINDOWS_1252_TABLE = {{
         0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
         0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
         0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
         0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178
-    };
+    }};
 }
 
-CharsetConverter::CharsetConverter(const std::string& content_type) {
+CharsetConverter::CharsetConverter(const std::string& content_type) 
+    : charsetType(detectCharsetType(content_type))
+{
     ERPL_TRACE_INFO("CHARSET_CONVERTER", "Creating charset converter for content type: " + content_type);
-    
-    charsetType = detectCharsetType(content_type);
     
     // Set charset string for backward compatibility
     switch (charsetType) {
@@ -79,16 +79,19 @@ CharsetType CharsetConverter::detectCharsetType(const std::string& content_type)
         return CharsetType::BINARY;
     }
     
-    if (content_type.find(CHARSET_ISO8859_1) != std::string::npos) {
+    // Use string_view for more efficient string operations
+    const std::string_view content_view(content_type);
+    
+    if (content_view.find(CHARSET_ISO8859_1) != std::string_view::npos) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Detected ISO-8859-1 charset");
         return CharsetType::ISO8859_1;
-    } else if (content_type.find(CHARSET_ISO8859_15) != std::string::npos) {
+    } else if (content_view.find(CHARSET_ISO8859_15) != std::string_view::npos) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Detected ISO-8859-15 charset");
         return CharsetType::ISO8859_15;
-    } else if (content_type.find(CHARSET_WINDOWS_1252) != std::string::npos) {
+    } else if (content_view.find(CHARSET_WINDOWS_1252) != std::string_view::npos) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Detected windows-1252 charset");
         return CharsetType::WINDOWS_1252;
-    } else if (content_type.find(CHARSET_UTF8) != std::string::npos) {
+    } else if (content_view.find(CHARSET_UTF8) != std::string_view::npos) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Detected UTF-8 charset, using UTF-8 converter");
         return CharsetType::UTF8;
     } else {
@@ -98,12 +101,11 @@ CharsetType CharsetConverter::detectCharsetType(const std::string& content_type)
 }
 
 bool CharsetConverter::isBinaryContentType(const std::string& content_type) const {
-    for (const auto& pattern : BINARY_PATTERNS) {
-        if (content_type.find(pattern) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
+    const std::string_view content_view(content_type);
+    return std::any_of(BINARY_PATTERNS.begin(), BINARY_PATTERNS.end(),
+        [&content_view](const std::string_view& pattern) {
+            return content_view.find(pattern) != std::string_view::npos;
+        });
 }
 
 std::string CharsetConverter::convert(const std::string& input) const {
@@ -111,7 +113,7 @@ std::string CharsetConverter::convert(const std::string& input) const {
     
     if (input.empty()) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Input is empty, returning empty string");
-        return "";
+        return {};
     }
     
     // Check if this is a binary content type that shouldn't be converted
@@ -163,7 +165,8 @@ std::wstring CharsetConverter::from_bytes_iso8859_1(const std::string& input) co
     std::wstring wide_string;
     wide_string.reserve(input.length()); // Pre-allocate for efficiency
     
-    for (unsigned char c : input) {
+    // Use range-based for loop for better readability
+    for (const unsigned char c : input) {
         wide_string += static_cast<wchar_t>(c);
     }
     
@@ -177,7 +180,7 @@ std::wstring CharsetConverter::from_bytes_iso8859_15(const std::string& input) c
     std::wstring wide_string;
     wide_string.reserve(input.length()); // Pre-allocate for efficiency
     
-    for (unsigned char c : input) {
+    for (const unsigned char c : input) {
         switch (c) {
             case EURO_SIGN: // euro sign
                 wide_string += 0x20AC;
@@ -219,7 +222,7 @@ std::wstring CharsetConverter::from_bytes_windows_1252(const std::string& input)
     std::wstring wide_string;
     wide_string.reserve(input.length()); // Pre-allocate for efficiency
     
-    for (unsigned char c : input) {
+    for (const unsigned char c : input) {
         if (c >= 0x80 && c <= 0x9F) {
             wide_string += WINDOWS_1252_TABLE[c - 0x80];
         } else {

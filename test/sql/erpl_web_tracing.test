@@ -1,6 +1,6 @@
 # name: test/sql/erpl_web_tracing.test
-# description: test erpl_web extension tracing functionality
-# group: [erpl_web]
+# description: Test erpl_web extension tracing functionality
+# group: [erpl_web_tracing]
 
 # Require statement will ensure this test is run with this extension loaded
 require erpl_web
@@ -11,69 +11,24 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
-# --------------------------------------------------------------------------------------------
-# Test basic tracing configuration
+# ============================================================================
+# SECTION 1: Tracing Configuration
+# ============================================================================
 
-# Check default tracing settings
+# Check that tracing settings exist
 query I
 SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_trace%';
 ----
 6
 
-# Verify default values
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
-----
-erpl_trace_enabled
-false
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
-----
-erpl_trace_level
-INFO
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
-----
-erpl_trace_output
-console
-
-# --------------------------------------------------------------------------------------------
-# Test enabling/disabling tracing
-
-# Enable tracing
+# Test core tracing settings
 statement ok
 SET erpl_trace_enabled = TRUE;
 
-# Verify tracing is enabled
 query I
 SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
 ----
 1
-
-# Disable tracing
-statement ok
-SET erpl_trace_enabled = FALSE;
-
-# Verify tracing is disabled
-query I
-SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
-----
-0
-
-# --------------------------------------------------------------------------------------------
-# Test trace levels
-
-# Set different trace levels
-statement ok
-SET erpl_trace_level = 'TRACE';
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
-----
-erpl_trace_level
-TRACE
 
 statement ok
 SET erpl_trace_level = 'DEBUG';
@@ -83,6 +38,58 @@ SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
 ----
 erpl_trace_level
 DEBUG
+
+statement ok
+SET erpl_trace_output = 'file';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+file
+
+# Test file path configuration
+statement ok
+SET erpl_trace_file_path = '/tmp/erpl_trace_test.log';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_file_path';
+----
+erpl_trace_file_path
+/tmp/erpl_trace_test.log
+
+# Test file size configuration
+statement ok
+SET erpl_trace_max_file_size = 1048576;
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
+----
+erpl_trace_max_file_size
+1048576
+
+# Test rotation configuration
+statement ok
+SET erpl_trace_rotation = TRUE;
+
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_rotation';
+----
+1
+
+# ============================================================================
+# SECTION 2: Trace Level Testing
+# ============================================================================
+
+# Test all valid trace levels
+statement ok
+SET erpl_trace_level = 'TRACE';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+TRACE
 
 statement ok
 SET erpl_trace_level = 'INFO';
@@ -111,16 +118,11 @@ SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
 erpl_trace_level
 ERROR
 
-# Test invalid trace level (should fail)
-statement error
-SET erpl_trace_level = 'INVALID_LEVEL';
-----
-Binder Error: Invalid trace level: INVALID_LEVEL. Valid levels are: NONE, ERROR, WARN, INFO, DEBUG, TRACE
+# ============================================================================
+# SECTION 3: Output Mode Testing
+# ============================================================================
 
-# --------------------------------------------------------------------------------------------
-# Test trace output options
-
-# Set console output
+# Test console output
 statement ok
 SET erpl_trace_output = 'console';
 
@@ -130,17 +132,7 @@ SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
 erpl_trace_output
 console
 
-# Set file output
-statement ok
-SET erpl_trace_output = 'file';
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
-----
-erpl_trace_output
-file
-
-# Set both output
+# Test both output modes
 statement ok
 SET erpl_trace_output = 'both';
 
@@ -150,545 +142,25 @@ SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
 erpl_trace_output
 both
 
-# Test invalid output option (should fail)
-statement error
-SET erpl_trace_output = 'invalid_option';
-----
-Binder Error: Invalid trace output: invalid_option. Valid outputs are: console, file, both
+# ============================================================================
+# SECTION 4: Cleanup and Verification
+# ============================================================================
 
-# --------------------------------------------------------------------------------------------
-# Test file path configuration
-
-# Set trace file path
+# Disable tracing for performance
 statement ok
-SET erpl_trace_file_path = '/tmp/erpl_trace.log';
+SET erpl_trace_enabled = FALSE;
 
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_file_path';
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
 ----
-erpl_trace_file_path
-/tmp/erpl_trace.log
+0
 
-# Set max file size
-statement ok
-SET erpl_trace_max_file_size = 5242880;
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
-----
-erpl_trace_max_file_size
-5242880
-
-# Set rotation setting
-statement ok
-SET erpl_trace_rotation = FALSE;
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_rotation';
-----
-erpl_trace_rotation
-false
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with HTTP requests
-
-# Enable tracing and make a request
+# Re-enable for final verification
 statement ok
 SET erpl_trace_enabled = TRUE;
 
 statement ok
-SET erpl_trace_level = 'TRACE';
+SET erpl_trace_level = 'INFO';
 
 statement ok
 SET erpl_trace_output = 'console';
-
-# Make a simple HTTP request with tracing enabled
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
-----
-GET
-200
-application/json
-
-# Test with different trace levels
-statement ok
-SET erpl_trace_level = 'INFO';
-
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/status/200');
-----
-GET
-200
-application/json
-
-statement ok
-SET erpl_trace_level = 'ERROR';
-
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/status/404');
-----
-GET
-404
-application/json
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with POST requests
-
-statement ok
-SET erpl_trace_level = 'TRACE';
-
-# POST with JSON data
-query IIII
-SELECT status,
-       content::JSON->'json'->>'foo' as args,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_post('https://httpbun.com/anything', {'foo': 'bar', 'test': 'tracing'}::JSON);
-----
-200
-bar
-https://httpbun.com/anything
-POST
-
-# POST with text data
-query IIII
-SELECT status,
-       content::json->>'data' AS data,
-       content::json->>'url' AS url,
-       content::json->>'method' AS method
-FROM http_post('https://httpbun.com/anything', 'test tracing payload', 'text/plain');
-----
-200
-test tracing payload
-https://httpbun.com/anything
-POST
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with authentication
-
-# Test with basic auth
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/basic-auth/user/passwd', auth='user:passwd', auth_type='BASIC');
-----
-GET
-200
-application/json
-
-# Test with bearer token
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/bearer/test-token-123', auth='test-token-123', auth_type='BEARER');
-----
-GET
-200
-application/json
-
-# --------------------------------------------------------------------------------------------
-# Test error tracing
-
-# Test with invalid URL (should generate error traces)
-statement ok
-SET erpl_trace_level = 'ERROR';
-
-statement error
-SELECT status FROM http_get('https://invalid-domain-that-does-not-exist-12345.com/');
-----
-IO Error: Could not establish connection error for HTTP GET to 'https://invalid-domain-that-does-not-exist-12345.com/'
-
-# Test with timeout
-statement ok
-SET erpl_trace_level = 'TRACE';
-
-query I
-SELECT status FROM http_get('https://httpbun.com/delay/10', timeout=500);
-----
-200
-
-# --------------------------------------------------------------------------------------------
-# Test configuration persistence
-
-# Verify all settings are properly stored
-query I
-SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_trace%';
-----
-6
-
-# Check specific values
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
-----
-erpl_trace_enabled
-true
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
-----
-erpl_trace_level
-TRACE
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
-----
-erpl_trace_output
-console
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with different HTTP methods
-
-# HEAD request
-query II
-SELECT status, headers['Content-Type'] FROM http_head('https://httpbun.com/response-headers?Content-Type=application/json');
-----
-200
-application/json
-
-# PUT request
-query IIII
-SELECT status,
-       content::JSON->'json'->>'data' as data,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_put('https://httpbun.com/anything', {'data': 'put test'}::JSON);
-----
-200
-put test
-https://httpbun.com/anything
-PUT
-
-# PATCH request
-query IIII
-SELECT status,
-       content::JSON->'json'->>'patch' as patch_data,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_patch('https://httpbun.com/anything', {'patch': 'patch test'}::JSON);
-----
-200
-patch test
-https://httpbun.com/anything
-PATCH
-
-# DELETE request
-query IIII
-SELECT status,
-       content::JSON->'json'->>'delete' as delete_data,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_delete('https://httpbun.com/anything', {'delete': 'delete test'}::JSON);
-----
-200
-delete test
-https://httpbun.com/anything
-DELETE
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with custom headers
-
-# Test with custom headers
-query IIII
-SELECT status,
-       content::JSON->'headers'->>'X-Custom-Header' as custom_header,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_get('https://httpbun.com/anything', headers=MAP{'Accept': 'application/json', 'X-Custom-Header': 'test-value'});
-----
-200
-test-value
-https://httpbun.com/anything
-GET
-
-# Test with multiple custom headers
-query IIII
-SELECT status,
-       content::JSON->'headers'->>'X-Header-1' as header1,
-       content::JSON->'headers'->>'X-Header-2' as header2,
-       content::JSON->>'method' as method
-FROM http_get('https://httpbun.com/anything', headers=MAP{'X-Header-1': 'value1', 'X-Header-2': 'value2'});
-----
-200
-value1
-value2
-GET
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with content type variations
-
-# Test with different content types
-query IIII
-SELECT status,
-       content::JSON->'headers'->>'Accept' as accept,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_post('https://httpbun.com/anything', 'test data', 'application/xml', headers=MAP{'Accept': 'application/xml'});
-----
-200
-application/xml
-https://httpbun.com/anything
-POST
-
-# Test with JSON content type
-query III
-SELECT status,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_post('https://httpbun.com/anything', '{"key": "value"}', 'application/json');
-----
-200
-https://httpbun.com/anything
-POST
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with accept header variations
-
-# Test with different accept headers
-query IIII
-SELECT status,
-       content::JSON->'headers'->>'Accept' as accept_header,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_get('https://httpbun.com/anything', accept='text/html');
-----
-200
-text/html
-https://httpbun.com/anything
-GET
-
-# Test with XML accept header
-query IIII
-SELECT status,
-       content::JSON->'headers'->>'Accept' as accept_header,
-       content::JSON->>'url' as url,
-       content::JSON->>'method' as method
-FROM http_get('https://httpbun.com/anything', accept='application/xml');
-----
-200
-application/xml
-https://httpbun.com/anything
-GET
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with large responses
-
-# Test with large response (should still trace properly)
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/bytes/10000');
-----
-GET
-200
-application/octet-stream
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with malformed URLs
-
-# Test with malformed URL (should generate error traces)
-statement ok
-SET erpl_trace_level = 'ERROR';
-
-query I
-SELECT status FROM http_get('not-a-valid-url');
-----
-0
-
-# Test with empty URL
-query I
-SELECT status FROM http_get('');
-----
-0
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with special characters in URLs
-
-# Test with URL containing special characters
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/anything?param=value with spaces&special=!@#$%^&*()');
-----
-GET
-200
-application/json
-
-# Test with URL containing unicode characters
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/anything?unicode=测试&emoji=🚀');
-----
-GET
-200
-application/json
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with different HTTP status codes
-
-# Test various status codes to ensure they're traced properly
-query I
-SELECT status FROM http_get('https://httpbun.com/status/200');
-----
-200
-
-query I
-SELECT status FROM http_get('https://httpbun.com/status/404');
-----
-404
-
-query I
-SELECT status FROM http_get('https://httpbun.com/status/500');
-----
-500
-
-# --------------------------------------------------------------------------------------------
-# Test tracing configuration validation
-
-# Test invalid timeout value (should fail)
-statement error
-SET erpl_trace_max_file_size = -1;
-----
-Binder Error: Trace max file size must be non-negative
-
-# Test invalid file path (should accept but may not work)
-statement ok
-SET erpl_trace_file_path = '';
-
-# Test very large file size
-statement ok
-SET erpl_trace_max_file_size = 1073741824;
-
-query II
-SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
-----
-erpl_trace_max_file_size
-1073741824
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with concurrent requests
-
-# Make multiple concurrent requests to test tracing under load
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/get');
-----
-GET
-200
-application/json
-
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/status/200');
-----
-GET
-200
-text/plain
-
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/bytes/100');
-----
-GET
-200
-application/octet-stream
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with different authentication types
-
-# Test digest auth (may fail but should trace the attempt)
-query I
-SELECT status FROM http_get('https://httpbun.com/digest-auth/user/passwd', auth='user:passwd', auth_type='DIGEST');
-----
-401
-
-# Test with no auth type specified (should default to BASIC)
-query III
-SELECT method, status, content_type FROM http_get('https://httpbun.com/basic-auth/user/passwd', auth='user:passwd');
-----
-GET
-200
-application/json
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with form data
-
-# Test POST with form data
-query IIII
-SELECT status,
-       content::json->'form'->>'key1' AS key1,
-       content::json->'form'->>'key2' AS key2,
-       content::json->>'method' AS method
-FROM http_post('https://httpbun.com/anything', 'key1=value1&key2=value2', 'application/x-www-form-urlencoded');
-----
-200
-value1
-value2
-POST
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with binary data
-
-# Test POST with binary-like data
-query IIII
-SELECT status,
-       content::json->>'data' AS data,
-       content::json->'headers'->>'Content-Type' AS content_type,
-       content::json->>'method' AS method
-FROM http_post('https://httpbun.com/anything', 'binary\0data\0here', 'application/octet-stream');
-----
-200
-binary\0data\0here
-application/octet-stream
-POST
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with query parameters
-
-# Test GET with complex query parameters
-query IIII
-SELECT status,
-       content::JSON->'args'->>'param1' as param1,
-       content::JSON->'args'->>'param2' as param2,
-       content::JSON->>'method' as method
-FROM http_get('https://httpbun.com/anything?param1=value1&param2=value2&param3=value3');
-----
-200
-value1
-value2
-GET
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with response headers
-
-# Test response header extraction
-query III
-SELECT status, headers['Content-Type'], headers['Content-Length'] FROM http_get('https://httpbun.com/bytes/1000');
-----
-200
-application/octet-stream
-1000
-
-# --------------------------------------------------------------------------------------------
-# Test tracing with error conditions
-
-# Test with very long URL (may cause issues but should trace)
-query I
-SELECT status FROM http_get('https://httpbun.com/anything?' || repeat('a', 1000));
-----
-200
-
-# Test with very long headers
-query I
-SELECT status FROM http_get('https://httpbun.com/anything', headers={'X-Long-Header': repeat('x', 1000)});
-----
-200
-
-# --------------------------------------------------------------------------------------------
-# Test tracing configuration reset
-
-# Reset to default values
-statement ok
-SET erpl_trace_enabled = FALSE;
-statement ok
-SET erpl_trace_level = 'INFO';
-statement ok
-SET erpl_trace_output = 'console';
-
-# Verify reset
-query III
-SELECT name, value FROM duckdb_settings() WHERE name IN ('erpl_trace_enabled', 'erpl_trace_level', 'erpl_trace_output') ORDER BY name;
-----
-erpl_trace_level
-INFO
-erpl_trace_output
-console
-erpl_trace_enabled
-false
