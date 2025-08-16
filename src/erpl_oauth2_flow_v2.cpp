@@ -18,10 +18,29 @@
 #include <string>
 #include <condition_variable>
 #include <memory>
+#include <sstream>
 
 using namespace duckdb_yyjson;
 
 namespace erpl_web {
+
+// Minimal URL encoder for query/form values
+static std::string UrlEncode(const std::string &value) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+    for (unsigned char c : value) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else if (c == ' ') {
+            escaped << '+';
+        } else {
+            escaped << '%' << std::uppercase << std::setw(2) << int(c) << std::nouppercase;
+        }
+    }
+    return escaped.str();
+}
 
 OAuth2FlowV2::OAuth2FlowV2() 
     : server_(std::make_unique<OAuth2Server>(65000)) // Default port
@@ -67,6 +86,17 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     
     // Open browser for user authorization
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authorization");
+    
+    // Enhanced terminal UI for OAuth2 flow
+    std::cout << "\n🔐  OAuth2 Authorization Required" << std::endl;
+    std::cout << "=================================" << std::endl;
+    std::cout << "🌐  Opening browser for authentication..." << std::endl;
+    std::cout << "📋  If browser doesn't open automatically, click this link:" << std::endl;
+    std::cout << "🔗  " << auth_url << std::endl;
+    std::cout << "⏳  Waiting for authorization callback..." << std::endl;
+    std::cout << "⏰  Timeout: 60 seconds" << std::endl;
+    std::cout << std::endl;
+    
     OpenBrowser(auth_url);
     
     // Wait for authorization code with timeout
@@ -75,10 +105,24 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     try {
         std::string auth_code = server_->StartAndWaitForCode(state, 0);
         ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code: " + auth_code.substr(0, 10) + "...");
+        
+        // Success message
+        std::cout << "✅  Authorization successful!" << std::endl;
+        std::cout << "🔑  Received authorization code" << std::endl;
+        std::cout << "🔄  Exchanging code for tokens..." << std::endl;
+        std::cout << std::endl;
+        
         return auth_code;
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("OAUTH2_FLOW", "Error getting authorization code: " + std::string(e.what()));
+        
+        // Error message
+        std::cout << "❌  Authorization failed!" << std::endl;
+        std::cout << "💥  Error: " << e.what() << std::endl;
+        std::cout << "💡  Please try again or check your OAuth2 configuration" << std::endl;
+        std::cout << std::endl;
+        
         throw;
     }
 }
@@ -126,7 +170,13 @@ OAuth2Tokens OAuth2FlowV2::ExchangeCodeForTokens(
         ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange response status: " + std::to_string(response->Code()));
         ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange response body: " + response->Content());
         
-        if (response->Code() != 200) {
+        if (response->Code() == 200) {
+            // Success message
+            std::cout << "🎉  Token exchange successful!" << std::endl;
+            std::cout << "🔐  Access token received" << std::endl;
+            std::cout << "💾  Tokens stored securely" << std::endl;
+            std::cout << std::endl;
+        } else {
             throw std::runtime_error("Token exchange failed with status " + std::to_string(response->Code()) + 
                                    ": " + response->Content());
         }
@@ -151,14 +201,14 @@ std::string OAuth2FlowV2::BuildTokenExchangePostData(
     std::ostringstream post_data;
     
     post_data << "grant_type=authorization_code"
-              << "&code=" << authorization_code
-              << "&redirect_uri=" << config.redirect_uri
-              << "&code_verifier=" << code_verifier;
+              << "&code=" << UrlEncode(authorization_code)
+              << "&redirect_uri=" << UrlEncode(config.redirect_uri)
+              << "&code_verifier=" << UrlEncode(code_verifier);
     
     // Add client credentials for custom clients
     if (config.GetClientType() == OAuth2ClientType::custom) {
-        post_data << "&client_id=" << config.client_id
-                  << "&client_secret=" << config.client_secret;
+        post_data << "&client_id=" << UrlEncode(config.client_id)
+                  << "&client_secret=" << UrlEncode(config.client_secret);
     }
     
     return post_data.str();
@@ -305,11 +355,11 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
     std::ostringstream auth_url;
     auth_url << config.GetAuthorizationUrl()
              << "?response_type=code"
-             << "&client_id=" << config.client_id
-             << "&redirect_uri=" << config.redirect_uri
-             << "&scope=" << config.scope
-             << "&state=" << state
-             << "&code_challenge=" << code_challenge
+             << "&client_id=" << UrlEncode(config.client_id)
+             << "&redirect_uri=" << UrlEncode(config.redirect_uri)
+             << "&scope=" << UrlEncode(config.scope)
+             << "&state=" << UrlEncode(state)
+             << "&code_challenge=" << UrlEncode(code_challenge)
              << "&code_challenge_method=S256";
     
     std::string url = auth_url.str();

@@ -107,6 +107,74 @@ std::string DatasphereUrlBuilder::BuildAnalyticalUrl(const std::string& tenant, 
     return ss.str();
 }
 
+// New DWAAS core API methods
+std::string DatasphereUrlBuilder::BuildDwaasCoreUrl(const std::string& tenant_name, 
+                                                    const std::string& data_center, 
+                                                    const std::string& endpoint)
+{
+    std::stringstream ss;
+    ss << "https://" << tenant_name << "." << data_center << ".hcs.cloud.sap/dwaas-core/api/v1/" << endpoint;
+    return ss.str();
+}
+
+std::string DatasphereUrlBuilder::BuildDwaasCoreSpacesUrl(const std::string& tenant_name, 
+                                                          const std::string& data_center)
+{
+    return BuildDwaasCoreUrl(tenant_name, data_center, "spaces");
+}
+
+std::string DatasphereUrlBuilder::BuildDwaasCoreSpaceObjectsUrl(const std::string& tenant_name,
+                                                                const std::string& data_center,
+                                                                const std::string& space_id,
+                                                                const std::string& object_type)
+{
+    return BuildDwaasCoreUrl(tenant_name, data_center, "spaces/" + space_id + "/" + object_type);
+}
+
+std::string DatasphereUrlBuilder::BuildDwaasCoreObjectUrl(const std::string& tenant_name,
+                                                          const std::string& data_center,
+                                                          const std::string& space_id,
+                                                          const std::string& object_type,
+                                                          const std::string& object_id)
+{
+    return BuildDwaasCoreUrl(tenant_name, data_center, "spaces/" + space_id + "/" + object_type + "/" + object_id);
+}
+
+// New catalog endpoint methods
+std::string DatasphereUrlBuilder::BuildCatalogSpacesUrl(const std::string& tenant_name, 
+                                                        const std::string& data_center)
+{
+    return BuildCatalogUrl(tenant_name, data_center) + "/spaces";
+}
+
+std::string DatasphereUrlBuilder::BuildCatalogAssetsUrl(const std::string& tenant_name, 
+                                                        const std::string& data_center)
+{
+    return BuildCatalogUrl(tenant_name, data_center) + "/assets";
+}
+
+std::string DatasphereUrlBuilder::BuildCatalogAssetsFilteredUrl(const std::string& tenant_name, 
+                                                               const std::string& data_center, 
+                                                               const std::string& space_id)
+{
+    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=spaceName eq '" + space_id + "'&$select=name,technicalName,assetAnalyticalMetadataUrl,assetRelationalMetadataUrl";
+}
+
+std::string DatasphereUrlBuilder::BuildCatalogAssetFilteredUrl(const std::string& tenant_name, 
+                                                              const std::string& data_center, 
+                                                              const std::string& space_id, 
+                                                              const std::string& asset_id)
+{
+    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=name eq '" + asset_id + "' and spaceName eq '" + space_id + "'";
+}
+
+std::string DatasphereUrlBuilder::BuildSpaceFilteredUrl(const std::string& tenant_name, 
+                                                        const std::string& data_center, 
+                                                        const std::string& space_id)
+{
+    return BuildCatalogSpacesUrl(tenant_name, data_center) + "?$filter=name eq '" + space_id + "'";
+}
+
 // DatasphereAuthParams implementation
 bool DatasphereAuthParams::IsTokenExpired() const {
     if (!token_expiry.has_value()) {

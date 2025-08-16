@@ -50,6 +50,7 @@ set(EXTENSION_SOURCES
     src/erpl_datasphere_client.cpp
     src/erpl_datasphere_catalog.cpp
     src/erpl_datasphere_asset.cpp
+    src/erpl_datasphere_types.cpp
     src/erpl_oauth2_types.cpp
     src/erpl_datasphere_browser.cpp
     src/erpl_datasphere_local_server.cpp

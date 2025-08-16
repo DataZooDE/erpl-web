@@ -30,7 +30,15 @@ struct OAuth2Config {
     bool custom_client;          // Whether this is a custom OAuth client
     
     // Constructor to properly initialize fields
-    OAuth2Config() : authorization_flow(GrantType::authorization_code), custom_client(false) {}
+    OAuth2Config() : 
+        tenant_name(""), 
+        data_center(""), 
+        client_id(""), 
+        client_secret(""), 
+        scope(""), 
+        redirect_uri(""), 
+        authorization_flow(GrantType::authorization_code), 
+        custom_client(false) {}
     
     // Get authorization URL
     std::string GetAuthorizationUrl() const;

@@ -32,13 +32,8 @@ void DatasphereAssetBindData::InitializeClient() {
         // Get OAuth2 token for authentication
         OAuth2Config config;
         config.tenant_name = "ak-datasphere-prd";
-        config.data_center = "eu10";
-        config.client_id = "sb-3ba2fc19-884e-47fe-a00f-7725136b6eae!b493973|client!b3650";
-        config.client_secret = "f969011c-4926-4051-ac2a-c34d971ec4c9$Fq8IR4LMIJH-B4qDOXnTn1GjSSqs1UvR7T5szVkhT88=";
-        config.scope = "default";
-        config.redirect_uri = "http://localhost:65000/callback";
-        config.authorization_flow = GrantType::authorization_code;
-        config.custom_client = true;
+        // Load OAuth2 settings exclusively from DuckDB secret, not hardcoded
+        // The code path here should typically be avoided for catalog flows, but keep safe defaults empty
         
         // Get OAuth2 token using new clean architecture
         OAuth2FlowV2 oauth2_flow;

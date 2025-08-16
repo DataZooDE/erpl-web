@@ -307,6 +307,8 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
     auto client_secret_val = kv_secret->secret_map.find("client_secret");
     auto tenant_name_val = kv_secret->secret_map.find("tenant_name");
     auto data_center_val = kv_secret->secret_map.find("data_center");
+    auto scope_val = kv_secret->secret_map.find("scope");
+    auto redirect_uri_val = kv_secret->secret_map.find("redirect_uri");
     
     if (client_id_val == kv_secret->secret_map.end()) {
         throw duckdb::InvalidInputException("'client_id' not found in 'datasphere' secret");
@@ -327,11 +329,13 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
     config.client_secret = client_secret_val->second.ToString();
     config.tenant_name = tenant_name_val->second.ToString();
     config.data_center = data_center_val->second.ToString();
+    // Optional fields with sensible defaults
+    config.scope = (scope_val != kv_secret->secret_map.end()) ? scope_val->second.ToString() : std::string("default");
+    config.redirect_uri = (redirect_uri_val != kv_secret->secret_map.end()) ? redirect_uri_val->second.ToString() : std::string("http://localhost:65000");
     
-    // Perform the OAuth2 flow
-            // Use the new clean OAuth2 implementation
-        OAuth2FlowV2 oauth2_flow;
-        return oauth2_flow.ExecuteFlow(config);
+    // Perform the OAuth2 flow using the clean implementation
+    OAuth2FlowV2 oauth2_flow;
+    return oauth2_flow.ExecuteFlow(config);
 }
 
 } // namespace erpl_web
