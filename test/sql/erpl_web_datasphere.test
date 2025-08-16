@@ -39,7 +39,7 @@ SELECT 'Testing datasphere_asset function registration...' as status;
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%';
 ----
-10
+11
 
 # List all Datasphere functions
 query T
@@ -53,6 +53,7 @@ datasphere_describe_asset
 datasphere_describe_space
 datasphere_relational
 datasphere_relational
+datasphere_show_assets
 datasphere_show_assets
 datasphere_show_spaces
 
@@ -120,4 +121,4 @@ SELECT 'Testing Datasphere function return type definitions...' as status;
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%';
 ----
-10
+11
