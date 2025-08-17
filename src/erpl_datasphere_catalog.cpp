@@ -76,7 +76,7 @@ DatasphereShowBindData::DatasphereShowBindData(std::shared_ptr<ODataEntitySetCli
 std::vector<std::string> DatasphereShowBindData::GetResultNames(bool all_columns) {
     if (resource_type == "assets") {
         // Return asset-specific column names based on AssetEntityV1 schema
-        return {"name", "spaceName", "label", "supportsAnalyticalQueries"};
+        return {"name", "space_name", "label", "supports_analytical_queries"};
     } else {
         // Return space-specific column names (default)
     return {"name", "label", "description", "created_at", "modified_at"};
@@ -88,9 +88,9 @@ std::vector<duckdb::LogicalType> DatasphereShowBindData::GetResultTypes(bool all
         // Return asset-specific column types based on AssetEntityV1 schema
         return {
             duckdb::LogicalType::VARCHAR,  // name
-            duckdb::LogicalType::VARCHAR,  // spaceName
-            duckdb::LogicalType::VARCHAR,  // label
-            duckdb::LogicalType::VARCHAR   // supportsAnalyticalQueries
+                    duckdb::LogicalType::VARCHAR,  // space_name
+        duckdb::LogicalType::VARCHAR,  // label
+        duckdb::LogicalType::VARCHAR   // supports_analytical_queries
         };
     } else {
         // Return space-specific column types (default)
@@ -129,7 +129,7 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         auto &asset_row = resource_data[0];
         std::string relational_metadata_url = asset_row[3].ToString(); // assetRelationalMetadataUrl
         std::string analytical_metadata_url = asset_row[6].ToString(); // assetAnalyticalMetadataUrl
-        std::string supports_analytical = asset_row[7].ToString(); // supportsAnalyticalQueries
+        std::string supports_analytical = asset_row[7].ToString(); // supports_analytical_queries
         
         // Extract tenant and data center from the analytical metadata URL if available
         std::string tenant_name = "unknown";
@@ -801,13 +801,13 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 // We found the asset in DWAAS core API, create basic asset info with all 15 fields
                 std::vector<duckdb::Value> asset_row;
                 asset_row.push_back(duckdb::Value(resource_id)); // name (0)
-                asset_row.push_back(duckdb::Value(space_id)); // spaceName (1)
+                asset_row.push_back(duckdb::Value(space_id)); // space_name (1)
                 asset_row.push_back(duckdb::Value(resource_id)); // label (2) - use name as label for now
                 asset_row.push_back(duckdb::Value("")); // assetRelationalMetadataUrl (3)
                 asset_row.push_back(duckdb::Value("")); // assetRelationalDataUrl (4)
                 asset_row.push_back(duckdb::Value("")); // assetAnalyticalMetadataUrl (5)
                 asset_row.push_back(duckdb::Value("")); // assetAnalyticalDataUrl (6)
-                asset_row.push_back(duckdb::Value("false")); // supportsAnalyticalQueries (7)
+                asset_row.push_back(duckdb::Value("false")); // supports_analytical_queries (7)
                 
                 // Extended fields (8-14) - initialize with proper types
                 asset_row.push_back(duckdb::Value("")); // odataContext (8)
@@ -826,20 +826,20 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 asset_row.push_back(duckdb::Value::STRUCT(empty_relational_schema)); // relationalSchema (9)
                 asset_row.push_back(duckdb::Value::STRUCT(empty_analytical_schema)); // analyticalSchema (10)
                 
-                asset_row.push_back(duckdb::Value("false")); // hasRelationalAccess (11)
-                asset_row.push_back(duckdb::Value("false")); // hasAnalyticalAccess (12)
+                asset_row.push_back(duckdb::Value("false")); // has_relational_access (11)
+                asset_row.push_back(duckdb::Value("false")); // has_analytical_access (12)
                 
                 // Determine asset type based on the endpoint that succeeded
                 std::string asset_type = "Unknown";
                 if (object_type == "analyticmodels" || object_type == "factmodels") {
                     asset_type = "Analytical";
-                    asset_row[7] = duckdb::Value("true"); // supportsAnalyticalQueries
-                    asset_row[12] = duckdb::Value("true"); // hasAnalyticalAccess
+                    asset_row[7] = duckdb::Value("true"); // supports_analytical_queries
+                    asset_row[12] = duckdb::Value("true"); // has_analytical_access
                 } else if (object_type == "localtables" || object_type == "remotetables" || object_type == "views") {
                     asset_type = "Relational";
-                    asset_row[11] = duckdb::Value("true"); // hasRelationalAccess
+                    asset_row[11] = duckdb::Value("true"); // has_relational_access
                 }
-                asset_row.push_back(duckdb::Value(asset_type)); // assetType (13)
+                asset_row.push_back(duckdb::Value(asset_type)); // asset_type (13)
                 
                 asset_row.push_back(duckdb::Value("")); // odataMetadataEtag (14)
                 
@@ -916,9 +916,9 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 auto catalog_response = catalog_client->Get();
                 if (catalog_response) {
                     // Parse the catalog response to get basic asset info
-                    std::vector<std::string> catalog_names = {"name", "spaceName", "label", "assetRelationalMetadataUrl", 
-                                                            "assetRelationalDataUrl", "assetAnalyticalMetadataUrl", 
-                                                            "assetAnalyticalDataUrl", "supportsAnalyticalQueries"};
+                    std::vector<std::string> catalog_names = {"name", "space_name", "label", "asset_relational_metadata_url", 
+                                                            "asset_relational_data_url", "asset_analytical_metadata_url", 
+                                                            "asset_analytical_data_url", "supports_analytical_queries"};
                     std::vector<duckdb::LogicalType> catalog_types = {
                         duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
                         duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
@@ -1024,10 +1024,10 @@ std::vector<std::string> erpl_web::DatasphereDescribeBindData::GetColumnNames() 
         return {"name", "label"};
     } else if (resource_type == "asset") {
         // AssetEntityV1 schema: 8 fields + 7 extended metadata fields
-        return {"name", "spaceName", "label", "assetRelationalMetadataUrl", "assetRelationalDataUrl", 
-                "assetAnalyticalMetadataUrl", "assetAnalyticalDataUrl", "supportsAnalyticalQueries",
-                "odataContext", "relationalSchema", "analyticalSchema", "hasRelationalAccess", 
-                "hasAnalyticalAccess", "assetType"};
+        return {"name", "space_name", "label", "asset_relational_metadata_url", "asset_relational_data_url", 
+                "asset_analytical_metadata_url", "asset_analytical_data_url", "supports_analytical_queries",
+                "odata_context", "relational_schema", "analytical_schema", "has_relational_access", 
+                "has_analytical_access", "asset_type"};
     }
     return {};
 }
@@ -1125,26 +1125,14 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
                                                 {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))}}),
                     duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
                     duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
-    names = {"name", "spaceName", "label", "assetRelationalMetadataUrl", "assetRelationalDataUrl", 
-             "assetAnalyticalMetadataUrl", "assetAnalyticalDataUrl", "supportsAnalyticalQueries",
-             "odataContext", "relationalSchema", "analyticalSchema", "hasRelationalAccess", 
-             "hasAnalyticalAccess", "assetType", "odataMetadataEtag"};
+            names = {"name", "space_name", "label", "asset_relational_metadata_url", "asset_relational_data_url",
+                "asset_analytical_metadata_url", "asset_analytical_data_url", "supports_analytical_queries",
+                "odata_context", "relational_schema", "analytical_schema", "has_relational_access",
+                "has_analytical_access", "asset_type", "odata_metadata_etag"};
     
     // Get OAuth2 token using centralized function
-    std::cout << "\n🔍  Calling centralized OAuth2 functions..." << std::endl;
     OAuth2Config config = GetDatasphereOAuth2Config();
-    std::cout << "   Config created, redirect_uri: " << config.redirect_uri << std::endl;
     std::string access_token = GetOrRefreshDatasphereToken(context, config);
-    std::cout << "   Token obtained, redirect_uri: " << config.redirect_uri << std::endl;
-    
-    // Debug: Log the OAuth2 config before executing the flow
-    std::cout << "\n🔧  OAuth2 Configuration Debug:" << std::endl;
-    std::cout << "   Client ID: " << config.client_id << std::endl;
-    std::cout << "   Redirect URI: " << config.redirect_uri << std::endl;
-    std::cout << "   Scope: " << config.scope << std::endl;
-    std::cout << "   Tenant: " << config.tenant_name << std::endl;
-    std::cout << "   Data Center: " << config.data_center << std::endl;
-    std::cout << std::endl;
     
     // Create HTTP client and OData client for asset endpoint
     auto http_client = std::make_shared<HttpClient>();
@@ -1261,7 +1249,7 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
     if (bind_data.resource_data.size() > 0 && bind_data.resource_data[0].size() >= 15) {
         // Basic asset fields (8 fields)
         output.SetValue(0, 0, bind_data.resource_data[0][0]); // name
-        output.SetValue(1, 0, bind_data.resource_data[0][1]); // spaceName
+        output.SetValue(1, 0, bind_data.resource_data[0][1]); // space_name
         output.SetValue(2, 0, bind_data.resource_data[0][2]); // label
         output.SetValue(3, 0, bind_data.resource_data[0][3]); // assetRelationalMetadataUrl
         output.SetValue(4, 0, bind_data.resource_data[0][4]); // assetRelationalDataUrl

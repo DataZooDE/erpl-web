@@ -3,6 +3,7 @@
 #include <sstream>
 #include <vector>
 #include <numeric>
+#include <cmath>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -721,7 +722,8 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 		int status;
 
         try {
-            auto params = HttpParams();
+            // Use the configured HTTP parameters rather than default-constructing new ones
+            auto params = this->http_params;
             auto client = CreateHttplibClient(params, request.url.ToSchemeHostAndPort());
             auto res = request.Execute(*client);
             err = res.error();
@@ -854,8 +856,9 @@ bool HttpCache::IsInCache(const HttpRequest& request) const {
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto it = cache.find(cache_key);
     auto found = (it != cache.end());
-    auto expired = (found && it->second.expiry >= std::chrono::steady_clock::now());
-    return found && !expired;
+    auto now = std::chrono::steady_clock::now();
+    bool valid = found && it->second.expiry > now;
+    return valid;
 }
 
 void HttpCache::GarbageCollection() {

@@ -1,5 +1,5 @@
 #include "erpl_datasphere_local_server.hpp"
-#include <iostream>
+#include "erpl_tracing.hpp"
 #include <sstream>
 #include <algorithm>
 #include <thread>
@@ -8,7 +8,7 @@
 namespace erpl_web {
 
 DatasphereLocalServer::DatasphereLocalServer(int port) : port(port) {
-    std::cout << "Local server initialized on port " << port << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Initialized on port " + std::to_string(port));
 }
 
 DatasphereLocalServer::~DatasphereLocalServer() {
@@ -18,7 +18,7 @@ DatasphereLocalServer::~DatasphereLocalServer() {
 void DatasphereLocalServer::Start() {
     std::lock_guard<std::mutex> lock(server_mutex);
     is_running = true;
-    std::cout << "Local server started on port " << port << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Started on port " + std::to_string(port));
     
     // Simulate server functionality for now
     SimulateServer();
@@ -27,12 +27,12 @@ void DatasphereLocalServer::Start() {
 void DatasphereLocalServer::Stop() {
     std::lock_guard<std::mutex> lock(server_mutex);
     is_running = false;
-    std::cout << "Local server stopped" << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Stopped");
 }
 
 std::string DatasphereLocalServer::WaitForAuthorizationCode(const std::string& expected_state, 
                                                           std::chrono::seconds timeout) {
-    std::cout << "Waiting for authorization code with state: " << expected_state << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Waiting for authorization code with state: " + expected_state);
     
     // For now, simulate receiving a code after a short delay
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -42,7 +42,7 @@ std::string DatasphereLocalServer::WaitForAuthorizationCode(const std::string& e
     received_state = expected_state;
     code_received = true;
     
-    std::cout << "Received simulated authorization code: " << received_code << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Received simulated authorization code");
     return received_code;
 }
 
@@ -61,11 +61,11 @@ void DatasphereLocalServer::SetCallbackHandler(std::function<void(const std::str
 
 void DatasphereLocalServer::SetupRoutes() {
     // This would set up HTTP routes in a real implementation
-    std::cout << "Setting up server routes" << std::endl;
+    ERPL_TRACE_DEBUG("LOCAL_SERVER", "Setting up server routes");
 }
 
 void DatasphereLocalServer::HandleCallback(const std::string& code, const std::string& state) {
-    std::cout << "Handling callback with code: " << code << ", state: " << state << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", std::string("Handling callback with code: ") + code + ", state: " + state);
     
     if (callback_handler) {
         callback_handler(code, state);
@@ -77,7 +77,7 @@ void DatasphereLocalServer::HandleCallback(const std::string& code, const std::s
 }
 
 void DatasphereLocalServer::HandleErrorCallback(const std::string& error, const std::string& error_description) {
-    std::cout << "Handling error callback: " << error << " - " << error_description << std::endl;
+    ERPL_TRACE_WARN("LOCAL_SERVER", std::string("Handling error callback: ") + error + " - " + error_description);
 }
 
 std::string DatasphereLocalServer::GenerateCallbackHtml(bool success, const std::string& message) {
@@ -134,7 +134,7 @@ bool DatasphereLocalServer::ValidateCallback(const std::string& code, const std:
     }
     
     if (state != expected_state) {
-        std::cout << "State mismatch: expected " << expected_state << ", got " << state << std::endl;
+        ERPL_TRACE_WARN("LOCAL_SERVER", std::string("State mismatch: expected ") + expected_state + ", got " + state);
         return false;
     }
     
@@ -184,9 +184,9 @@ std::string DatasphereLocalServer::ExtractState(const std::string& url) {
 }
 
 void DatasphereLocalServer::SimulateServer() {
-    std::cout << "Simulating local HTTP server functionality" << std::endl;
-    std::cout << "Callback URL: " << GetCallbackUrl() << std::endl;
-    std::cout << "Server is ready to receive OAuth2 callbacks" << std::endl;
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Simulating local HTTP server functionality");
+    ERPL_TRACE_INFO("LOCAL_SERVER", std::string("Callback URL: ") + GetCallbackUrl());
+    ERPL_TRACE_INFO("LOCAL_SERVER", "Server is ready to receive OAuth2 callbacks");
 }
 
 } // namespace erpl_web

@@ -87,15 +87,11 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     // Open browser for user authorization
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authorization");
     
-    // Enhanced terminal UI for OAuth2 flow
-    std::cout << "\n🔐  OAuth2 Authorization Required" << std::endl;
-    std::cout << "=================================" << std::endl;
-    std::cout << "🌐  Opening browser for authentication..." << std::endl;
-    std::cout << "📋  If browser doesn't open automatically, click this link:" << std::endl;
-    std::cout << "🔗  " << auth_url << std::endl;
-    std::cout << "⏳  Waiting for authorization callback..." << std::endl;
-    std::cout << "⏰  Timeout: 60 seconds" << std::endl;
-    std::cout << std::endl;
+    // Log user guidance via tracer instead of console prints
+    ERPL_TRACE_INFO("OAUTH2_FLOW", "OAuth2 Authorization Required");
+    ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authentication...");
+    ERPL_TRACE_INFO("OAUTH2_FLOW", std::string("If the browser does not open automatically, open: ") + auth_url);
+    ERPL_TRACE_INFO("OAUTH2_FLOW", "Waiting for authorization callback (timeout: 60 seconds)");
     
     OpenBrowser(auth_url);
     
@@ -107,10 +103,8 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
         ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code: " + auth_code.substr(0, 10) + "...");
         
         // Success message
-        std::cout << "✅  Authorization successful!" << std::endl;
-        std::cout << "🔑  Received authorization code" << std::endl;
-        std::cout << "🔄  Exchanging code for tokens..." << std::endl;
-        std::cout << std::endl;
+        ERPL_TRACE_INFO("OAUTH2_FLOW", "Authorization successful, received authorization code");
+        ERPL_TRACE_INFO("OAUTH2_FLOW", "Exchanging code for tokens...");
         
         return auth_code;
         
@@ -118,10 +112,8 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
         ERPL_TRACE_ERROR("OAUTH2_FLOW", "Error getting authorization code: " + std::string(e.what()));
         
         // Error message
-        std::cout << "❌  Authorization failed!" << std::endl;
-        std::cout << "💥  Error: " << e.what() << std::endl;
-        std::cout << "💡  Please try again or check your OAuth2 configuration" << std::endl;
-        std::cout << std::endl;
+        ERPL_TRACE_ERROR("OAUTH2_FLOW", std::string("Authorization failed: ") + e.what());
+        ERPL_TRACE_INFO("OAUTH2_FLOW", "Please try again or check your OAuth2 configuration");
         
         throw;
     }
@@ -172,10 +164,7 @@ OAuth2Tokens OAuth2FlowV2::ExchangeCodeForTokens(
         
         if (response->Code() == 200) {
             // Success message
-            std::cout << "🎉  Token exchange successful!" << std::endl;
-            std::cout << "🔐  Access token received" << std::endl;
-            std::cout << "💾  Tokens stored securely" << std::endl;
-            std::cout << std::endl;
+            ERPL_TRACE_INFO("OAUTH2_FLOW", "Token exchange successful, access token received and stored");
         } else {
             throw std::runtime_error("Token exchange failed with status " + std::to_string(response->Code()) + 
                                    ": " + response->Content());

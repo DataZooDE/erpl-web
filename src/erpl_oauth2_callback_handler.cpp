@@ -1,5 +1,5 @@
 #include "erpl_oauth2_callback_handler.hpp"
-#include <iostream>
+#include "erpl_tracing.hpp"
 #include <future>
 #include <stdexcept>
 #include <mutex>
@@ -30,10 +30,10 @@ void OAuth2CallbackHandler::SetExpectedState(const std::string& expected_state) 
 void OAuth2CallbackHandler::HandleCallback(const std::string& code, const std::string& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    std::cout << "OAuth2CallbackHandler: Received callback with code=" << code.substr(0, 10) << "... state=" << state << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_CALLBACK", std::string("Received callback with code=") + code.substr(0, 10) + "... state=" + state);
     
     if (!ValidateState(state)) {
-        std::cout << "OAuth2CallbackHandler: State validation failed" << std::endl;
+        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "State validation failed");
         error_message_ = "State validation failed. Expected: " + expected_state_ + ", Received: " + state;
         has_error_.store(true);
         code_cv_.notify_all(); // Notify waiting threads
@@ -43,24 +43,24 @@ void OAuth2CallbackHandler::HandleCallback(const std::string& code, const std::s
     received_code_ = code;
     callback_received_.store(true);
     
-    std::cout << "OAuth2CallbackHandler: Successfully received code, notifying waiting threads" << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_CALLBACK", "Successfully received code, notifying waiting threads");
     code_cv_.notify_all(); // Notify waiting threads
 }
 
 void OAuth2CallbackHandler::HandleError(const std::string& error, const std::string& error_description, const std::string& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    std::cout << "OAuth2CallbackHandler: Received error: " << error << " - " << error_description << std::endl;
+    ERPL_TRACE_WARN("OAUTH2_CALLBACK", std::string("Received error: ") + error + " - " + error_description);
     
     if (!ValidateState(state)) {
-        std::cout << "OAuth2CallbackHandler: State validation failed for error" << std::endl;
+        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "State validation failed for error");
         error_message_ = "State validation failed for error. Expected: " + expected_state_ + ", Received: " + state;
     } else {
         error_message_ = "OAuth2 error: " + error + " - " + error_description;
     }
     
     has_error_.store(true);
-    std::cout << "OAuth2CallbackHandler: Set error, notifying waiting threads" << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_CALLBACK", "Set error, notifying waiting threads");
     code_cv_.notify_all(); // Notify waiting threads
 }
 

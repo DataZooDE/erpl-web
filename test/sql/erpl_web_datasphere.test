@@ -51,8 +51,8 @@ datasphere_asset
 datasphere_asset
 datasphere_describe_asset
 datasphere_describe_space
-datasphere_relational
-datasphere_relational
+datasphere_read_relational
+datasphere_read_relational
 datasphere_show_assets
 datasphere_show_assets
 datasphere_show_spaces
