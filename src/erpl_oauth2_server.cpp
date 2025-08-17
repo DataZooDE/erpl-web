@@ -1,6 +1,6 @@
 #include "erpl_oauth2_server.hpp"
 #include "erpl_oauth2_callback_handler.hpp"
-#include <iostream>
+#include "erpl_tracing.hpp"
 #include <stdexcept>
 #include <chrono>
 #include <thread>
@@ -15,16 +15,16 @@ namespace erpl_web {
 
 OAuth2Server::OAuth2Server(int port) : port_(port) {
     callback_handler_ = std::make_unique<OAuth2CallbackHandler>();
-    std::cout << "OAuth2Server: Created server for port " << port << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Created server for port " + std::to_string(port));
 }
 
 OAuth2Server::~OAuth2Server() {
-    std::cout << "OAuth2Server: Destructor called, stopping server..." << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Destructor called, stopping server...");
     Stop();
 }
 
 std::string OAuth2Server::StartAndWaitForCode(const std::string& expected_state, int port) {
-    std::cout << "OAuth2Server: Starting server and waiting for code..." << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Starting server and waiting for code...");
     
     // Use provided port or default port
     int server_port = (port > 0) ? port : port_;
@@ -34,31 +34,31 @@ std::string OAuth2Server::StartAndWaitForCode(const std::string& expected_state,
 }
 
 void OAuth2Server::Stop() {
-    std::cout << "OAuth2Server: Stopping server..." << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Stopping server...");
     running_.store(false);
     
     // Stop the httplib server if it's running
     if (server_instance_) {
-        std::cout << "OAuth2Server: Stopping httplib server..." << std::endl;
+        ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Stopping httplib server...");
         server_instance_->stop();
     }
     
     // Wait for server thread to finish
     if (server_thread_.joinable()) {
-        std::cout << "OAuth2Server: Waiting for server thread to finish..." << std::endl;
+        ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Waiting for server thread to finish...");
         server_thread_.join();
-        std::cout << "OAuth2Server: Server thread finished" << std::endl;
+        ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Server thread finished");
     }
     
     // Clean up
     server_instance_.reset();
-    std::cout << "OAuth2Server: Server stopped successfully" << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Server stopped successfully");
 }
 
 
 
 std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int port) {
-    std::cout << "OAuth2Server: Setting up callback handler..." << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Setting up callback handler...");
     
     // Reset handler for new flow
     callback_handler_->Reset();
@@ -69,14 +69,14 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     
     // Set up OAuth callback route
     server_instance_->Get("/", [this](const duckdb_httplib_openssl::Request& req, duckdb_httplib_openssl::Response& res) {
-        std::cout << "OAuth2Server: Received HTTP request: " << req.path << std::endl;
+        ERPL_TRACE_DEBUG("OAUTH2_SERVER", std::string("Received HTTP request: ") + req.path);
         
         // Check for authorization code
         if (req.has_param("code")) {
             std::string code = req.get_param_value("code");
             std::string state = req.get_param_value("state");
             
-            std::cout << "OAuth2Server: Received OAuth callback with code=" << code.substr(0, 10) << "... state=" << state << std::endl;
+            ERPL_TRACE_INFO("OAUTH2_SERVER", std::string("Received OAuth callback with code=") + code.substr(0, 10) + "... state=" + state);
             
             // Handle the callback
             callback_handler_->HandleCallback(code, state);
@@ -136,7 +136,7 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
             std::string error_description = req.get_param_value("error_description");
             std::string state = req.get_param_value("state");
             
-            std::cout << "OAuth2Server: Received OAuth error: " << error << " - " << error_description << std::endl;
+            ERPL_TRACE_WARN("OAUTH2_SERVER", std::string("Received OAuth error: ") + error + " - " + error_description);
             
             // Handle the error
             callback_handler_->HandleError(error, error_description, state);
@@ -214,14 +214,14 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     });
     
     // Start server in main thread (httplib handles requests in its own threads)
-    std::cout << "OAuth2Server: Starting server on port " << port << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Starting server on port " + std::to_string(port));
     
     // Start server in background thread (httplib handles requests in its own thread pool)
-    std::cout << "OAuth2Server: Starting server in background thread..." << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Starting server in background thread...");
     
     server_thread_ = std::thread([this, port]() {
         if (!server_instance_->listen("localhost", port)) {
-            std::cout << "OAuth2Server: Failed to start server on port " << port << std::endl;
+            ERPL_TRACE_ERROR("OAUTH2_SERVER", "Failed to start server on port " + std::to_string(port));
             return;
         }
     });
@@ -230,7 +230,7 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
     // Simple wait loop in main thread - check every 250ms with 60 second timeout
-    std::cout << "OAuth2Server: Waiting for OAuth callback (timeout: 60 seconds)..." << std::endl;
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Waiting for OAuth callback (timeout: 60 seconds)...");
     running_.store(true);
     
     auto start_time = std::chrono::steady_clock::now();
@@ -240,7 +240,7 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
         // Check if timeout has been reached
         auto current_time = std::chrono::steady_clock::now();
         if (current_time - start_time > timeout_duration) {
-            std::cout << "OAuth2Server: Timeout reached (60 seconds)" << std::endl;
+            ERPL_TRACE_WARN("OAUTH2_SERVER", "Timeout reached (60 seconds)");
             break;
         }
         
@@ -248,7 +248,7 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     }
     
     // Server will be stopped by the Stop() method when called
-    std::cout << "OAuth2Server: Callback received, server will be stopped by Stop() method" << std::endl;
+    ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Callback received, server will be stopped by Stop() method");
     
     // Return the authorization code or throw if there was an error
     if (callback_handler_->HasError()) {

@@ -101,10 +101,12 @@ public:
     void SetSkipToken(const std::string& token);
 };
 
+
+
 // Function declarations
 duckdb::TableFunctionSet CreateDatasphereAssetFunction();
 duckdb::TableFunctionSet CreateDatasphereAnalyticalFunction();
-duckdb::TableFunctionSet CreateDatasphereRelationalFunction();
+duckdb::TableFunctionSet CreateDatasphereRelationalFunction(); // Creates "datasphere_read_relational" function
 
 // Helper functions for parameter parsing
 std::map<std::string, std::string> ParseInputParameters(const std::string& param_string);

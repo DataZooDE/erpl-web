@@ -83,7 +83,18 @@ ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_clie
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
 {
-    // Extract service root URL from entity set URL
+    // For SAP Datasphere OData consumption, we need to keep the asset ID in the metadata URL
+    // The URL structure is: /api/v1/dwc/consumption/relational/{spaceId}/{assetId}
+    // We want: /api/v1/dwc/consumption/relational/{spaceId}/{assetId}/$metadata
+    
+    // Check if this is a Datasphere URL (contains /dwc/consumption/)
+    auto url_str = url.ToString();
+    if (url_str.find("/dwc/consumption/") != std::string::npos) {
+        // For Datasphere, append $metadata to the current URL
+        return url_str + "/$metadata";
+    }
+    
+    // For standard OData services, extract service root URL from entity set URL
     // For entity set URLs like https://services.odata.org/TripPinRESTierService/People?$top=1
     // We need to get the service root: https://services.odata.org/TripPinRESTierService
     auto service_root_url = url.PopPath();

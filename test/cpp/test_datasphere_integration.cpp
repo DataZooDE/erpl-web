@@ -28,7 +28,7 @@ TEST_CASE("Test Datasphere Function Registration", "[datasphere]")
     
     REQUIRE(asset_func.name == "datasphere_asset");
     REQUIRE(analytical_func.name == "datasphere_analytical");
-    REQUIRE(relational_func.name == "datasphere_relational");
+    REQUIRE(relational_func.name == "datasphere_read_relational");
 }
 
 TEST_CASE("Test Datasphere URL Building", "[datasphere]")

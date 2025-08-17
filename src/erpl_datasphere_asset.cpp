@@ -3,12 +3,19 @@
 #include "erpl_odata_client.hpp"
 #include "erpl_odata_content.hpp"
 #include "erpl_oauth2_flow_v2.hpp"
+#include "erpl_odata_functions.hpp"
+#include "erpl_datasphere_secret.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/main/secret/secret.hpp"
+#include "erpl_tracing.hpp"
 #include <sstream>
 #include <algorithm>
 
 namespace erpl_web {
+
+
 
 // DatasphereAssetBindData implementation
 DatasphereAssetBindData::DatasphereAssetBindData(const std::string& tenant,
@@ -461,19 +468,53 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereRelationalBind(duckdb:
     auto asset_id = input.inputs[1].GetValue<std::string>();
     
     // Extract secret_name from input or named parameters
-    std::string secret_name = "default";
+    std::string secret_name = "datasphere"; // Default to "datasphere" secret
     if (input.inputs.size() > 2) {
         secret_name = input.inputs[2].GetValue<std::string>();
     } else if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
     }
     
-    // For now, use placeholder values for tenant and data_center
-    auto tenant = "tenant";
-    auto data_center = "eu10";
-    auto auth_params = std::make_shared<HttpAuthParams>(HttpAuthParams::FromDuckDbSecrets(context, HttpUrl("")));
+    // Retrieve tenant and data_center from the secret
+    auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
+    auto &secret_manager = duckdb::SecretManager::Get(context);
     
-    auto bind_data = duckdb::make_uniq<DatasphereRelationalBindData>(tenant, data_center, space_id, asset_id, auth_params);
+    auto secret_match = secret_manager.LookupSecret(transaction, secret_name, "datasphere");
+    if (!secret_match.HasMatch()) {
+        throw duckdb::InvalidInputException("Datasphere secret '" + secret_name + "' not found. Use CREATE SECRET to create it.");
+    }
+    
+    const auto &kv_secret = dynamic_cast<const duckdb::KeyValueSecret &>(secret_match.GetSecret());
+    auto tenant = kv_secret.TryGetValue("tenant_name", true).ToString();
+    auto data_center = kv_secret.TryGetValue("data_center", true).ToString();
+    
+    ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_BIND", "Using tenant: " + tenant + ", data_center: " + data_center + 
+                    ", space_id: " + space_id + ", asset_id: " + asset_id);
+    
+    // Extract OAuth2 access token from the Datasphere secret
+    auto access_token = kv_secret.TryGetValue("access_token", true).ToString();
+    
+    if (access_token.empty()) {
+        throw duckdb::InvalidInputException("Datasphere secret '" + secret_name + "' does not contain a valid access_token. Please authenticate first using the OAuth2 flow.");
+    }
+    
+    ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Retrieved access token from secret (length: " + std::to_string(access_token.length()) + ")");
+    
+    // Create auth params with the Bearer token
+    auto auth_params = std::make_shared<HttpAuthParams>();
+    auth_params->bearer_token = access_token;
+    
+    // Construct the Datasphere relational OData URL
+    auto entity_set_url = DatasphereUrlBuilder::BuildRelationalUrl(tenant, data_center, space_id, asset_id);
+    
+    ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_BIND", "Constructed OData URL: " + entity_set_url);
+    ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_BIND", "Following SAP Datasphere Consumption API pattern:");
+    ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_BIND", "  GET /v1/dwc/consumption/relational/{spaceId}/{assetId}/$metadata");
+    ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_BIND", "  GET /v1/dwc/consumption/relational/{spaceId}/{assetId}/{odataId}");
+    
+    // Reuse existing OData read functionality by creating ODataReadBindData
+    // This ensures we get all the OData features: predicate pushdown, pagination, etc.
+    auto bind_data = ODataReadBindData::FromEntitySetRoot(entity_set_url, auth_params);
     
     // Set return types and names
     return_types = bind_data->GetResultTypes();
@@ -481,6 +522,8 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereRelationalBind(duckdb:
     
     return std::move(bind_data);
 }
+
+
 
 // Table function scan implementations
 static void DatasphereAssetFunction(duckdb::ClientContext &context, 
@@ -559,7 +602,7 @@ duckdb::TableFunctionSet CreateDatasphereAnalyticalFunction() {
 }
 
 duckdb::TableFunctionSet CreateDatasphereRelationalFunction() {
-    duckdb::TableFunctionSet set("datasphere_relational");
+    duckdb::TableFunctionSet set("datasphere_read_relational");
     
     // Version with space_id and asset_id (secret will use default)
     duckdb::TableFunction relational_function_2_params({duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR}, 
@@ -574,5 +617,7 @@ duckdb::TableFunctionSet CreateDatasphereRelationalFunction() {
     
     return set;
 }
+
+
 
 } // namespace erpl_web
