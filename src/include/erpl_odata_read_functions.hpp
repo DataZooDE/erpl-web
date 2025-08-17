@@ -24,8 +24,8 @@ public:
 public:
     ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client);
 
-    std::vector<std::string> GetResultNames(bool all_columns = false);
-    std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
+    virtual std::vector<std::string> GetResultNames(bool all_columns = false);
+    virtual std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
     
     bool HasMoreResults();
     unsigned int FetchNextResult(DataChunk &output);

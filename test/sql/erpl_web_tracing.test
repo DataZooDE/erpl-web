@@ -1,0 +1,166 @@
+# name: test/sql/erpl_web_tracing.test
+# description: Test erpl_web extension tracing functionality
+# group: [erpl_web_tracing]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# ============================================================================
+# SECTION 1: Tracing Configuration
+# ============================================================================
+
+# Check that tracing settings exist
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_trace%';
+----
+6
+
+# Test core tracing settings
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
+----
+1
+
+statement ok
+SET erpl_trace_level = 'DEBUG';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+DEBUG
+
+statement ok
+SET erpl_trace_output = 'file';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+file
+
+# Test file path configuration
+statement ok
+SET erpl_trace_file_path = '/tmp/erpl_trace_test.log';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_file_path';
+----
+erpl_trace_file_path
+/tmp/erpl_trace_test.log
+
+# Test file size configuration
+statement ok
+SET erpl_trace_max_file_size = 1048576;
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_max_file_size';
+----
+erpl_trace_max_file_size
+1048576
+
+# Test rotation configuration
+statement ok
+SET erpl_trace_rotation = TRUE;
+
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_rotation';
+----
+1
+
+# ============================================================================
+# SECTION 2: Trace Level Testing
+# ============================================================================
+
+# Test all valid trace levels
+statement ok
+SET erpl_trace_level = 'TRACE';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+TRACE
+
+statement ok
+SET erpl_trace_level = 'INFO';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+INFO
+
+statement ok
+SET erpl_trace_level = 'WARN';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+WARN
+
+statement ok
+SET erpl_trace_level = 'ERROR';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_level';
+----
+erpl_trace_level
+ERROR
+
+# ============================================================================
+# SECTION 3: Output Mode Testing
+# ============================================================================
+
+# Test console output
+statement ok
+SET erpl_trace_output = 'console';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+console
+
+# Test both output modes
+statement ok
+SET erpl_trace_output = 'both';
+
+query II
+SELECT name, value FROM duckdb_settings() WHERE name = 'erpl_trace_output';
+----
+erpl_trace_output
+both
+
+# ============================================================================
+# SECTION 4: Cleanup and Verification
+# ============================================================================
+
+# Disable tracing for performance
+statement ok
+SET erpl_trace_enabled = FALSE;
+
+query I
+SELECT value::BOOLEAN FROM duckdb_settings() WHERE name = 'erpl_trace_enabled';
+----
+0
+
+# Re-enable for final verification
+statement ok
+SET erpl_trace_enabled = TRUE;
+
+statement ok
+SET erpl_trace_level = 'INFO';
+
+statement ok
+SET erpl_trace_output = 'console';

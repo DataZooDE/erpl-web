@@ -1,9 +1,13 @@
 #include <algorithm>
-
 #include <regex>
 #include <sstream>
 #include <vector>
 #include <numeric>
+#include <cmath>
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
+#include <condition_variable>
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -12,11 +16,7 @@
 
 #include "charset_converter.hpp"
 #include "erpl_http_client.hpp"
-
-#include <mutex>
-#include <shared_mutex>
-#include <unordered_map>
-#include <condition_variable>
+#include "erpl_tracing.hpp"
 
 using namespace duckdb;
 
@@ -45,7 +45,7 @@ void HttpUrl::ParseUrl(const std::string& url) {
 }
 
 std::string HttpUrl::ToSchemeHostAndPort() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << scheme << "://" << host;
     if (!port.empty()) {
         ss << ":" << port;
@@ -54,19 +54,19 @@ std::string HttpUrl::ToSchemeHostAndPort() const {
 }
 
 std::string HttpUrl::ToPathQuery() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << (path.empty() ? "/" : path) << query;
     return ss.str();
 }
 
 std::string HttpUrl::ToPathQueryFragment() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << ToPathQuery() << fragment;
     return ss.str();
 }
 
 std::string HttpUrl::ToString() const {
-    std::stringstream ss;
+    std::ostringstream ss;
     ss << ToSchemeHostAndPort() << ToPathQueryFragment();
     return ss.str();
 }
@@ -87,16 +87,17 @@ bool HttpUrl::Equals(const HttpUrl& other) const {
 }
 
 std::string HttpUrl::ToLower(const std::string& str) {
-    std::string lowerStr = str;
-    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(),
+    std::string lowerStr;
+    lowerStr.reserve(str.size()); // Pre-allocate for efficiency
+    std::transform(str.begin(), str.end(), std::back_inserter(lowerStr),
                    [](unsigned char c){ return std::tolower(c); });
     return lowerStr;
 }
 
 HttpUrl HttpUrl::PopPath() 
 {
-    auto path = std::filesystem::path(Path());
-    auto new_path = path.parent_path();
+    auto path_obj = std::filesystem::path(Path());
+    auto new_path = path_obj.parent_path();
     auto new_url = *this;
     new_url.Path(new_path.string());
     return new_url;
@@ -111,13 +112,15 @@ std::filesystem::path HttpUrl::MergePaths(const std::filesystem::path& base_path
 
     // Decompose the paths into their respective components
     std::vector<std::string> base_parts;
+    base_parts.reserve(std::distance(base_path.begin(), base_path.end()));
     for (const auto& part : base_path) {
-        base_parts.push_back(part.string());
+        base_parts.emplace_back(part.string());
     }
 
     std::vector<std::string> rel_parts;
+    rel_parts.reserve(std::distance(rel_path.begin(), rel_path.end()));
     for (const auto& part : rel_path) {
-        rel_parts.push_back(part.string());
+        rel_parts.emplace_back(part.string());
     }
 
     // Find the overlap between the end of base_parts and the beginning of rel_parts
@@ -176,8 +179,17 @@ HttpUrl HttpUrl::MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::
 
     // Handle path
     if (!rel_path.empty()) {
-        auto merged_path = MergePaths(base_url.Path(), rel_path);
-        merged_url.Path(merged_path.string());
+        if (rel_path[0] == '/') {
+            // Path starting with / should be treated as relative to base URL's root
+            // Remove the leading / and merge with base path
+            std::string rel_path_without_slash = rel_path.substr(1);
+            auto merged_path = MergePaths(base_url.Path(), rel_path_without_slash);
+            merged_url.Path(merged_path.string());
+        } else {
+            // Relative path - merge with base path
+            auto merged_path = MergePaths(base_url.Path(), rel_path);
+            merged_url.Path(merged_path.string());
+        }
     }
 
     // Handle query and fragment
@@ -283,7 +295,7 @@ std::string HttpAuthParams::Base64Encode(const std::string &input)
     auto result_str = std::string();
     result_str.resize(duckdb::Blob::ToBase64Size(input));
 
-	duckdb::Blob::ToBase64(input, &result_str.front());
+    duckdb::Blob::ToBase64(input, &result_str.front());
 
     return result_str;
 }
@@ -383,7 +395,7 @@ std::string HttpMethod::ToString() const
 // ----------------------------------------------------------------------
 
 HttpRequest::HttpRequest(HttpMethod method, const std::string &url, std::string content_type, std::string content)
-    : method(method), url(HttpUrl(url)), content_type(content_type), content(content)
+    : method(method), url(HttpUrl(url)), content_type(std::move(content_type)), content(std::move(content))
 { }
 
 HttpRequest::HttpRequest(HttpMethod method, const std::string &url)
@@ -397,29 +409,46 @@ void HttpRequest::HeadersFromMapArg(duckdb::Value &header_map)
         return;
     }
 
-    if (header_map.type() != HttpResponse::DuckDbHeaderType())
-    {
+    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Processing headers from type: " + header_map.type().ToString());
+
+    if (header_map.type().id() == LogicalTypeId::MAP) {
+        // Map case: MAP{'key': 'value', 'key2': 'value2'}
+        auto map_entries = MapValue::GetChildren(header_map);
+        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Processing " + std::to_string(map_entries.size()) + " map entries");
+        
+        // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
+        for (size_t i = 0; i < map_entries.size(); i++) {
+            auto entry = map_entries[i];
+            if (entry.type().id() == LogicalTypeId::STRUCT) {
+                auto struct_entries = StructValue::GetChildren(entry);
+                auto struct_types = StructType::GetChildTypes(entry.type());
+                
+                // Find the key and value fields
+                std::string key, value;
+                for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
+                    if (struct_types[j].first == "key") {
+                        key = struct_entries[j].ToString();
+                    } else if (struct_types[j].first == "value") {
+                        value = struct_entries[j].ToString();
+                    }
+                }
+                
+                if (!key.empty() && !value.empty()) {
+                    headers.emplace(key, value);
+                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + value);
+
+                    if (ToLower(key) == "content-type") {
+                        content_type = value;
+                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Updated content_type to: " + value);
+                    }
+                }
+            }
+        }
+    } else {
         throw std::runtime_error("Header map must be a MAP<VARCHAR, VARCHAR> type");
     }
 
-    // MAP is a LIST(STRUCT(K,V))
-    auto map_entries = ListValue::GetChildren(header_map);
-    for (auto &el : map_entries)
-    {
-        auto struct_entries = StructValue::GetChildren(el);
-        if (struct_entries.size() != 2)
-        {
-            throw std::runtime_error("Header map must contain key-value pairs");
-        }
-
-        auto key = struct_entries[0].ToString();
-        auto value = struct_entries[1].ToString();
-        headers.emplace(key, value);
-
-        if (ToLower(key) == "content-type") {
-            content_type = value;
-        }
-    }
+    ERPL_TRACE_INFO("HTTP_HEADERS", "Final headers count: " + std::to_string(headers.size()));
 }
 
 void HttpRequest::HeadersFromMapArg(const duckdb::Value &header_map)
@@ -437,6 +466,31 @@ void HttpRequest::AuthHeadersFromParams(const HttpAuthParams &auth_params)
     }
 }
 
+void HttpRequest::SetODataVersion(ODataVersion version)
+{
+    odata_version = version;
+}
+
+ODataVersion HttpRequest::GetODataVersion() const
+{
+    return odata_version;
+}
+
+void HttpRequest::AddODataVersionHeaders()
+{
+    if (odata_version == ODataVersion::V2) {
+        // OData v2 headers
+        headers.emplace("DataServiceVersion", "2.0");
+        headers.emplace("MaxDataServiceVersion", "2.0");
+        headers.emplace("Accept", "application/json;odata=verbose");
+    } else {
+        // OData v4 headers
+        headers.emplace("OData-Version", "4.0");
+        headers.emplace("OData-MaxVersion", "4.0");
+        headers.emplace("Accept", "application/json;odata.metadata=minimal");
+    }
+}
+
 std::string HttpRequest::ToCacheKey() const
 {
     auto content_hasher = std::hash<std::string>();
@@ -450,7 +504,8 @@ std::string HttpRequest::ToCacheKey() const
 duckdb_httplib_openssl::Headers HttpRequest::HttplibHeaders()
 {
     duckdb_httplib_openssl::Headers ret;
-    for (auto &header : headers)
+    // Note: std::multimap doesn't have reserve(), but we can optimize by using emplace
+    for (const auto &header : headers)
     {
         ret.emplace(header.first, header.second);
     }
@@ -462,44 +517,80 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     auto path_str = url.ToPathQuery();
     auto headers = HttplibHeaders();
 
+    // Log HTTP request details
+    ERPL_TRACE_INFO("HTTP_REQUEST", "Executing " + method.ToString() + " request to: " + path_str);
+    ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request headers:");
+    for (const auto& header : headers) {
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "  " + header.first + ": " + header.second);
+    }
+    if (!content.empty()) {
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request content (" + std::to_string(content.length()) + " bytes): " + content);
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Content-Type: " + content_type);
+    }
+
+    duckdb_httplib_openssl::Result result;
     if (method == HttpMethod::GET)
     {
-        return client.Get(path_str.c_str(), headers);
+        result = client.Get(path_str.c_str(), headers);
     }
     else if (method == HttpMethod::POST)
     {
-        return client.Post(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Post(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::PUT)
     {
-        return client.Put(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Put(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::PATCH)
     {
-        return client.Patch(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Patch(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::_DELETE)
     {
-        return client.Delete(path_str.c_str(), headers, content, content_type.c_str());
+        result = client.Delete(path_str.c_str(), headers, content, content_type.c_str());
     }
     else if (method == HttpMethod::HEAD)
     {
-        return client.Head(path_str.c_str(), headers);
+        result = client.Head(path_str.c_str(), headers);
     }
     else
     {
         throw std::runtime_error("Invalid HTTP method");
     }
+
+    // Log HTTP response details
+    if (result) {
+        ERPL_TRACE_INFO("HTTP_RESPONSE", "Response status: " + std::to_string(result->status));
+        ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response headers:");
+        for (const auto& header : result->headers) {
+            ERPL_TRACE_DEBUG("HTTP_RESPONSE", "  " + header.first + ": " + header.second);
+        }
+        ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (" + std::to_string(result->body.length()) + " bytes)");
+        
+        // Log the actual response body content for debugging
+        if (!result->body.empty()) {
+            // Truncate very long responses to avoid overwhelming the logs
+            if (result->body.length() > 1000) {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + result->body.substr(0, 1000) + "...");
+            } else {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body: " + result->body);
+            }
+        }
+    } else {
+        ERPL_TRACE_ERROR("HTTP_RESPONSE", "Request failed: " + to_string(result.error()));
+    }
+
+    return result;
 }
 
 // ----------------------------------------------------------------------
 
 HttpResponse::HttpResponse(HttpMethod method, HttpUrl url, int code, std::string content_type, std::string content)
-    : method(method), url(url), code(code), content_type(content_type), content(content)
+    : method(method), url(std::move(url)), code(code), content_type(std::move(content_type)), content(std::move(content))
 { }
 
 HttpResponse::HttpResponse(HttpMethod method, HttpUrl url, int code)
-    : HttpResponse(method, url, code, std::string(), std::string())
+    : HttpResponse(method, std::move(url), code, std::string(), std::string())
 { }
 
 std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &method,
@@ -508,7 +599,8 @@ std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &meth
 {
     auto content_type = response.get_header_value("Content-Type");
     auto ret =  std::make_unique<HttpResponse>(method, url, response.status, content_type, response.body);
-    for (auto &header : response.headers)
+    ret->headers.reserve(response.headers.size()); // Pre-allocate for efficiency
+    for (const auto &header : response.headers)
     {
         ret->headers.emplace(header.first, header.second);
     }
@@ -519,12 +611,12 @@ std::unique_ptr<HttpResponse> HttpResponse::FromHttpLibResponse(HttpMethod &meth
 duckdb::LogicalType HttpResponse::DuckDbResponseType()
 {
     child_list_t<LogicalType> children;
-    children.push_back(std::make_pair("method", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("status", duckdb::LogicalTypeId::INTEGER));
-    children.push_back(std::make_pair("url", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("headers", DuckDbHeaderType()));
-    children.push_back(std::make_pair("content_type", duckdb::LogicalTypeId::VARCHAR));
-    children.push_back(std::make_pair("content", duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("method", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("status", duckdb::LogicalTypeId::INTEGER);
+    children.emplace_back("url", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("headers", DuckDbHeaderType());
+    children.emplace_back("content_type", duckdb::LogicalTypeId::VARCHAR);
+    children.emplace_back("content", duckdb::LogicalTypeId::VARCHAR);
 
     return duckdb::LogicalType::STRUCT(children);
 }
@@ -545,12 +637,12 @@ std::vector<std::string> HttpResponse::DuckDbResponseNames()
 duckdb::Value HttpResponse::ToValue() const
 {
     child_list_t<duckdb::Value> children;
-    children.push_back(std::make_pair("method", method.ToString()));
-    children.push_back(std::make_pair("status", code));
-    children.push_back(std::make_pair("url", url.ToString()));
-    children.push_back(std::make_pair("headers", CreateHeaderMap()));
-    children.push_back(std::make_pair("content_type", content_type));
-    children.push_back(std::make_pair("content", content));
+    children.emplace_back("method", method.ToString());
+    children.emplace_back("status", code);
+    children.emplace_back("url", url.ToString());
+    children.emplace_back("headers", CreateHeaderMap());
+    children.emplace_back("content_type", content_type);
+    children.emplace_back("content", content);
 
     return duckdb::Value::STRUCT(children);
 }
@@ -561,7 +653,10 @@ duckdb::Value HttpResponse::CreateHeaderMap() const
 
     duckdb::vector<duckdb::Value> keys;
     duckdb::vector<duckdb::Value> values;
-    for (auto &header : headers)
+    keys.reserve(headers.size()); // Pre-allocate for efficiency
+    values.reserve(headers.size());
+    
+    for (const auto &header : headers)
     {
         keys.emplace_back(header.first);
         values.emplace_back(header.second);
@@ -575,9 +670,34 @@ duckdb::Value HttpResponse::CreateHeaderMap() const
     );
 }
 
+std::string HttpResponse::Base64Encode(const std::string &input)
+{
+    auto result_str = std::string();
+    result_str.resize(duckdb::Blob::ToBase64Size(input));
+
+    duckdb::Blob::ToBase64(input, &result_str.front());
+
+    return result_str;
+}
+
 std::vector<duckdb::Value> HttpResponse::ToRow() const
 {
 	auto conv = CharsetConverter(content_type);
+
+    // For binary content types, convert to base64 to avoid UTF-8 validation issues
+    std::string content_to_return;
+    if (content_type.find("application/octet-stream") != std::string::npos ||
+        content_type.find("application/pdf") != std::string::npos ||
+        content_type.find("image/") != std::string::npos ||
+        content_type.find("video/") != std::string::npos ||
+        content_type.find("audio/") != std::string::npos ||
+        content_type.find("font/") != std::string::npos) {
+        // Convert binary content to base64
+        content_to_return = "BINARY_CONTENT_BASE64:" + Base64Encode(content);
+    } else {
+        // Use normal charset conversion for text content
+        content_to_return = conv.convert(content);
+    }
 
     return {
         duckdb::Value(method.ToString()),
@@ -585,7 +705,7 @@ std::vector<duckdb::Value> HttpResponse::ToRow() const
         duckdb::Value(url.ToString()),
         CreateHeaderMap(),
         duckdb::Value(content_type),
-        duckdb::Value(conv.convert(content))
+        duckdb::Value(content_to_return)
     };
 }
 
@@ -623,7 +743,8 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 		int status;
 
         try {
-            auto params = HttpParams();
+            // Use the configured HTTP parameters rather than default-constructing new ones
+            auto params = this->http_params;
             auto client = CreateHttplibClient(params, request.url.ToSchemeHostAndPort());
             auto res = request.Execute(*client);
             err = res.error();
@@ -686,8 +807,11 @@ std::unique_ptr<HttpResponse> HttpClient::Head(const std::string &url)
 
 std::unique_ptr<HttpResponse> HttpClient::Get(const std::string &url)
 {
+    ERPL_TRACE_DEBUG("HTTP_CLIENT", "Executing HTTP GET request to: " + url);
     auto req = HttpRequest(HttpMethod::GET, url);
-    return SendRequest(req);
+    auto response = SendRequest(req);
+    ERPL_TRACE_INFO("HTTP_CLIENT", "HTTP GET response received with status: " + std::to_string(response->Code()));
+    return response;
 }
 
 std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(const HttpParams &http_params,
@@ -753,8 +877,9 @@ bool HttpCache::IsInCache(const HttpRequest& request) const {
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto it = cache.find(cache_key);
     auto found = (it != cache.end());
-    auto expired = (found && it->second.expiry >= std::chrono::steady_clock::now());
-    return found && !expired;
+    auto now = std::chrono::steady_clock::now();
+    bool valid = found && it->second.expiry > now;
+    return valid;
 }
 
 void HttpCache::GarbageCollection() {
@@ -813,7 +938,7 @@ std::unique_ptr<HttpResponse> CachingHttpClient::SendRequest(HttpRequest& reques
     auto response = http_client->SendRequest(request);
     
     // Cache the response if successful
-    if (response && response->code >= 200 && response->code < 300) {
+    if (response && response->Code() >= 200 && response->Code() < 300) {
         cache.EmplaceCacheResponse(request, std::make_unique<HttpResponse>(*response), cache_duration);
     }
     

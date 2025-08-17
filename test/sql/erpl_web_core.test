@@ -1,0 +1,76 @@
+# name: test/sql/erpl_web_core.test
+# description: Test core erpl_web extension functionality - loading, configuration, and basic setup
+# group: [erpl_web_core]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+# ============================================================================
+# SECTION 1: Core Extension Loading and Configuration
+# ============================================================================
+
+# Verify extension is loaded
+query I
+SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web';
+----
+1
+
+# Verify all required functions are registered
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%' OR function_name LIKE '%odata%' OR function_name LIKE '%http%';
+----
+23
+
+# ============================================================================
+# SECTION 2: Core Extension Settings
+# ============================================================================
+
+# Test that extension-specific settings exist
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_%';
+----
+8
+
+# Verify core settings exist
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name IN ('erpl_trace_enabled', 'erpl_trace_level', 'erpl_trace_output');
+----
+3
+
+# ============================================================================
+# SECTION 3: Extension Function Categories
+# ============================================================================
+
+# Count HTTP functions
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%http%';
+----
+10
+
+# Count OData functions
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%odata%';
+----
+2
+
+# Count Datasphere functions
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%';
+----
+11
+
+# ============================================================================
+# SECTION 4: Final Verification
+# ============================================================================
+
+# Final verification that extension is working
+query I
+SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web';
+----
+1

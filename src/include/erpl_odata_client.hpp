@@ -25,10 +25,18 @@ public:
     std::shared_ptr<TContent> Content()
     {
         if (parsed_content != nullptr) {
+            ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Returning cached parsed content");
             return parsed_content;
         }
 
-        parsed_content = CreateODataContent(http_response->Content());
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Parsing HTTP response content");
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content type: " + http_response->ContentType());
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Content size: " + std::to_string(http_response->Content().length()) + " bytes");
+        
+        // For now, use default v4 version - the derived classes will override this
+        parsed_content = CreateODataContent(http_response->Content(), ODataVersion::V4);
+        
+        ERPL_TRACE_DEBUG("ODATA_RESPONSE", "Successfully parsed content");
         return parsed_content;
     }
 
@@ -37,12 +45,12 @@ protected:
     std::shared_ptr<TContent> parsed_content;
 
 private:
-    virtual std::shared_ptr<TContent> CreateODataContent(const std::string& content) = 0;
+    virtual std::shared_ptr<TContent> CreateODataContent(const std::string& content, ODataVersion odata_version) = 0;
 };
 
 class ODataEntitySetResponse : public ODataResponse<ODataEntitySetContent> {
 public:
-    ODataEntitySetResponse(std::unique_ptr<HttpResponse> http_response);
+    ODataEntitySetResponse(std::unique_ptr<HttpResponse> http_response, ODataVersion odata_version = ODataVersion::V4);
     virtual ~ODataEntitySetResponse() = default; 
         
     std::string MetadataContextUrl();
@@ -50,22 +58,29 @@ public:
 
     std::vector<std::vector<duckdb::Value>> ToRows(std::vector<std::string> &column_names, 
                                                    std::vector<duckdb::LogicalType> &column_types);
+    
+    ODataVersion GetODataVersion() const { return odata_version; }
 private:
-    std::shared_ptr<ODataEntitySetContent> CreateODataContent(const std::string& content) override;
+    std::shared_ptr<ODataEntitySetContent> CreateODataContent(const std::string& content, ODataVersion odata_version) override;
+    
+    ODataVersion odata_version;
 };
 
 // ----------------------------------------------------------------------
 
 class ODataServiceResponse : public ODataResponse<ODataServiceContent> {
 public:
-    ODataServiceResponse(std::unique_ptr<HttpResponse> http_response);
+    ODataServiceResponse(std::unique_ptr<HttpResponse> http_response, ODataVersion odata_version = ODataVersion::V4);
     virtual ~ODataServiceResponse() = default;
 
     std::string MetadataContextUrl();
     std::vector<ODataEntitySetReference> EntitySets();
-
+    
+    ODataVersion GetODataVersion() const { return odata_version; }
 private:
-    std::shared_ptr<ODataServiceContent> CreateODataContent(const std::string& content) override;
+    std::shared_ptr<ODataServiceContent> CreateODataContent(const std::string& content, ODataVersion odata_version) override;
+    
+    ODataVersion odata_version;
 };
 
 // ----------------------------------------------------------------------
@@ -77,9 +92,17 @@ public:
         : http_client(http_client)
         , url(url) 
         , auth_params(auth_params)
+        , odata_version(ODataVersion::UNKNOWN) // Start with unknown version, will be detected from metadata
     {}
 
     virtual ~ODataClient() = default;
+
+    // OData version support
+    void SetODataVersion(ODataVersion version) { odata_version = version; }
+    ODataVersion GetODataVersion() const { return odata_version; }
+    
+    // Auto-detect OData version from metadata
+    void DetectODataVersion();
 
     virtual Edmx GetMetadata()
     {    
@@ -94,6 +117,11 @@ public:
 
         auto content = metadata_response->Content();
         auto edmx = Edmx::FromXml(content);
+        
+        // Auto-detect version from metadata if not already set
+        if (odata_version == ODataVersion::UNKNOWN) {
+            DetectODataVersion();
+        }
 
         EdmCache::GetInstance().Set(metadata_url, edmx);
         return edmx;
@@ -110,9 +138,15 @@ protected:
     HttpUrl url;
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<TResponse> current_response;
+    ODataVersion odata_version;
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         auto http_request = HttpRequest(HttpMethod::GET, url);
+        
+        // Set OData version and add appropriate headers
+        http_request.SetODataVersion(odata_version);
+        http_request.AddODataVersionHeaders();
+        
         if (auth_params != nullptr) {
             http_request.AuthHeadersFromParams(*auth_params);
         }
@@ -135,15 +169,71 @@ protected:
         //std::cout << "Fetching Metadata from: " << metadata_url_raw << std::endl;
         auto current_svc_url = url;
         auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
+        
+        // For metadata requests, don't use version-specific headers since we don't know the version yet
+        // This allows us to detect the version from the metadata response
+        if (odata_version != ODataVersion::UNKNOWN) {
+            // Only use version-specific headers if we already know the version
+            metadata_request.SetODataVersion(odata_version);
+            metadata_request.AddODataVersionHeaders();
+        }
+        
+        // Override Accept header for metadata (XML is standard for both v2 and v4)
+        metadata_request.headers["Accept"] = "application/xml";
+        
         if (auth_params != nullptr) {
             metadata_request.AuthHeadersFromParams(*auth_params);
         }
-
+        
+        // Trace metadata request details
+        std::stringstream request_trace;
+        request_trace << "OData Metadata HTTP Request:" << std::endl;
+        request_trace << "  URL: " << HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw).ToString() << std::endl;
+        request_trace << "  Method: GET" << std::endl;
+        request_trace << "  Headers:";
+        for (const auto& header : metadata_request.headers) {
+            request_trace << std::endl << "    " << header.first << ": " << header.second;
+        }
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", request_trace.str());
+        
         std::unique_ptr<HttpResponse> metadata_response;
         for (size_t num_retries = 3; num_retries > 0; --num_retries) {
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " of 3");
+            
             metadata_response = http_client->SendRequest(metadata_request);
             if (metadata_response != nullptr && metadata_response->Code() == 200) {
+                // Trace successful metadata response
+                std::stringstream response_trace;
+                response_trace << "OData Metadata HTTP Success Response:" << std::endl;
+                response_trace << "  Status Code: " << metadata_response->Code() << std::endl;
+                response_trace << "  Content Type: " << metadata_response->ContentType() << std::endl;
+                response_trace << "  Response Headers:";
+                for (const auto& header : metadata_response->headers) {
+                    response_trace << std::endl << "    " << header.first << ": " << header.second;
+                }
+                response_trace << std::endl << "  Response Body Size: " << metadata_response->Content().length() << " bytes";
+                if (metadata_response->Content().length() > 0) {
+                    response_trace << std::endl << "  Response Body Preview (first 500 chars): " << metadata_response->Content().substr(0, 500);
+                }
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", response_trace.str());
+                
                 return metadata_response;
+            }
+
+            // Trace failed metadata response
+            if (metadata_response != nullptr) {
+                std::stringstream error_trace;
+                error_trace << "OData Metadata HTTP Error Response (attempt " + std::to_string(4 - num_retries) + "):" << std::endl;
+                error_trace << "  Status Code: " << metadata_response->Code() << std::endl;
+                error_trace << "  Content Type: " << metadata_response->ContentType() << std::endl;
+                error_trace << "  Response Headers:";
+                for (const auto& header : metadata_response->headers) {
+                    error_trace << std::endl << "    " << header.first << ": " << header.second;
+                }
+                error_trace << std::endl << "  Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+                ERPL_TRACE_WARN("ODATA_CLIENT", error_trace.str());
+            } else {
+                ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " failed: No response received");
             }
 
             // The OData v4 spec defines that the metadata document when given as a relative URL
@@ -152,11 +242,26 @@ protected:
             // try whether that is the service root URL.
             current_svc_url = current_svc_url.PopPath();
             metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Retrying metadata request with popped URL: " + current_svc_url.ToString());
+            
             if (auth_params != nullptr) {
                 metadata_request.AuthHeadersFromParams(*auth_params);
             }   
         }
 
+        // Trace final failure
+        std::stringstream final_error;
+        final_error << "All metadata request attempts failed. Final attempt details:" << std::endl;
+        final_error << "  Final URL: " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString() << std::endl;
+        if (metadata_response != nullptr) {
+            final_error << "  Final Status Code: " << metadata_response->Code() << std::endl;
+            final_error << "  Final Content Type: " << metadata_response->ContentType() << std::endl;
+            final_error << "  Final Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+        } else {
+            final_error << "  No response received on final attempt";
+        }
+        ERPL_TRACE_ERROR("ODATA_CLIENT", final_error.str());
+        
         std::stringstream ss;
         ss << "Failed to get OData metadata from " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString();
         if (metadata_response == nullptr) {
