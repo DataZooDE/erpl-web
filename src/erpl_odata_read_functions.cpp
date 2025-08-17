@@ -1,10 +1,12 @@
 
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include <numeric>
 
 #include "erpl_odata_read_functions.hpp"
 
 #include "telemetry.hpp"
+#include "erpl_tracing.hpp"
 
 namespace erpl_web {
 
@@ -148,10 +150,29 @@ static duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context,
 {
     auto auth_params = AuthParamsFromInput(context, input);
     auto url = input.inputs[0].GetValue<std::string>();
+    
+    ERPL_TRACE_INFO("ODATA_BIND", "Binding OData read function for entity set: " + url);
+    if (auth_params) {
+        ERPL_TRACE_DEBUG("ODATA_BIND", "Using authentication parameters");
+    }
+    
     auto bind_data = ODataReadBindData::FromEntitySetRoot(url, auth_params);
 
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
+    
+    ERPL_TRACE_INFO("ODATA_BIND", "Bound function with " + std::to_string(return_types.size()) + " columns");
+    
+    // More efficient string concatenation for debug logging
+    if (!names.empty()) {
+        std::string column_names;
+        column_names.reserve(names.size() * 20); // Estimate average column name length
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (i > 0) column_names += ", ";
+            column_names += names[i];
+        }
+        ERPL_TRACE_DEBUG("ODATA_BIND", "Column names: " + column_names);
+    }
     
     return std::move(bind_data);
 }
@@ -174,13 +195,18 @@ static void ODataReadScan(ClientContext &context,
                           TableFunctionInput &data, 
                           DataChunk &output) 
 {
-    
     auto &bind_data = data.bind_data->CastNoConst<ODataReadBindData>();
+    
+    ERPL_TRACE_DEBUG("ODATA_SCAN", "Starting OData scan operation");
+    
     if (! bind_data.HasMoreResults()) {
+        ERPL_TRACE_DEBUG("ODATA_SCAN", "No more results available");
         return;
     }
     
-    bind_data.FetchNextResult(output);
+    ERPL_TRACE_DEBUG("ODATA_SCAN", "Fetching next result set");
+    auto rows_fetched = bind_data.FetchNextResult(output);
+    ERPL_TRACE_INFO("ODATA_SCAN", "Fetched " + std::to_string(rows_fetched) + " rows");
 }
 
 TableFunctionSet CreateODataReadFunction() 

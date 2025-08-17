@@ -4,46 +4,48 @@ using namespace duckdb;
 
 namespace erpl_web 
 {   
-    ArgBuilder::ArgBuilder() {}
+    ArgBuilder::ArgBuilder() = default;
 
-    ArgBuilder& ArgBuilder::Add(const std::string& name, const Value &value) 
+    ArgBuilder& ArgBuilder::Add(const std::string& name, const Value& value) 
     {
-        _args.push_back(std::make_pair(name, value));
+        _args.emplace_back(name, value);
         return *this;
     }
 
-    ArgBuilder& ArgBuilder::Add(const std::string& name, Value &value) 
+    ArgBuilder& ArgBuilder::Add(const std::string& name, Value& value) 
     {
-        _args.push_back(std::make_pair(name, value));
+        _args.emplace_back(name, value);
         return *this;
     }
 
     ArgBuilder& ArgBuilder::Add(const std::string& name, const ArgBuilder& builder) 
     {
-        _args.push_back(std::make_pair(name, builder.Build()));
+        _args.emplace_back(name, builder.Build());
         return *this;
     }
 
-    ArgBuilder& ArgBuilder::Add(const std::string& name, duckdb::vector<Value> &values) 
+    ArgBuilder& ArgBuilder::Add(const std::string& name, const duckdb::vector<Value>& values) 
     {
-        if (values.size() == 0) {
-            return Add(name, Value::EMPTYLIST(LogicalTypeId::ANY));
+        if (values.empty()) {
+            return Add(name, Value::LIST(duckdb::vector<Value>{}));
         }
 
         auto list_value = Value::LIST(values);
         return Add(name, list_value);
     }
 
-    ArgBuilder& ArgBuilder::Add(const std::string& name, std::vector<Value> &std_vector) 
+    ArgBuilder& ArgBuilder::Add(const std::string& name, const std::vector<Value>& std_vector) 
     {
         duckdb::vector<Value> duck_vector;
-        for (auto &v: std_vector) {
+        duck_vector.reserve(std_vector.size()); // Pre-allocate for efficiency
+        
+        for (const auto& v : std_vector) {
             duck_vector.push_back(v);
         }
-        return Add(name, duck_vector);
+        return Add(name, Value::LIST(duck_vector));
     }
 
-    ArgBuilder& ArgBuilder::Add(const std::string& name, const std::initializer_list<Value> &values) 
+    ArgBuilder& ArgBuilder::Add(const std::string& name, const std::initializer_list<Value>& values) 
     {
         auto list_value = Value::LIST(values);
         return Add(name, list_value);
@@ -54,19 +56,19 @@ namespace erpl_web
     }
 
     std::vector<Value> ArgBuilder::BuildArgList() const {
-        return std::vector<Value>({ Build() });
+        return { Build() };
     }
 
-    // ArgBuilder ---------------------------------------------------------------
+    // ValueHelper ---------------------------------------------------------------
 
-    ValueHelper::ValueHelper(Value &value) : _value(value) 
+    ValueHelper::ValueHelper(Value& value) : _value(value) 
     { }
 
-    ValueHelper::ValueHelper(Value &value, std::vector<std::string> &root_path) 
+    ValueHelper::ValueHelper(Value& value, const std::vector<std::string>& root_path) 
         : _value(value), _root_path(root_path) 
     { }
 
-    ValueHelper::ValueHelper(Value &value, const std::string &root_path) 
+    ValueHelper::ValueHelper(Value& value, const std::string& root_path) 
         : _value(value), _root_path(ParseJsonPointer(root_path)) 
     { }
 
@@ -76,7 +78,7 @@ namespace erpl_web
         return GetValueForPath(_value, full_path);
     }
 
-    std::vector<std::string> ValueHelper::GetPathWithRoot(std::string path) 
+    std::vector<std::string> ValueHelper::GetPathWithRoot(const std::string& path) const
     {
         auto json_path = ParseJsonPointer(path);
     
@@ -98,9 +100,9 @@ namespace erpl_web
      * @param value The struct value to get the value from.
      * @param tokens A vector of string tokens representing the keys or indices in the JSON document.
     */
-    Value ValueHelper::GetValueForPath(Value &value, std::vector<string> &tokens) 
+    Value ValueHelper::GetValueForPath(Value& value, const std::vector<string>& tokens) 
     {
-        if (tokens.size() == 0) {
+        if (tokens.empty()) {
             return value;
         }
 
@@ -126,7 +128,13 @@ namespace erpl_web
             case LogicalTypeId::LIST:
             {
                 auto child_values = ListValue::GetChildren(value);
-                std::size_t child_index = std::stoi(*token_it);
+                std::size_t child_index;
+                try {
+                    child_index = std::stoul(*token_it);
+                } catch (const std::exception&) {
+                    throw std::runtime_error(StringUtil::Format("Invalid list index '%s'", *token_it));
+                }
+                
                 if (child_index >= child_values.size()) {
                     throw std::runtime_error(StringUtil::Format("Index '%s' out of bounds for list", *token_it));
                 }
@@ -139,15 +147,15 @@ namespace erpl_web
         };
     }
 
-    Value ValueHelper::CreateMutatedValue(Value &old_value, Value &new_value, std::string path) 
+    Value ValueHelper::CreateMutatedValue(Value& old_value, Value& new_value, const std::string& path) 
     {
         auto tokens = ParseJsonPointer(path);
         return CreateMutatedValue(old_value, new_value, tokens);
     }
 
-    Value ValueHelper::CreateMutatedValue(Value &old_value, Value &new_value, std::vector<std::string> &tokens) 
+    Value ValueHelper::CreateMutatedValue(Value& old_value, Value& new_value, const std::vector<std::string>& tokens) 
     {
-        if (tokens.size() == 0) {
+        if (tokens.empty()) {
             return new_value;
         }
 
@@ -167,14 +175,20 @@ namespace erpl_web
                     auto new_child_value = child_name == *token_it 
                                             ? CreateMutatedValue(child_values[i], new_value, remaining_tokens) 
                                             : child_values[i];
-                    new_child_pairs.push_back(std::make_pair(child_name, new_child_value));
+                    new_child_pairs.emplace_back(child_name, new_child_value);
                 }
                 return Value::STRUCT(new_child_pairs);
             }
             case LogicalTypeId::LIST:
             {
                 auto child_values = ListValue::GetChildren(old_value);
-                std::size_t child_index = std::stoi(*token_it);
+                std::size_t child_index;
+                try {
+                    child_index = std::stoul(*token_it);
+                } catch (const std::exception&) {
+                    throw std::runtime_error(StringUtil::Format("Invalid list index '%s'", *token_it));
+                }
+                
                 if (child_index >= child_values.size()) {
                     throw std::runtime_error(StringUtil::Format("Index '%s' out of bounds for list", *token_it));
                 }
@@ -187,14 +201,14 @@ namespace erpl_web
         };
     }
 
-    Value ValueHelper::AddToList(Value &current_list, Value &new_value) 
+    Value ValueHelper::AddToList(Value& current_list, Value& new_value) 
     {
         if (current_list.type().id() != LogicalTypeId::LIST) {
             throw std::runtime_error("First argument is not a list");
         }
 
         auto list_values = ListValue::GetChildren(current_list);
-        if (list_values.size() > 0)
+        if (!list_values.empty())
         {
             auto current_type = list_values[0].type();
             auto casted_type = new_value.DefaultCastAs(current_type);
@@ -208,16 +222,17 @@ namespace erpl_web
         return Value::LIST(list_values);
     }
 
-    Value ValueHelper::RemoveFromList(Value &current_list, Value &remove_value) 
+    Value ValueHelper::RemoveFromList(Value& current_list, Value& remove_value) 
     {
         if (current_list.type().id() != LogicalTypeId::LIST) {
             throw std::runtime_error("First argument is not a list");
         }
 
-        auto list_values = ListValue::GetChildren(current_list);
+        auto child_values = ListValue::GetChildren(current_list);
         auto new_list_values = duckdb::vector<Value>();
+        new_list_values.reserve(child_values.size()); // Pre-allocate for efficiency
 
-        for (auto &v: list_values) {
+        for (const auto& v : child_values) {
             if (v != remove_value) {
                 new_list_values.push_back(v);
             }
@@ -226,18 +241,23 @@ namespace erpl_web
         return Value::LIST(remove_value.type(), new_list_values);
     }
 
-    Value ValueHelper::RemoveFromList(Value &current_list, unsigned int index_to_remove) 
+    Value ValueHelper::RemoveFromList(Value& current_list, unsigned int index_to_remove) 
     {
         if (current_list.type().id() != LogicalTypeId::LIST) {
             throw std::runtime_error("First argument is not a list");
         }
 
-        auto list_values = ListValue::GetChildren(current_list);
+        auto child_values = ListValue::GetChildren(current_list);
+        if (index_to_remove >= child_values.size()) {
+            throw std::runtime_error(StringUtil::Format("Index %u out of bounds for list", index_to_remove));
+        }
+        
         auto new_list_values = duckdb::vector<Value>();
+        new_list_values.reserve(child_values.size() - 1); // Pre-allocate for efficiency
 
-        for (std::size_t i = 0; i < list_values.size(); i++) {
+        for (std::size_t i = 0; i < child_values.size(); i++) {
             if (i != index_to_remove) {
-                new_list_values.push_back(list_values[i]);
+                new_list_values.push_back(child_values[i]);
             }
         }
 
@@ -264,9 +284,11 @@ namespace erpl_web
      * std::vector<std::string> tokens = ParseJsonPointer(path);
      * // tokens = {"a/b", "c~d"}
      */
-    std::vector<std::string> ValueHelper::ParseJsonPointer(std::string path) 
+    std::vector<std::string> ValueHelper::ParseJsonPointer(const std::string& path) 
     {
         std::vector<std::string> tokens;
+        tokens.reserve(std::count(path.begin(), path.end(), '/') + 1); // Pre-allocate for efficiency
+        
         std::string token;
         std::istringstream token_stream(path);
 
@@ -283,7 +305,7 @@ namespace erpl_web
                 pos += 1;
             }
 
-            if (! token.empty()) {
+            if (!token.empty()) {
                 tokens.push_back(token);
             }
         }
@@ -291,24 +313,24 @@ namespace erpl_web
         return tokens;
     }
 
-    bool ValueHelper::IsX(Value &value) {
+    bool ValueHelper::IsX(const Value& value) {
         return value.ToString() == "X";
     }
 
-    bool ValueHelper::IsX(const Value &value) {
+    bool ValueHelper::IsX(Value& value) {
         return value.ToString() == "X";
     }
 
-    Value &ValueHelper::Get()
+    Value& ValueHelper::Get()
     {
         return _value;
     }
 
-    void ValueHelper::Print() {
+    void ValueHelper::Print() const {
         _value.Print();
     }
 
-    void ValueHelper::Print(std::string path) {
+    void ValueHelper::Print(const std::string& path) const {
         auto full_path = GetPathWithRoot(path);
         auto val = GetValueForPath(_value, full_path);
         val.Print();
@@ -316,12 +338,12 @@ namespace erpl_web
 
     // ValueHelper ---------------------------------------------------------------
 
-    bool HasParam(named_parameter_map_t& named_params, const std::string& name) {
+    bool HasParam(const named_parameter_map_t& named_params, const std::string& name) {
         return named_params.find(name) != named_params.end();
     };
 
-    Value ConvertBoolArgument(named_parameter_map_t& named_params, const std::string& name, const bool default_value) {
-        auto value = HasParam(named_params, name) ? BooleanValue::Get(named_params[name]) : default_value;
+    Value ConvertBoolArgument(const named_parameter_map_t& named_params, const std::string& name, const bool default_value) {
+        auto value = HasParam(named_params, name) ? BooleanValue::Get(named_params.at(name)) : default_value;
 
         if (value == true) {
             return Value::CreateValue("X");

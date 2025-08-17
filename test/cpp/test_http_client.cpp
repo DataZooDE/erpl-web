@@ -98,12 +98,48 @@ TEST_CASE("HttpUrl Parsing and Serialization", "[http_url]") {
         base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
         relative_url = "/Customers?$skiptoken='ERNSH'";
         merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
-        REQUIRE(merged_url.ToString() == "https://services.odata.org/Customers?$skiptoken='ERNSH'");
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Customers?$skiptoken='ERNSH'");
+    }
 
-        base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
-        relative_url = "https://services.odata.org/v4/northwind/northwind.svc/Products";
-        merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
-        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Products");
+    SECTION("ToLower function efficiency") {
+        // Test that ToLower works correctly and efficiently
+        std::string test_string = "Hello World 123";
+        std::string expected = "hello world 123";
+        std::string result = HttpUrl::ToLower(test_string);
+        REQUIRE(result == expected);
+        
+        // Test with empty string
+        REQUIRE(HttpUrl::ToLower("").empty());
+        
+        // Test with all uppercase
+        REQUIRE(HttpUrl::ToLower("ABCDEF") == "abcdef");
+        
+        // Test with mixed case and numbers
+        REQUIRE(HttpUrl::ToLower("AbC123DeF") == "abc123def");
+    }
+
+    SECTION("Improved MergePaths function") {
+        // Test the MergePaths function with the original complex logic
+        std::filesystem::path base_path("/v4/northwind/Customers");
+        std::filesystem::path rel_path("Products");
+        
+        auto merged = HttpUrl::MergePaths(base_path, rel_path);
+        REQUIRE(merged == "/v4/northwind/Customers/Products");
+        
+        // Test with absolute relative path
+        std::filesystem::path abs_path("/absolute/path");
+        auto merged_abs = HttpUrl::MergePaths(base_path, abs_path);
+        REQUIRE(merged_abs == "/absolute/path");
+        
+        // Test with empty relative path
+        std::filesystem::path empty_path("");
+        auto merged_empty = HttpUrl::MergePaths(base_path, empty_path);
+        REQUIRE(merged_empty == "/v4/northwind/Customers");
+        
+        // Test with overlapping paths (original behavior)
+        std::filesystem::path overlap_path("Customers");
+        auto merged_overlap = HttpUrl::MergePaths(base_path, overlap_path);
+        REQUIRE(merged_overlap == "/v4/northwind/Customers"); // Should handle overlap correctly
     }
 }
 

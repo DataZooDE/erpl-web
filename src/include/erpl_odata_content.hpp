@@ -47,13 +47,26 @@ public:
 
     ODataJsonContentMixin(const std::string& content);
 
+    // OData version support
+    void SetODataVersion(ODataVersion version) { odata_version = version; }
+    ODataVersion GetODataVersion() const { return odata_version; }
+    
+    // Auto-detect OData version from JSON content
+    static ODataVersion DetectODataVersion(const std::string& content);
+
 protected:
     std::shared_ptr<yyjson_doc> doc;
+    ODataVersion odata_version = ODataVersion::V4; // Default to v4 for backward compatibility
 
     void ThrowTypeError(yyjson_val *json_value, const std::string &expected);
     void PrettyPrint();
     std::string MetadataContextUrl();
     std::optional<std::string> NextUrl();
+    
+    // Version-aware JSON parsing methods
+    yyjson_val* GetValueArray(yyjson_val* root);
+    std::string GetMetadataContextUrl(yyjson_val* root);
+    std::optional<std::string> GetNextUrl(yyjson_val* root);
     
     duckdb::Value DeserializeJsonValue(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
     duckdb::Value DeserializeJsonBool(yyjson_val *json_value);
@@ -73,6 +86,10 @@ protected:
     duckdb::Value DeserializeJsonObject(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
 
     std::string GetStringProperty(yyjson_val *json_value, const std::string &property_name) const;
+
+    // JSON path evaluation for complex expressions like AddressInfo[1].City."Name"
+    yyjson_val* EvaluateJsonPath(yyjson_val* root, const std::string& path);
+    std::vector<std::string> ParseJsonPath(const std::string& path);
 };
 
 // -------------------------------------------------------------------------------------------------

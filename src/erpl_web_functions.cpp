@@ -2,12 +2,13 @@
 #include "duckdb_argument_helper.hpp"
 
 #include "telemetry.hpp"
+#include "erpl_tracing.hpp"
 
 namespace erpl_web {
 
 
 HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params) 
-    : TableFunctionData(), request(request), auth_params(auth_params), done(false)
+    : TableFunctionData(), request(std::move(request)), auth_params(std::move(auth_params)), done(std::make_shared<bool>(false))
 { }
 
 std::vector<std::string> HttpBindData::GetResultNames() 
@@ -20,19 +21,20 @@ std::vector<LogicalType> HttpBindData::GetResultTypes()
     std::vector<LogicalType> ret;
     
     auto child_types = StructType::GetChildTypes(HttpResponse::DuckDbResponseType());
-    for (auto &type : child_types) {
+    ret.reserve(child_types.size()); // Pre-allocate for efficiency
+    for (const auto &type : child_types) {
         ret.push_back(type.second);
     }
 
     return ret;
 }
 
-bool HttpBindData::HasMoreResults() 
+bool HttpBindData::HasMoreResults() const
 {
-    return done == false;
+    return *done == false;
 }
 
-unsigned int HttpBindData::FetchNextResult(DataChunk &output) 
+unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
 {
     HttpClient client;
     auto response = client.SendRequest(*request);
@@ -42,7 +44,7 @@ unsigned int HttpBindData::FetchNextResult(DataChunk &output)
         output.SetValue(i, 0, row[i]);
     }
 
-    done = true;
+    *done = true;
     output.SetCardinality(1);
     return 1;
 }
@@ -55,20 +57,50 @@ static void PopulateHeadersFromHeadersParam(duckdb::named_parameter_map_t &named
 {
     if (! HasParam(named_params, "headers"))
     {
+        ERPL_TRACE_DEBUG("HTTP_HEADERS", "No headers parameter provided");
         return;
     }
 
-    auto map_entries = ListValue::GetChildren(named_params["headers"]);
-    for (auto &el : map_entries)
-    {
-        auto struct_entries = StructValue::GetChildren(el);
-        if (struct_entries.size() != 2)
-        {
-            throw std::runtime_error("Header map must contain key-value pairs");
+    auto headers_value = named_params["headers"];
+    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Processing headers parameter of type: " + headers_value.type().ToString());
+    
+    if (headers_value.type().id() == LogicalTypeId::MAP) {
+        // Map case: MAP{'key': 'value', 'key2': 'value2'}
+        auto map_entries = MapValue::GetChildren(headers_value);
+        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Found " + std::to_string(map_entries.size()) + " map entries");
+        
+        // Pre-allocate for efficiency
+        header_keys.reserve(map_entries.size());
+        header_vals.reserve(map_entries.size());
+        
+        // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
+        for (size_t i = 0; i < map_entries.size(); i++) {
+            auto entry = map_entries[i];
+            if (entry.type().id() == LogicalTypeId::STRUCT) {
+                auto struct_entries = StructValue::GetChildren(entry);
+                auto struct_types = StructType::GetChildTypes(entry.type());
+                
+                // Find the key and value fields
+                std::string key, value;
+                for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
+                    if (struct_types[j].first == "key") {
+                        key = struct_entries[j].ToString();
+                    } else if (struct_types[j].first == "value") {
+                        value = struct_entries[j].ToString();
+                    }
+                }
+                
+                if (!key.empty() && !value.empty()) {
+                    header_keys.emplace_back(Value(key));
+                    header_vals.emplace_back(Value(value));
+                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Extracted header: " + key + " = " + value);
+                }
+            }
         }
-
-        header_keys.emplace_back(struct_entries[0]);
-        header_vals.emplace_back(struct_entries[1]);
+        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Successfully processed " + std::to_string(header_keys.size()) + " headers from MAP");
+    } else {
+        ERPL_TRACE_ERROR("HTTP_HEADERS", "Unsupported headers type: " + headers_value.type().ToString());
+        throw std::runtime_error("Headers parameter must be a MAP<VARCHAR, VARCHAR> type");
     }
 }
 
@@ -82,19 +114,33 @@ static Value CreateHttpHeaderFromArgs(TableFunctionBindInput &input)
 
     PopulateHeadersFromHeadersParam(named_params, header_keys, header_vals);
 
-    header_keys.emplace_back(Value("Content-Type")); 
-    header_vals.emplace_back(args.size() < 3 ? Value("application/json") : args[2]);
+    // Only add Content-Type header if there's actual content
+    if (args.size() >= 2 && !args[1].IsNull() && args[1].ToString().length() > 0) {
+        header_keys.emplace_back(Value("Content-Type")); 
+        header_vals.emplace_back(args.size() < 3 ? Value("application/json") : args[2]);
+    }
 
-    if (HasParam(named_params, "accept")) {
-        header_keys.emplace_back(Value("Accept"));
-        header_vals.emplace_back(named_params["accept"]);
-    } else {
-        header_keys.emplace_back(Value("Accept"));
-        header_vals.emplace_back(Value("application/json"));
+    // Only add Accept header if user didn't provide one in custom headers
+    bool has_accept_header = false;
+    for (size_t i = 0; i < header_keys.size(); i++) {
+        if (header_keys[i].ToString() == "Accept") {
+            has_accept_header = true;
+            break;
+        }
     }
     
-    return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, 
-                      header_keys, header_vals);
+    if (!has_accept_header) {
+        if (HasParam(named_params, "accept")) {
+            header_keys.emplace_back(Value("Accept"));
+            header_vals.emplace_back(named_params["accept"]);
+        } else {
+            header_keys.emplace_back(Value("Accept"));
+            header_vals.emplace_back(Value("application/json"));
+        }
+    }
+    
+    // Create a proper MAP using the correct signature
+    return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, header_keys, header_vals);
 }
 
 static std::string CreateContentFromArgs(TableFunctionBindInput &input)
@@ -115,12 +161,26 @@ static std::string CreateContentFromArgs(TableFunctionBindInput &input)
 
 static std::shared_ptr<HttpRequest> RequestFromInput(const HttpAuthParams &auth_params, TableFunctionBindInput &input, HttpMethod method) 
 {
-    auto args = input.inputs;
-    auto url = args[0].ToString();
-    auto request = std::make_shared<HttpRequest>(method, url);
-    request->AuthHeadersFromParams(auth_params);
-    request->HeadersFromMapArg(CreateHttpHeaderFromArgs(input));
+    ERPL_TRACE_DEBUG("HTTP_REQUEST", "Creating HTTP " + method.ToString() + " request");
     
+    auto args = input.inputs;
+    auto url = args[0].GetValue<std::string>();
+    ERPL_TRACE_INFO("HTTP_REQUEST", "Request URL: " + url);
+    
+    auto headers = CreateHttpHeaderFromArgs(input);
+    auto content = CreateContentFromArgs(input);
+    
+    ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request created with " + std::to_string(content.length()) + " bytes of content");
+    
+    // Extract content type from headers
+    std::string content_type = "application/json";
+    if (args.size() >= 3) {
+        content_type = args[2].GetValue<std::string>();
+    }
+    
+    auto request = std::make_shared<HttpRequest>(method, url, content_type, content);
+    request->HeadersFromMapArg(headers);
+    request->AuthHeadersFromParams(auth_params);
     return request;
 }
 
@@ -139,20 +199,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
     return HttpAuthParams::FromDuckDbSecrets(context, url);
 }
 
-static unique_ptr<FunctionData> HttpBind(duckdb::ClientContext &context, 
-                                         TableFunctionBindInput &input, 
-                                         vector<LogicalType> &return_types, 
-                                         vector<string> &names,
-                                         HttpMethod method) 
-{
-    auto auth_params = AuthParamsFromInput(context, input);
-    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, method), auth_params); 
 
-    names = bind_data->GetResultNames();
-    return_types = bind_data->GetResultTypes();
-
-    return std::move(bind_data);
-}
 
 static unique_ptr<FunctionData> HttpGetBind(ClientContext &context, 
                                             TableFunctionBindInput &input, 
@@ -160,7 +207,13 @@ static unique_ptr<FunctionData> HttpGetBind(ClientContext &context,
                                             vector<string> &names) 
 {
     PostHogTelemetry::Instance().CaptureFunctionExecution("http_get");
-    return HttpBind(context, input, return_types, names, HttpMethod::GET);
+    auto auth_params = AuthParamsFromInput(context, input);
+    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::GET), auth_params);
+    
+    names = bind_data->GetResultNames();
+    return_types = bind_data->GetResultTypes();
+    
+    return std::move(bind_data);
 }
 
 static unique_ptr<FunctionData> HttpHeadBind(ClientContext &context, 
@@ -169,7 +222,13 @@ static unique_ptr<FunctionData> HttpHeadBind(ClientContext &context,
                                             vector<string> &names) 
 {
     PostHogTelemetry::Instance().CaptureFunctionExecution("http_head");
-    return HttpBind(context, input, return_types, names, HttpMethod::HEAD);
+    auto auth_params = AuthParamsFromInput(context, input);
+    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::HEAD), auth_params);
+    
+    names = bind_data->GetResultNames();
+    return_types = bind_data->GetResultTypes();
+    
+    return std::move(bind_data);
 }
 
 static unique_ptr<FunctionData> HttpMutatingBind(ClientContext &context, 
@@ -229,20 +288,32 @@ static void HttpScan(ClientContext &context,
                         TableFunctionInput &data, 
                         DataChunk &output) 
 {
-    auto &bind_data = data.bind_data->CastNoConst<HttpBindData>();
+    ERPL_TRACE_DEBUG("HTTP_SCAN", "Starting HTTP scan operation");
     
-    if (! bind_data.HasMoreResults()) {
+    auto &bind_data = data.bind_data->Cast<HttpBindData>();
+    
+    if (!bind_data.HasMoreResults()) {
+        ERPL_TRACE_DEBUG("HTTP_SCAN", "No more results available");
+        output.SetCardinality(0);
         return;
     }
-
-    bind_data.FetchNextResult(output);
+    
+    try {
+        auto rows_fetched = bind_data.FetchNextResult(output);
+        ERPL_TRACE_INFO("HTTP_SCAN", "Successfully fetched " + std::to_string(rows_fetched) + " rows");
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("HTTP_SCAN", "Failed to fetch results: " + std::string(e.what()));
+        throw;
+    }
 }
 
 // ----------------------------------------------------------------------
 
 LogicalType CreateHttpHeaderType() 
 {
-    auto type = HttpResponse::DuckDbHeaderType();
+    // Use MAP type to accept key-value pairs like MAP{'key': 'value', 'key2': 'value2'}
+    // This is the proper DuckDB MAP type for headers
+    auto type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
     type.SetAlias("ERPL_HTTP_HEADER");
     return type;
 }

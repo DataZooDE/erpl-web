@@ -16,6 +16,11 @@ set(TEST_SOURCES
     test_odata_edm.cpp
     test_odata_client.cpp
     test_odata_content.cpp
+    test_datasphere_integration.cpp
+    test_datasphere_oauth2_consolidated.cpp
+    test_datasphere_discovery.cpp
+    test_datasphere_asset_consumption.cpp
+    test_datasphere_pushdown.cpp
     test_main.cpp
 )
 

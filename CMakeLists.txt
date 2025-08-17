@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 
-option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." OFF)
+option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." ON)
 
 # Set extension name here
 set(TARGET_NAME erpl_web)
@@ -12,7 +12,7 @@ find_package(cpptrace CONFIG REQUIRED)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) #Optional
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
-set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+#set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-deprecated-declarations)
@@ -25,6 +25,7 @@ endif()
 project(${TARGET_NAME})
 include_directories(
     src/include
+    ./duckdb/src/include
     ./duckdb/third_party/
     ./duckdb/third_party/httplib
 )
@@ -46,6 +47,20 @@ set(EXTENSION_SOURCES
     src/erpl_web_functions.cpp
     src/erpl_web_extension.cpp
     src/telemetry.cpp
+    src/erpl_tracing.cpp
+    src/erpl_datasphere_client.cpp
+    src/erpl_datasphere_catalog.cpp
+    src/erpl_datasphere_asset.cpp
+    src/erpl_datasphere_types.cpp
+    src/erpl_oauth2_types.cpp
+    src/erpl_datasphere_browser.cpp
+    src/erpl_datasphere_local_server.cpp
+    src/erpl_datasphere_pushdown.cpp
+    src/erpl_datasphere_secret.cpp
+    src/erpl_oauth2_callback_handler.cpp
+    src/erpl_oauth2_flow_v2.cpp
+    src/erpl_oauth2_server.cpp
+    src/erpl_timeout_http_client.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
@@ -71,8 +86,15 @@ if(MINGW)
    target_link_libraries(${LOADABLE_EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
 endif()
 
+if(APPLE)
+   find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+   find_library(APPLICATIONSERVICES_FRAMEWORK ApplicationServices)
+   target_link_libraries(${EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
+   target_link_libraries(${LOADABLE_EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
+endif()
+
 if(${BUILD_UNITTESTS})
-      add_subdirectory(test)
+    add_subdirectory(test)
 endif()
 
 install(
