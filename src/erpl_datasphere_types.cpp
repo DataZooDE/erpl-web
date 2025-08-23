@@ -9,48 +9,48 @@ namespace DatasphereTypes {
 // Create DuckDB struct types for each component
 duckdb::LogicalType CreateAssetBasicInfoType() {
     duckdb::child_list_t<duckdb::LogicalType> children;
-    children.emplace_back("name", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("spaceName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("label", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetRelationalMetadataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetRelationalDataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetAnalyticalMetadataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetAnalyticalDataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("supportsAnalyticalQueries", duckdb::LogicalType::VARCHAR);
+    children.emplace_back("name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("spaceName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("label", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetRelationalMetadataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetRelationalDataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetAnalyticalMetadataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetAnalyticalDataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("supportsAnalyticalQueries", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }
 
 duckdb::LogicalType CreateODataContextType() {
     duckdb::child_list_t<duckdb::LogicalType> children;
-    children.emplace_back("odataContext", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataMetadataEtag", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataNextLink", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataCount", duckdb::LogicalType::VARCHAR);
+    children.emplace_back("odataContext", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataMetadataEtag", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataNextLink", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataCount", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }
 
 duckdb::LogicalType CreateRelationalMetadataType() {
     duckdb::child_list_t<duckdb::LogicalType> children;
-    children.emplace_back("entitySetName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("entityTypeName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("propertyNames", duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR));
-    children.emplace_back("propertyTypes", duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR));
-    children.emplace_back("metadataSummary", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("isAvailable", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("entitySetName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("entityTypeName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("propertyNames", duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)));
+    children.emplace_back("propertyTypes", duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)));
+    children.emplace_back("metadataSummary", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("isAvailable", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }
 
 duckdb::LogicalType CreateAnalyticalMetadataType() {
     duckdb::child_list_t<duckdb::LogicalType> children;
-    children.emplace_back("cubeName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("dimensionNames", duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR));
-    children.emplace_back("measureNames", duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR));
-    children.emplace_back("hierarchyNames", duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR));
-    children.emplace_back("metadataSummary", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("isAvailable", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("cubeName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("dimensionNames", duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)));
+    children.emplace_back("measureNames", duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)));
+    children.emplace_back("hierarchyNames", duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)));
+    children.emplace_back("metadataSummary", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("isAvailable", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }
@@ -61,9 +61,9 @@ duckdb::LogicalType CreateAssetCompleteType() {
     children.emplace_back("odataContext", CreateODataContextType());
     children.emplace_back("relationalMetadata", CreateRelationalMetadataType());
     children.emplace_back("analyticalMetadata", CreateAnalyticalMetadataType());
-    children.emplace_back("assetType", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("hasRelationalAccess", duckdb::LogicalType::BOOLEAN);
-    children.emplace_back("hasAnalyticalAccess", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("assetType", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("hasRelationalAccess", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
+    children.emplace_back("hasAnalyticalAccess", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }
@@ -108,8 +108,8 @@ duckdb::Value RelationalMetadataToValue(const RelationalMetadata& metadata) {
     duckdb::child_list_t<duckdb::Value> children;
     children.emplace_back("entitySetName", duckdb::Value(metadata.entitySetName));
     children.emplace_back("entityTypeName", duckdb::Value(metadata.entityTypeName));
-    children.emplace_back("propertyNames", duckdb::Value::LIST(duckdb::LogicalType::VARCHAR, std::move(property_names_values)));
-    children.emplace_back("propertyTypes", duckdb::Value::LIST(duckdb::LogicalType::VARCHAR, std::move(property_types_values)));
+    children.emplace_back("propertyNames", duckdb::Value::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), std::move(property_names_values)));
+    children.emplace_back("propertyTypes", duckdb::Value::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), std::move(property_types_values)));
     children.emplace_back("metadataSummary", duckdb::Value(metadata.metadataSummary));
     children.emplace_back("isAvailable", duckdb::Value::BOOLEAN(metadata.isAvailable));
     
@@ -135,9 +135,9 @@ duckdb::Value AnalyticalMetadataToValue(const AnalyticalMetadata& metadata) {
     
     duckdb::child_list_t<duckdb::Value> children;
     children.emplace_back("cubeName", duckdb::Value(metadata.cubeName));
-    children.emplace_back("dimensionNames", duckdb::Value::LIST(duckdb::LogicalType::VARCHAR, std::move(dimension_names_values)));
-    children.emplace_back("measureNames", duckdb::Value::LIST(duckdb::LogicalType::VARCHAR, std::move(measure_names_values)));
-    children.emplace_back("hierarchyNames", duckdb::Value::LIST(duckdb::LogicalType::VARCHAR, std::move(hierarchy_names_values)));
+    children.emplace_back("dimensionNames", duckdb::Value::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), std::move(dimension_names_values)));
+    children.emplace_back("measureNames", duckdb::Value::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), std::move(measure_names_values)));
+    children.emplace_back("hierarchyNames", duckdb::Value::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), std::move(hierarchy_names_values)));
     children.emplace_back("metadataSummary", duckdb::Value(metadata.metadataSummary));
     children.emplace_back("isAvailable", duckdb::Value::BOOLEAN(metadata.isAvailable));
     
@@ -161,41 +161,41 @@ duckdb::Value AssetCompleteToValue(const AssetComplete& asset) {
 duckdb::LogicalType CreateFlatAssetSchemaType() {
     duckdb::child_list_t<duckdb::LogicalType> children;
     // Basic fields (8)
-    children.emplace_back("name", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("spaceName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("label", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetRelationalMetadataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetRelationalDataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetAnalyticalMetadataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("assetAnalyticalDataUrl", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("supportsAnalyticalQueries", duckdb::LogicalType::VARCHAR);
+    children.emplace_back("name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("spaceName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("label", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetRelationalMetadataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetRelationalDataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetAnalyticalMetadataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("assetAnalyticalDataUrl", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("supportsAnalyticalQueries", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
     
     // OData context fields (4)
-    children.emplace_back("odataContext", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataMetadataEtag", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataNextLink", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("odataCount", duckdb::LogicalType::VARCHAR);
+    children.emplace_back("odataContext", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataMetadataEtag", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataNextLink", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("odataCount", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
     
     // Relational metadata fields (6)
-    children.emplace_back("relationalEntitySetName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("relationalEntityTypeName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("relationalPropertyNames", duckdb::LogicalType::VARCHAR); // JSON string for now
-    children.emplace_back("relationalPropertyTypes", duckdb::LogicalType::VARCHAR); // JSON string for now
-    children.emplace_back("relationalMetadataSummary", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("relationalIsAvailable", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("relationalEntitySetName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("relationalEntityTypeName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("relationalPropertyNames", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)); // JSON string for now
+    children.emplace_back("relationalPropertyTypes", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)); // JSON string for now
+    children.emplace_back("relationalMetadataSummary", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("relationalIsAvailable", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     // Analytical metadata fields (6)
-    children.emplace_back("analyticalCubeName", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("analyticalDimensionNames", duckdb::LogicalType::VARCHAR); // JSON string for now
-    children.emplace_back("analyticalMeasureNames", duckdb::LogicalType::VARCHAR);   // JSON string for now
-    children.emplace_back("analyticalHierarchyNames", duckdb::LogicalType::VARCHAR); // JSON string for now
-    children.emplace_back("analyticalMetadataSummary", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("analyticalIsAvailable", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("analyticalCubeName", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("analyticalDimensionNames", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)); // JSON string for now
+    children.emplace_back("analyticalMeasureNames", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));   // JSON string for now
+    children.emplace_back("analyticalHierarchyNames", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)); // JSON string for now
+    children.emplace_back("analyticalMetadataSummary", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("analyticalIsAvailable", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     // Derived fields (3)
-    children.emplace_back("assetType", duckdb::LogicalType::VARCHAR);
-    children.emplace_back("hasRelationalAccess", duckdb::LogicalType::BOOLEAN);
-    children.emplace_back("hasAnalyticalAccess", duckdb::LogicalType::BOOLEAN);
+    children.emplace_back("assetType", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    children.emplace_back("hasRelationalAccess", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
+    children.emplace_back("hasAnalyticalAccess", duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN));
     
     return duckdb::LogicalType::STRUCT(std::move(children));
 }

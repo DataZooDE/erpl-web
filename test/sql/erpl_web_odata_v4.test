@@ -1,0 +1,50 @@
+# name: test/sql/erpl_web_odata_v4.test
+# description: Test erpl_web extension OData v4 functionality (TripPin)
+# group: [erpl_web_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=true;
+
+# ============================================================================
+# OData v4 Service Testing (TripPin)
+# ============================================================================
+
+# Test OData v4 service connection
+query I
+SELECT 1 FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=1') LIMIT 1;
+----
+1
+
+# Test OData v4 with pagination
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=20');
+----
+20
+
+# Test OData v4 with $select
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=10&$select=UserName,FirstName,LastName');
+----
+10
+
+# Test OData v4 with $filter
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$filter=Gender eq ''Female''&$top=5');
+----
+5
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+SELECT 'OData v4 tests completed...' as status;

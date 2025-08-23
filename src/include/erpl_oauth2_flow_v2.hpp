@@ -25,6 +25,7 @@ private:
     std::string GenerateState();
     std::string BuildAuthorizationUrl(const OAuth2Config& config, const std::string& code_challenge, const std::string& state);
     void OpenBrowser(const std::string& url);
+    void DisplayOAuth2Instructions(const std::string& auth_url);
     
     std::unique_ptr<OAuth2Server> server_;
     std::unique_ptr<TimeoutHttpClient> http_client_;

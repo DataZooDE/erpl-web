@@ -1,0 +1,50 @@
+# name: test/sql/erpl_web_odata_v2.test
+# description: Test erpl_web extension OData v2 functionality (Northwind)
+# group: [erpl_web_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=true;
+
+# ============================================================================
+# OData v2 Service Testing (Northwind)
+# ============================================================================
+
+# Test basic OData v2 service connection
+query I
+SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers') LIMIT 1;
+----
+1
+
+# Test OData v2 with pagination
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=25&$select=CustomerID,CompanyName,ContactName&$format=json');
+----
+20
+
+# Test OData v2 with different entity set
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Products?$top=30&$format=json');
+----
+20
+
+# Test OData v2 with $filter
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=Country eq ''Germany''&$format=json');
+----
+11
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+SELECT 'OData v2 tests completed...' as status;

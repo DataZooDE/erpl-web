@@ -1,5 +1,6 @@
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
+#include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
@@ -71,7 +72,7 @@ std::vector<ODataEntitySetReference> ODataAttachBindData::EntitySets()
 
 bool ODataAttachBindData::MatchPattern(const std::string &str, const std::string &ignore_pattern)
 {
-    auto is_match = duckdb::LikeFun::Glob(str.c_str(), str.size(), ignore_pattern.c_str(), ignore_pattern.size());
+    auto is_match = duckdb::Glob(str.c_str(), str.size(), ignore_pattern.c_str(), ignore_pattern.size());
     return is_match;
 }
 

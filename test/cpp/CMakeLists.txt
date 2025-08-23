@@ -20,14 +20,14 @@ set(TEST_SOURCES
     test_datasphere_oauth2_consolidated.cpp
     test_datasphere_discovery.cpp
     test_datasphere_asset_consumption.cpp
-    test_datasphere_pushdown.cpp
+
     test_main.cpp
 )
 
 add_executable(erpl_web_tests ${TEST_SOURCES})
 target_link_libraries(erpl_web_tests 
                       ${EXTENSION_NAME} 
-                      duckdb_static 
+                      duckdb 
                       test_helpers
                       OpenSSL::SSL OpenSSL::Crypto 
                       tinyxml2::tinyxml2)

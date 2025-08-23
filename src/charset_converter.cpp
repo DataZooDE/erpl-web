@@ -43,7 +43,7 @@ namespace {
 CharsetConverter::CharsetConverter(const std::string& content_type) 
     : charsetType(detectCharsetType(content_type))
 {
-    ERPL_TRACE_INFO("CHARSET_CONVERTER", "Creating charset converter for content type: " + content_type);
+    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", duckdb::StringUtil::Format("Creating charset converter for content type: %s", content_type));
     
     // Set charset string for backward compatibility
     switch (charsetType) {
@@ -69,7 +69,7 @@ CharsetConverter::CharsetConverter(const std::string& content_type)
             break;
     }
     
-    ERPL_TRACE_INFO("CHARSET_CONVERTER", "Charset converter initialized with charset: " + charset);
+    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", duckdb::StringUtil::Format("Charset converter initialized with charset: %s", charset));
 }
 
 CharsetType CharsetConverter::detectCharsetType(const std::string& content_type) const {
@@ -109,7 +109,7 @@ bool CharsetConverter::isBinaryContentType(const std::string& content_type) cons
 }
 
 std::string CharsetConverter::convert(const std::string& input) const {
-    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Converting " + std::to_string(input.length()) + " bytes using charset: " + charset);
+    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", duckdb::StringUtil::Format("Converting %d bytes using charset: %s", input.length(), charset));
     
     if (input.empty()) {
         ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Input is empty, returning empty string");
@@ -141,7 +141,7 @@ std::string CharsetConverter::convert(const std::string& input) const {
 }
 
 std::wstring CharsetConverter::from_bytes(const std::string& input) const {
-    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", "Converting from bytes using charset: " + charset);
+    ERPL_TRACE_DEBUG("CHARSET_CONVERTER", duckdb::StringUtil::Format("Converting from bytes using charset: %s", charset));
     
     switch (charsetType) {
         case CharsetType::ISO8859_1:

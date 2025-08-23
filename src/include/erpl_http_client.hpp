@@ -117,8 +117,10 @@ public:
     std::optional<std::string> BasicCredentialsBase64() const;
 
     std::string ToString() const;
-private:
+    
+    // Public method for Base64 encoding
     static std::string Base64Encode(const std::string &str);
+private:
 
     std::string CredsToStars(const std::string &creds) const;
 };

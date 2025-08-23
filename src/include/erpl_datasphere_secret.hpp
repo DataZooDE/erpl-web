@@ -1,9 +1,9 @@
 #pragma once
 
-#include "duckdb.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "erpl_oauth2_flow_v2.hpp"
+#include "erpl_http_client.hpp"
 
 namespace erpl_web {
 
@@ -82,5 +82,19 @@ private:
     static std::string GetCachedToken(const duckdb::KeyValueSecret *kv_secret);
     static OAuth2Tokens PerformOAuth2Flow(duckdb::ClientContext &context, const duckdb::KeyValueSecret *kv_secret);
 };
+
+// Unified auth retrieval utilities
+struct DatasphereAuthInfo {
+    std::string tenant_name;
+    std::string data_center;
+    std::string access_token;
+    std::shared_ptr<HttpAuthParams> auth_params;
+};
+
+// Returns a cloned KeyValueSecret for a given secret name (throws on errors)
+duckdb::unique_ptr<duckdb::KeyValueSecret> GetDatasphereKeyValueSecret(duckdb::ClientContext &context, const std::string &secret_name = "datasphere");
+
+// Resolves tenant, data_center and access_token, and prepares HttpAuthParams
+DatasphereAuthInfo ResolveDatasphereAuth(duckdb::ClientContext &context, const std::string &secret_name = "datasphere");
 
 } // namespace erpl_web

@@ -41,16 +41,27 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetResponse::ToRows(std::vect
 template<typename TResponse>
 void ODataClient<TResponse>::DetectODataVersion()
 {
+    // If we already know the version, don't fetch metadata again
+    if (odata_version != ODataVersion::UNKNOWN) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "OData version already detected, skipping metadata fetch");
+        return;
+    }
+    
     // Get the current metadata to detect version
     auto metadata_url = GetMetadataContextUrl();
+    
+    // Check if we already have cached metadata for this URL
     auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);
     if (cached_edmx) {
         // Version is already detected from the cached metadata
         // Extract the version from cached metadata and update client version
         odata_version = cached_edmx->GetVersion();
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using cached metadata, detected version: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
         return;
     }
 
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Fetching metadata to detect OData version from: " + metadata_url);
+    
     // Fetch metadata to detect version
     auto metadata_response = DoMetadataHttpGet(metadata_url);
     auto content = metadata_response->Content();
@@ -58,6 +69,8 @@ void ODataClient<TResponse>::DetectODataVersion()
     // Parse metadata to detect version
     auto edmx = Edmx::FromXml(content);
     odata_version = edmx.GetVersion();
+    
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
     
     // Cache the metadata with detected version
     EdmCache::GetInstance().Set(metadata_url, edmx);
@@ -83,30 +96,103 @@ ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_clie
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
 {
-    // For SAP Datasphere OData consumption, we need to keep the asset ID in the metadata URL
-    // The URL structure is: /api/v1/dwc/consumption/relational/{spaceId}/{assetId}
-    // We want: /api/v1/dwc/consumption/relational/{spaceId}/{assetId}/$metadata
-    
-    // Check if this is a Datasphere URL (contains /dwc/consumption/)
-    auto url_str = url.ToString();
-    if (url_str.find("/dwc/consumption/") != std::string::npos) {
-        // For Datasphere, append $metadata to the current URL
-        return url_str + "/$metadata";
+    // First, check if we have a stored metadata context URL (for Datasphere dual-URL pattern)
+    if (!metadata_context_url.empty()) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using stored metadata context URL: " + metadata_context_url);
+        return metadata_context_url;
     }
     
-    // For standard OData services, extract service root URL from entity set URL
-    // For entity set URLs like https://services.odata.org/TripPinRESTierService/People?$top=1
-    // We need to get the service root: https://services.odata.org/TripPinRESTierService
-    auto service_root_url = url.PopPath();
-    
-    // Remove any query parameters from the service root
-    auto service_root_str = service_root_url.ToString();
-    auto query_pos = service_root_str.find('?');
-    if (query_pos != std::string::npos) {
-        service_root_str = service_root_str.substr(0, query_pos);
+    // Prefer @odata.context from last data/service response if available
+    if (current_response) {
+        auto ctx = current_response->MetadataContextUrl();
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Found @odata.context: " + ctx);
+        if (!ctx.empty()) {
+            auto hash_pos = ctx.find('#');
+            if (hash_pos != std::string::npos) {
+                ctx = ctx.substr(0, hash_pos);
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Removed hash fragment, context URL: " + ctx);
+            }
+            HttpUrl meta_url = HttpUrl::MergeWithBaseUrlIfRelative(url, ctx);
+            auto final_url = meta_url.ToString();
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Using @odata.context metadata URL: " + final_url);
+            // Store this URL for future use to avoid repeated fallback URL generation
+            metadata_context_url = final_url;
+            return final_url;
+        } else {
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "No @odata.context found in current response");
+        }
+    } else {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "No current response available for @odata.context");
     }
     
-    return service_root_str + "/$metadata";
+    // Fallback to conventional $metadata next to service root
+    // Only log this once to reduce noise in the logs
+    static bool logged_fallback = false;
+    if (!logged_fallback) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Determining metadata URL for: " + url.ToString());
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Using fallback metadata URL generation");
+        logged_fallback = true;
+    } else {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using cached fallback metadata URL");
+    }
+    
+    HttpUrl base(url);
+    
+    // For OData v2, metadata is typically at the service root level
+    // Extract the service root by removing entity set and query parameters
+    auto path = base.Path();
+    auto query = base.Query();
+    
+    // Remove query parameters from metadata URL
+    base.Query("");
+    
+    // For OData v2, metadata is typically at the service root
+    // Remove entity set segments and append $metadata
+    if (!path.empty()) {
+        // Find the service root by looking for common OData patterns
+        if (path.find("/V2/") != std::string::npos) {
+            // OData v2: metadata is at service root
+            auto v2_pos = path.find("/V2/");
+            auto service_pos = path.find("/", v2_pos + 4);
+            if (service_pos != std::string::npos) {
+                auto service_root = path.substr(0, service_pos);
+                base.Path(service_root + "/$metadata");
+            } else {
+                base.Path(path + "/$metadata");
+            }
+        } else if (path.find("/V4/") != std::string::npos) {
+            // OData v4: metadata is at service root
+            auto v4_pos = path.find("/V4/");
+            auto service_pos = path.find("/", v4_pos + 4);
+            if (service_pos != std::string::npos) {
+                auto service_root = path.substr(0, service_pos);
+                base.Path(service_root + "/$metadata");
+            } else {
+                base.Path(path + "/$metadata");
+            }
+        } else {
+            // Generic fallback: remove last segment and append $metadata
+            auto last_slash = path.find_last_of('/');
+            if (last_slash != std::string::npos && last_slash > 0) {
+                auto service_root = path.substr(0, last_slash);
+                base.Path(service_root + "/$metadata");
+            } else {
+                base.Path("/$metadata");
+            }
+        }
+    } else {
+        base.Path("/$metadata");
+    }
+    
+    auto fallback_url = base.ToString();
+    
+    // Store the fallback URL to avoid regenerating it multiple times
+    if (metadata_context_url.empty()) {
+        metadata_context_url = fallback_url;
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Generated and stored fallback metadata URL: " + fallback_url);
+    }
+    
+    return fallback_url;
 }
 
 std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataContent(const std::string& content, ODataVersion odata_version)
@@ -175,9 +261,31 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
     current_response = std::make_shared<ODataEntitySetResponse>(std::move(http_response), odata_version);
     
     ERPL_TRACE_DEBUG("ODATA_CLIENT", "Successfully created OData response");
+    
+    // After getting a response, try to extract and store the metadata context URL
+    // This will be used for future metadata requests instead of generating fallback URLs
+    if (current_response) {
+        auto ctx = current_response->MetadataContextUrl();
+        if (!ctx.empty()) {
+            auto hash_pos = ctx.find('#');
+            if (hash_pos != std::string::npos) {
+                ctx = ctx.substr(0, hash_pos);
+            }
+            HttpUrl meta_url = HttpUrl::MergeWithBaseUrlIfRelative(url, ctx);
+            auto final_url = meta_url.ToString();
+            if (metadata_context_url != final_url) {
+                ERPL_TRACE_INFO("ODATA_CLIENT", "Updated metadata context URL from response: " + final_url);
+                metadata_context_url = final_url;
+            }
+        }
+    }
 
     return current_response;
 }
+
+
+
+// (duplicate definition removed)
 
 EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
 {

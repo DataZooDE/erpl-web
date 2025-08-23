@@ -81,13 +81,11 @@ public:
                  const std::string &ignore_pattern);
     ~ODataCatalog() = default;
 
-    std::string GetCatalogType() override;
+    duckdb::string GetCatalogType() override;
 
     void Initialize(bool load_builtin) override;
     void Initialize(duckdb::optional_ptr<duckdb::ClientContext> context, bool load_builtin) override;
     void FinalizeLoad(duckdb::optional_ptr<duckdb::ClientContext> context) override;
-
-    duckdb::string GetCatalogType() override;
     duckdb::string GetDBPath() override;
     bool InMemory() override;
     bool SupportsTimeTravel() const override;

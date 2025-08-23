@@ -2,7 +2,7 @@
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
 #include "erpl_datasphere_catalog.hpp"
-#include "erpl_datasphere_asset.hpp"
+#include "erpl_datasphere_read.hpp"
 
 using namespace erpl_web;
 using namespace std;
@@ -17,17 +17,13 @@ TEST_CASE("Test Datasphere Function Registration", "[datasphere]")
     auto describe_space_func = CreateDatasphereDescribeSpaceFunction();
     auto describe_asset_func = CreateDatasphereDescribeAssetFunction();
     
-    auto asset_func = CreateDatasphereAssetFunction();
-    auto analytical_func = CreateDatasphereAnalyticalFunction();
-    auto relational_func = CreateDatasphereRelationalFunction();
+    auto relational_func = CreateDatasphereReadRelationalFunction();
     
     REQUIRE(show_spaces_func.name == "datasphere_show_spaces");
     REQUIRE(show_assets_func.name == "datasphere_show_assets");
     REQUIRE(describe_space_func.name == "datasphere_describe_space");
     REQUIRE(describe_asset_func.name == "datasphere_describe_asset");
     
-    REQUIRE(asset_func.name == "datasphere_asset");
-    REQUIRE(analytical_func.name == "datasphere_analytical");
     REQUIRE(relational_func.name == "datasphere_read_relational");
 }
 
@@ -95,51 +91,3 @@ TEST_CASE("Test Datasphere Auth Params", "[datasphere]")
     REQUIRE(auth_params.NeedsRefresh() == true);
 }
 
-TEST_CASE("Test Datasphere Parameter Parsing", "[datasphere]")
-{
-    std::cout << std::endl;
-    
-    // Test parameter parsing
-    auto params = ParseInputParameters("Year=2024,Region='EU'");
-    REQUIRE(params.size() == 2);
-    REQUIRE(params["Year"] == "2024");
-    REQUIRE(params["Region"] == "EU");
-    
-    // Test numeric parameters
-    auto numeric_params = ParseInputParameters("Year=2024,Value=100.5");
-    REQUIRE(numeric_params.size() == 2);
-    REQUIRE(numeric_params["Year"] == "2024");
-    REQUIRE(numeric_params["Value"] == "100.5");
-    
-    // Test empty parameters
-    auto empty_params = ParseInputParameters("");
-    REQUIRE(empty_params.empty());
-}
-
-TEST_CASE("Test Datasphere URL Parameter Building", "[datasphere]")
-{
-    std::cout << std::endl;
-    
-    // Test URL building with parameters
-    std::map<std::string, std::string> params;
-    params["Year"] = "2024";
-    params["Region"] = "EU";
-    
-    auto url_with_params = BuildODataUrlWithParameters("https://test.com/api", params);
-    // Check that both parameters are present, regardless of order
-    REQUIRE(url_with_params.find("Year=2024") != std::string::npos);
-    REQUIRE(url_with_params.find("Region='EU'") != std::string::npos);
-    REQUIRE(url_with_params.find("https://test.com/api(") == 0);
-    REQUIRE(url_with_params.back() == ')');
-    
-    // Test with numeric parameters
-    std::map<std::string, std::string> numeric_params;
-    numeric_params["Value"] = "100.5";
-    
-    auto url_with_numeric = BuildODataUrlWithParameters("https://test.com/api", numeric_params);
-    REQUIRE(url_with_numeric == "https://test.com/api(Value=100.5)");
-    
-    // Test with no parameters
-    auto url_no_params = BuildODataUrlWithParameters("https://test.com/api", {});
-    REQUIRE(url_no_params == "https://test.com/api");
-}

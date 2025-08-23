@@ -13,7 +13,7 @@
 #include "erpl_odata_read_functions.hpp"
 #include "erpl_odata_storage.hpp"
 #include "erpl_datasphere_catalog.hpp"
-#include "erpl_datasphere_asset.hpp"
+#include "erpl_datasphere_read.hpp"
 #include "erpl_datasphere_secret.hpp"
 
 #include "telemetry.hpp"
@@ -223,9 +223,7 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereDescribeAssetFunction());
     
     // Register asset consumption functions
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereAssetFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereAnalyticalFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereRelationalFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereReadRelationalFunction());
     
     // Register Datasphere secret management functions
     erpl_web::CreateDatasphereSecretFunctions::Register(instance);

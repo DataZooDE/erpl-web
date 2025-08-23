@@ -624,8 +624,8 @@ duckdb::LogicalType HttpResponse::DuckDbResponseType()
 duckdb::LogicalType HttpResponse::DuckDbHeaderType()
 {
     return duckdb::LogicalType::MAP(
-        duckdb::LogicalType::VARCHAR,
-        duckdb::LogicalType::VARCHAR
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)
     );
 }
 
