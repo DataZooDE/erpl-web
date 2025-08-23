@@ -172,12 +172,9 @@ ODataCatalog::ODataCatalog(duckdb::AttachedDatabase &db,
     main_schema = duckdb::make_uniq<ODataSchemaEntry>(*this, schema_info);
 }
 
-ODataCatalog::~ODataCatalog()
-{
-    // Cleanup if needed
-}
+
     
-std::string ODataCatalog::GetCatalogType()
+duckdb::string ODataCatalog::GetCatalogType()
 {
     return "odata";
 }

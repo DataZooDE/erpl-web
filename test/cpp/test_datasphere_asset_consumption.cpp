@@ -1,7 +1,7 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
-#include "erpl_datasphere_asset.hpp"
+#include "erpl_datasphere_read.hpp"
 #include "erpl_datasphere_client.hpp"
 #include <iostream>
 

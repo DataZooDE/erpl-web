@@ -2,6 +2,7 @@
 #include "erpl_datasphere_client.hpp"
 #include "erpl_odata_client.hpp"
 #include "erpl_odata_content.hpp"
+#include "erpl_odata_edm.hpp"
 #include "erpl_oauth2_flow_v2.hpp"
 #include "erpl_datasphere_secret.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -86,20 +87,20 @@ std::vector<std::string> DatasphereShowBindData::GetResultNames(bool all_columns
 std::vector<duckdb::LogicalType> DatasphereShowBindData::GetResultTypes(bool all_columns) {
     if (resource_type == "assets") {
         // Return asset-specific column types based on AssetEntityV1 schema
-        return {
-            duckdb::LogicalType::VARCHAR,  // name
-                    duckdb::LogicalType::VARCHAR,  // space_name
-        duckdb::LogicalType::VARCHAR,  // label
-        duckdb::LogicalType::VARCHAR   // supports_analytical_queries
-        };
+            return {
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // name
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // space_name
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // label
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)   // supports_analytical_queries
+    };
     } else {
         // Return space-specific column types (default)
-    return {
-        duckdb::LogicalType::VARCHAR, 
-        duckdb::LogicalType::VARCHAR, 
-        duckdb::LogicalType::VARCHAR, 
-        duckdb::LogicalType::VARCHAR, 
-        duckdb::LogicalType::VARCHAR
+        return {
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)
     };
     }
 }
@@ -453,9 +454,9 @@ duckdb::Value DatasphereDescribeBindData::ParseAnalyticalMetadata(const std::str
             variables_list.push_back(duckdb::Value::STRUCT(variable_struct));
         }
         
-        schema_struct["measures"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), measures_list);
-        schema_struct["dimensions"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), dimensions_list);
-        schema_struct["variables"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), variables_list);
+        schema_struct["measures"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), measures_list);
+        schema_struct["dimensions"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), dimensions_list);
+        schema_struct["variables"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), variables_list);
         
         // Convert map to child_list_t format for STRUCT
         duckdb::child_list_t<duckdb::Value> struct_children;
@@ -470,54 +471,17 @@ duckdb::Value DatasphereDescribeBindData::ParseAnalyticalMetadata(const std::str
         
         // Return empty struct on error
         duckdb::child_list_t<duckdb::Value> error_children;
-        error_children.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-        error_children.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-        error_children.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
+        error_children.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+        error_children.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+        error_children.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
         
         return duckdb::Value::STRUCT(error_children);
     }
 }
 
 std::string DatasphereDescribeBindData::ConvertEdmTypeToDuckDbType(const std::string& edm_type) {
-    // Convert EDM types to DuckDB types based on the existing mapping in erpl_odata_edm.hpp
-    if (edm_type == "Edm.Binary") {
-        return "BLOB";
-    } else if (edm_type == "Edm.Boolean") {
-        return "BOOLEAN";
-    } else if (edm_type == "Edm.Byte" || edm_type == "Edm.SByte") {
-        return "TINYINT";
-    } else if (edm_type == "Edm.Date") {
-        return "DATE";
-    } else if (edm_type == "Edm.DateTime" || edm_type == "Edm.DateTimeOffset") {
-        return "TIMESTAMP";
-    } else if (edm_type == "Edm.Decimal") {
-        return "DECIMAL";
-    } else if (edm_type == "Edm.Double") {
-        return "DOUBLE";
-    } else if (edm_type == "Edm.Duration") {
-        return "INTERVAL";
-    } else if (edm_type == "Edm.Guid") {
-        return "UUID";
-    } else if (edm_type == "Edm.Int16") {
-        return "SMALLINT";
-    } else if (edm_type == "Edm.Int32") {
-        return "INTEGER";
-    } else if (edm_type == "Edm.Int64") {
-        return "BIGINT";
-    } else if (edm_type == "Edm.Single") {
-        return "FLOAT";
-    } else if (edm_type == "Edm.Stream") {
-        return "BLOB";
-    } else if (edm_type == "Edm.String") {
-        return "VARCHAR";
-    } else if (edm_type == "Edm.TimeOfDay") {
-        return "TIME";
-    } else if (edm_type.find("Edm.Geography") == 0 || edm_type.find("Edm.Geometry") == 0) {
-        return "VARCHAR"; // Geography/Geometry types as VARCHAR for now
-    } else {
-        // Fallback for unknown types - treat as VARCHAR
-        return "VARCHAR";
-    }
+    // Use the centralized conversion method from erpl_odata_edm.hpp
+    return DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(edm_type);
 }
 
 std::optional<duckdb::Value> DatasphereDescribeBindData::ParseDwaasAnalyticalSchema(const std::string &json_content) {
@@ -621,9 +585,9 @@ std::optional<duckdb::Value> DatasphereDescribeBindData::ParseDwaasAnalyticalSch
         
         // Create the final analytical schema STRUCT
         duckdb::child_list_t<duckdb::Value> schema_struct;
-        schema_struct.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>(measures.begin(), measures.end())));
-        schema_struct.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>(dimensions.begin(), dimensions.end())));
-        schema_struct.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>(variables.begin(), variables.end())));
+        schema_struct.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(measures.begin(), measures.end())));
+        schema_struct.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(dimensions.begin(), dimensions.end())));
+        schema_struct.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(variables.begin(), variables.end())));
         
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Successfully parsed analytical schema: " + std::to_string(measures.size()) + " measures, " + std::to_string(dimensions.size()) + " dimensions, " + std::to_string(variables.size()) + " variables");
         
@@ -724,7 +688,7 @@ std::optional<duckdb::Value> DatasphereDescribeBindData::ParseDwaasRelationalSch
         
         // Create the final relational schema STRUCT
         duckdb::child_list_t<duckdb::Value> schema_struct;
-        schema_struct.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"technical_name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"length", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>(columns.begin(), columns.end())));
+        schema_struct.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"technical_name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"length", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(columns.begin(), columns.end())));
         
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Successfully parsed relational schema: " + std::to_string(columns.size()) + " columns");
         
@@ -815,13 +779,13 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 // Create empty schema structures for relational and analytical schemas
                 // Relational schema: columns with name, technical_name, type, length
                 duckdb::child_list_t<duckdb::Value> empty_relational_schema;
-                empty_relational_schema.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"technical_name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"length", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
+                empty_relational_schema.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"technical_name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"length", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
                 
                 // Analytical schema: measures, dimensions, variables
                 duckdb::child_list_t<duckdb::Value> empty_analytical_schema;
-                empty_analytical_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                empty_analytical_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                empty_analytical_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
+                empty_analytical_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                empty_analytical_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                empty_analytical_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
                 
                 asset_row.push_back(duckdb::Value::STRUCT(empty_relational_schema)); // relationalSchema (9)
                 asset_row.push_back(duckdb::Value::STRUCT(empty_analytical_schema)); // analyticalSchema (10)
@@ -920,9 +884,9 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                                                             "asset_relational_data_url", "asset_analytical_metadata_url", 
                                                             "asset_analytical_data_url", "supports_analytical_queries"};
                     std::vector<duckdb::LogicalType> catalog_types = {
-                        duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                        duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                        duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR
+                        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)
                     };
                     
                     try {
@@ -936,9 +900,9 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                                     if (i == 10) { // analyticalSchema field - needs to be a STRUCT
                                         // Create empty analytical schema STRUCT
                                         duckdb::child_list_t<duckdb::Value> empty_schema;
-                                        empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                                        empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                                        empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
+                                        empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                                        empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                                        empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
                                         catalog_data[0][i] = duckdb::Value::STRUCT(empty_schema);
                                     } else {
                                         catalog_data[0][i] = duckdb::Value("Not available");
@@ -998,9 +962,9 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                         if (i == 10) { // analyticalSchema field - needs to be a STRUCT
                             // Create empty analytical schema STRUCT
                             duckdb::child_list_t<duckdb::Value> empty_schema;
-                            empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                            empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
-                            empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}), duckdb::vector<duckdb::Value>{}));
+                            empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                            empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
+                            empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
                             resource_data[0][i] = duckdb::Value::STRUCT(empty_schema);
                         } else {
                             resource_data[0][i] = duckdb::Value("Not available");
@@ -1035,20 +999,20 @@ std::vector<std::string> erpl_web::DatasphereDescribeBindData::GetColumnNames() 
 std::vector<duckdb::LogicalType> erpl_web::DatasphereDescribeBindData::GetColumnTypes() const {
     if (resource_type == "space") {
         // SpaceEntityV1 schema: only name and label
-        return {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+        return {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
     } else if (resource_type == "asset") {
         // AssetEntityV1 schema: 8 fields + 7 extended metadata fields
         // Note: analyticalSchema (column 10) is a STRUCT type for better unnesting support
-        return {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, 
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, 
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, 
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))},
-                                            {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))},
-                                            {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))}}),
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+        return {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
+                                            {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
+                                            {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))}}),
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
     }
     return {};
 }
@@ -1069,7 +1033,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     }
     
     // Return types based on actual Datasphere API schema (SpaceEntityV1)
-    return_types = {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+    return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
     names = {"name", "label"};
     
     // Get OAuth2 token using centralized function
@@ -1116,15 +1080,15 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     
     // Return types based on actual Datasphere API schema (AssetEntityV1) - all 15 fields
     // Note: analyticalSchema (column 10) is now a STRUCT type for better unnesting support
-    return_types = {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, 
-                    duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, 
-                    duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                    duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                    duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))},
-                                                {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))},
-                                                {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType::VARCHAR}, {"type", duckdb::LogicalType::VARCHAR}, {"edm_type", duckdb::LogicalType::VARCHAR}}))}}),
-                    duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                    duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+    return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                    duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                    duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                    duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                    duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
+                                                {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
+                                                {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))}}),
+                    duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+                    duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "space_name", "label", "asset_relational_metadata_url", "asset_relational_data_url",
                 "asset_analytical_metadata_url", "asset_analytical_data_url", "supports_analytical_queries",
                 "odata_context", "relational_schema", "analytical_schema", "has_relational_access",
@@ -1299,7 +1263,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
-            return_types = {duckdb::LogicalType::VARCHAR};
+            return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name"};
 
             // Auth via secret
@@ -1352,7 +1316,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
     
     // Replace with DWAAS core API listing across multiple object categories
     function_set.AddFunction(duckdb::TableFunction(
-        {duckdb::LogicalType::VARCHAR},
+        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
             auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
@@ -1368,7 +1332,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
-            return_types = {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+            return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name"};
 
             auto space_id = input.inputs[0].GetValue<std::string>();
@@ -1530,7 +1494,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
-            return_types = {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR};
+            return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name", "space_name"};
 
             OAuth2Config cfg;
@@ -1694,7 +1658,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_space");
     
-    duckdb::TableFunction describe_space({duckdb::LogicalType::VARCHAR}, DatasphereDescribeSpaceFunction, DatasphereDescribeSpaceBind);
+    duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DatasphereDescribeSpaceFunction, DatasphereDescribeSpaceBind);
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1703,7 +1667,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
 duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_asset");
     
-    duckdb::TableFunction describe_asset({duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR}, 
+    duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
                                         DatasphereDescribeAssetFunction, DatasphereDescribeAssetBind);
     
     function_set.AddFunction(describe_asset);

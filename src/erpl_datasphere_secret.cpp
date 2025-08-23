@@ -2,6 +2,7 @@
 #include "erpl_oauth2_flow_v2.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/main/client_properties.hpp"
 #include <fstream>
 #include <sstream>
 #include <chrono>
@@ -53,22 +54,22 @@ void CreateDatasphereSecretFunctions::Register(duckdb::DatabaseInstance &db) {
     
     // Register the oauth2 secret provider
     duckdb::CreateSecretFunction oauth2_function = {type, "oauth2", CreateDatasphereSecretFromOAuth2, {}};
-    oauth2_function.named_parameters["client_id"] = duckdb::LogicalType::VARCHAR;
-    oauth2_function.named_parameters["client_secret"] = duckdb::LogicalType::VARCHAR;
-    oauth2_function.named_parameters["tenant_name"] = duckdb::LogicalType::VARCHAR;
-    oauth2_function.named_parameters["data_center"] = duckdb::LogicalType::VARCHAR;
-    oauth2_function.named_parameters["scope"] = duckdb::LogicalType::VARCHAR;
-    oauth2_function.named_parameters["redirect_uri"] = duckdb::LogicalType::VARCHAR;
+    oauth2_function.named_parameters["client_id"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["client_secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["tenant_name"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["data_center"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["redirect_uri"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(oauth2_function);
     
     // Register the config secret provider
     duckdb::CreateSecretFunction config_function = {type, "config", CreateDatasphereSecretFromConfig, {}};
-    config_function.named_parameters["config_file"] = duckdb::LogicalType::VARCHAR;
+    config_function.named_parameters["config_file"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(config_function);
     
     // Register the file secret provider
     duckdb::CreateSecretFunction file_function = {type, "file", CreateDatasphereSecretFromFile, {}};
-    file_function.named_parameters["filepath"] = duckdb::LogicalType::VARCHAR;
+    file_function.named_parameters["filepath"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(file_function);
     
     duckdb::ExtensionUtil::RegisterSecretType(db, secret_type);
@@ -194,8 +195,8 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateDatasphereSecretFunctions::CreateDa
 
 void CreateDatasphereSecretFunctions::RegisterCommonSecretParameters(duckdb::CreateSecretFunction &function) {
     // Register common parameters for all Datasphere secret providers
-    function.named_parameters["name"] = duckdb::LogicalType::VARCHAR;
-    function.named_parameters["scope"] = duckdb::LogicalType::VARCHAR;
+    function.named_parameters["name"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 }
 
 void CreateDatasphereSecretFunctions::RedactCommonKeys(duckdb::KeyValueSecret &result) {
@@ -218,6 +219,7 @@ std::string DatasphereTokenManager::GetToken(duckdb::ClientContext &context, con
     // Update the secret with new tokens
     UpdateSecretWithTokens(context, kv_secret, new_tokens);
     
+    // Return the new token directly instead of trying to read from potentially stale secret
     return new_tokens.access_token;
 }
 
@@ -336,6 +338,45 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
     // Perform the OAuth2 flow using the clean implementation
     OAuth2FlowV2 oauth2_flow;
     return oauth2_flow.ExecuteFlow(config);
+}
+
+// ----------------------------------------------------------------------------
+// Unified secret helpers
+// ----------------------------------------------------------------------------
+duckdb::unique_ptr<duckdb::KeyValueSecret> GetDatasphereKeyValueSecret(duckdb::ClientContext &context, const std::string &secret_name) {
+    auto &secret_manager = duckdb::SecretManager::Get(context);
+    auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
+    auto secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
+    if (!secret_entry) {
+        throw duckdb::InvalidInputException("Datasphere secret '" + secret_name + "' not found. Use CREATE SECRET to create it.");
+    }
+    auto kv_secret = dynamic_cast<const duckdb::KeyValueSecret *>(secret_entry->secret.get());
+    if (!kv_secret) {
+        throw duckdb::InvalidInputException("Secret '" + secret_name + "' is not a KeyValueSecret");
+    }
+    // Clone to extend lifetime beyond SecretEntry unique_ptr
+    return duckdb::make_uniq<duckdb::KeyValueSecret>(*kv_secret);
+}
+
+DatasphereAuthInfo ResolveDatasphereAuth(duckdb::ClientContext &context, const std::string &secret_name) {
+    auto kv_secret_up = GetDatasphereKeyValueSecret(context, secret_name);
+    const auto *kv_secret = kv_secret_up.get();
+
+    // Resolve tenant and data center
+    auto tenant = kv_secret->TryGetValue("tenant_name", true).ToString();
+    auto data_center = kv_secret->TryGetValue("data_center", true).ToString();
+
+    // Token: use the public GetToken method which handles caching and refresh automatically
+    std::string access_token = DatasphereTokenManager::GetToken(context, kv_secret);
+
+    if (access_token.empty()) {
+        throw duckdb::InvalidInputException("Datasphere secret '" + secret_name + "' does not contain a valid access_token. Please authenticate first using the OAuth2 flow.");
+    }
+
+    auto auth_params = std::make_shared<HttpAuthParams>();
+    auth_params->bearer_token = access_token;
+
+    return DatasphereAuthInfo{tenant, data_center, access_token, auth_params};
 }
 
 } // namespace erpl_web

@@ -22,6 +22,28 @@ if(MSVC)
     add_compile_options(/wd4996)
 endif()
 
+# Try to find mold binary
+include(CheckCXXCompilerFlag)
+find_program(MOLD_LINKER mold)
+
+if(MOLD_LINKER)
+    message(STATUS "Found mold: ${MOLD_LINKER}")
+    
+    # Check if compiler supports -fuse-ld=mold
+    check_cxx_compiler_flag("-fuse-ld=mold" HAS_FUSE_LD_MOLD)
+    if(HAS_FUSE_LD_MOLD)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=mold")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=mold")
+        set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -fuse-ld=mold")
+        message(STATUS "Using mold as linker with -fuse-ld=mold")
+    else()
+        message(WARNING "Compiler does not support -fuse-ld=mold")
+    endif()
+else()
+    message(STATUS "mold linker not found, using default linker")
+endif()
+
+
 project(${TARGET_NAME})
 include_directories(
     src/include
@@ -50,12 +72,12 @@ set(EXTENSION_SOURCES
     src/erpl_tracing.cpp
     src/erpl_datasphere_client.cpp
     src/erpl_datasphere_catalog.cpp
-    src/erpl_datasphere_asset.cpp
+    src/erpl_datasphere_read.cpp
     src/erpl_datasphere_types.cpp
     src/erpl_oauth2_types.cpp
     src/erpl_datasphere_browser.cpp
     src/erpl_datasphere_local_server.cpp
-    src/erpl_datasphere_pushdown.cpp
+
     src/erpl_datasphere_secret.cpp
     src/erpl_oauth2_callback_handler.cpp
     src/erpl_oauth2_flow_v2.cpp

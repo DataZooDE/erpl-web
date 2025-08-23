@@ -3,6 +3,7 @@
 #include "erpl_odata_client.hpp"
 #include "erpl_http_client.hpp"
 #include "erpl_odata_edm.hpp"
+#include "duckdb/function/table_function.hpp"
 #include <memory>
 #include <string>
 
@@ -115,5 +116,27 @@ struct DatasphereAuthParams : public HttpAuthParams {
     std::string GetAuthorizationUrl() const;
     std::string GetTokenUrl() const;
 };
+
+// Datasphere OData client for handling dual-URL pattern
+class DatasphereODataClient {
+public:
+    DatasphereODataClient(const std::string& base_url, const std::string& data_url, 
+                          const std::string& access_token);
+    
+    // Get metadata from base URL
+    std::unique_ptr<ODataEntitySetResponse> GetMetadata();
+    
+    // Get data from extended URL
+    std::unique_ptr<ODataEntitySetResponse> GetData();
+    
+private:
+    std::string base_url_;
+    std::string data_url_;
+    std::string access_token_;
+    std::unique_ptr<ODataEntitySetClient> metadata_client_;
+    std::unique_ptr<ODataEntitySetClient> data_client_;
+};
+
+
 
 } // namespace erpl_web

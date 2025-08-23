@@ -32,9 +32,18 @@ public:
 
     void ActivateColumns(const std::vector<duckdb::column_t> &column_ids);
     void AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters);
+    
+    // Method to consume result modifiers (for LIMIT/OFFSET)
+    void AddResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers);
 
     void UpdateUrlFromPredicatePushdown();
     std::shared_ptr<ODataPredicatePushdownHelper> PredicatePushdownHelper();
+    
+    // For Datasphere dual-URL pattern: set column names extracted from first data row
+    void SetExtractedColumnNames(const std::vector<std::string>& column_names);
+    
+    // Get the original column name for a given activated column index
+    std::string GetOriginalColumnName(duckdb::column_t activated_column_index) const;
     
 private:
     bool first_fetch = true;
@@ -43,9 +52,21 @@ private:
     std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::LogicalType> all_result_types;
     
+    // For Datasphere dual-URL pattern: column names extracted from first data row
+    std::vector<std::string> extracted_column_names;
+    
+    // Mapping from activated column index to original column name index
+    std::vector<duckdb::column_t> activated_to_original_mapping;
+    
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;
 };
 
+
+// Forward declarations for the scan and bind functions
+void ODataReadScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
+unique_ptr<GlobalTableFunctionState> ODataReadTableInitGlobalState(ClientContext &context, TableFunctionInitInput &input);
+unique_ptr<FunctionData> ODataReadBind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types, vector<string> &names);
 
 TableFunctionSet CreateODataReadFunction();
 

@@ -5,6 +5,7 @@
 #include "erpl_http_client.hpp"
 #include "erpl_odata_edm.hpp"
 #include "erpl_odata_content.hpp"
+#include "erpl_tracing.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -103,6 +104,12 @@ public:
     
     // Auto-detect OData version from metadata
     void DetectODataVersion();
+    
+    // Set metadata context URL directly (for Datasphere dual-URL pattern)
+    void SetMetadataContextUrl(const std::string& context_url) { metadata_context_url = context_url; }
+    
+    // Set OData version directly to skip metadata fetching
+    void SetODataVersionDirectly(ODataVersion version) { odata_version = version; }
 
     virtual Edmx GetMetadata()
     {    
@@ -139,6 +146,7 @@ protected:
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<TResponse> current_response;
     ODataVersion odata_version;
+    std::string metadata_context_url; // For Datasphere dual-URL pattern
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         auto http_request = HttpRequest(HttpMethod::GET, url);

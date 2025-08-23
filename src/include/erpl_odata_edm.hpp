@@ -2019,6 +2019,48 @@ class DuckTypeConverter
     public:
         DuckTypeConverter(Edmx &edmx) : edmx(edmx) {}
 
+        // Static method to convert EDM type string to DuckDB type string (for catalog functions)
+        static std::string ConvertEdmTypeStringToDuckDbTypeString(const std::string& edm_type) {
+            if (edm_type == "Edm.Binary") {
+                return "BLOB";
+            } else if (edm_type == "Edm.Boolean") {
+                return "BOOLEAN";
+            } else if (edm_type == "Edm.Byte" || edm_type == "Edm.SByte") {
+                return "TINYINT";
+            } else if (edm_type == "Edm.Date") {
+                return "DATE";
+            } else if (edm_type == "Edm.DateTime" || edm_type == "Edm.DateTimeOffset") {
+                return "TIMESTAMP";
+            } else if (edm_type == "Edm.Decimal") {
+                return "DECIMAL";
+            } else if (edm_type == "Edm.Double") {
+                return "DOUBLE";
+            } else if (edm_type == "Edm.Duration") {
+                return "INTERVAL";
+            } else if (edm_type == "Edm.Guid") {
+                return "UUID";
+            } else if (edm_type == "Edm.Int16") {
+                return "SMALLINT";
+            } else if (edm_type == "Edm.Int32") {
+                return "INTEGER";
+            } else if (edm_type == "Edm.Int64") {
+                return "BIGINT";
+            } else if (edm_type == "Edm.Single") {
+                return "FLOAT";
+            } else if (edm_type == "Edm.Stream") {
+                return "BLOB";
+            } else if (edm_type == "Edm.String") {
+                return "VARCHAR";
+            } else if (edm_type == "Edm.TimeOfDay") {
+                return "TIME";
+            } else if (edm_type.find("Edm.Geography") == 0 || edm_type.find("Edm.Geometry") == 0) {
+                return "VARCHAR"; // Geography/Geometry types as VARCHAR for now
+            } else {
+                // Fallback for unknown types - treat as VARCHAR
+                return "VARCHAR";
+            }
+        }
+
         duckdb::LogicalType operator()(PrimitiveType &type) const 
         {
             if (type == erpl_web::Binary) {

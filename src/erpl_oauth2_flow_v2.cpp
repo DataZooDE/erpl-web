@@ -58,6 +58,8 @@ OAuth2Tokens OAuth2FlowV2::ExecuteFlow(const OAuth2Config& config) {
         // Step 1: Get authorization code (this generates and stores code_verifier)
         std::string auth_code = ExecuteAuthorizationCodeFlow(config);
         
+        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "About to exchange code for tokens using stored verifier: " + stored_code_verifier_);
+        
         // Step 2: Exchange code for tokens using the same code_verifier
         OAuth2Tokens tokens = ExchangeCodeForTokens(config, auth_code, stored_code_verifier_);
         
@@ -78,6 +80,10 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     std::string code_challenge = GenerateCodeChallenge(stored_code_verifier_);
     std::string state = GenerateState();
     
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Stored code verifier: " + stored_code_verifier_);
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated code challenge: " + code_challenge);
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated state: " + state);
+    
     // Build authorization URL
     std::string auth_url = BuildAuthorizationUrl(config, code_challenge, state);
     
@@ -87,11 +93,8 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     // Open browser for user authorization
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authorization");
     
-    // Log user guidance via tracer instead of console prints
-    ERPL_TRACE_INFO("OAUTH2_FLOW", "OAuth2 Authorization Required");
-    ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authentication...");
-    ERPL_TRACE_INFO("OAUTH2_FLOW", std::string("If the browser does not open automatically, open: ") + auth_url);
-    ERPL_TRACE_INFO("OAUTH2_FLOW", "Waiting for authorization callback (timeout: 60 seconds)");
+    // Display user-friendly console output
+    DisplayOAuth2Instructions(auth_url);
     
     OpenBrowser(auth_url);
     
@@ -101,20 +104,11 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     try {
         std::string auth_code = server_->StartAndWaitForCode(state, 0);
         ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code: " + auth_code.substr(0, 10) + "...");
-        
-        // Success message
-        ERPL_TRACE_INFO("OAUTH2_FLOW", "Authorization successful, received authorization code");
-        ERPL_TRACE_INFO("OAUTH2_FLOW", "Exchanging code for tokens...");
-        
+        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Authorization successful, received authorization code");
         return auth_code;
         
     } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("OAUTH2_FLOW", "Error getting authorization code: " + std::string(e.what()));
-        
-        // Error message
-        ERPL_TRACE_ERROR("OAUTH2_FLOW", std::string("Authorization failed: ") + e.what());
-        ERPL_TRACE_INFO("OAUTH2_FLOW", "Please try again or check your OAuth2 configuration");
-        
+        ERPL_TRACE_ERROR("OAUTH2_FLOW", "Authorization code flow failed: " + std::string(e.what()));
         throw;
     }
 }
@@ -133,6 +127,8 @@ OAuth2Tokens OAuth2FlowV2::ExchangeCodeForTokens(
     if (code_verifier.empty()) {
         throw std::invalid_argument("Code verifier cannot be empty");
     }
+    
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using code verifier: " + code_verifier);
     
     // Build token exchange request
     std::string token_url = config.GetTokenUrl();
@@ -278,8 +274,9 @@ OAuth2Tokens OAuth2FlowV2::ParseTokenResponse(const std::string& response_conten
 std::string OAuth2FlowV2::GenerateCodeVerifier() {
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generating code verifier");
     
+    // Use RFC 7636 compliant character set and length
     const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-    const int length = 128; // RFC 7636 recommends 43-128 characters
+    const int length = 64; // Use 64 characters for better compatibility
     
     std::random_device rd;
     std::mt19937 generator(rd());
@@ -299,14 +296,40 @@ std::string OAuth2FlowV2::GenerateCodeVerifier() {
 std::string OAuth2FlowV2::GenerateCodeChallenge(const std::string& code_verifier) {
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generating code challenge from verifier");
     
-    // For testing purposes, we'll create a deterministic 64-character hash
-    // In production, you'd want to use a proper SHA256 implementation
-    std::string hash_input = code_verifier + "test_salt"; // Add salt for determinism
-    std::string result;
-    result.reserve(64);
+    // Use proper SHA256 hashing as per RFC 7636
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+    SHA256_Update(&sha256, code_verifier.c_str(), code_verifier.length());
+    SHA256_Final(hash, &sha256);
     
-    for (size_t i = 0; i < 64; ++i) {
-        result += std::to_string((hash_input[i % hash_input.length()] + i) % 10);
+    // Convert to base64url encoding (RFC 4648)
+    const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve(44); // SHA256 produces 32 bytes = 44 base64 characters
+    
+    // Process 32 bytes in groups of 3 (32 bytes = 10 complete groups + 2 remaining bytes)
+    for (int i = 0; i < 30; i += 3) {
+        uint32_t chunk = (static_cast<uint32_t>(hash[i]) << 16) | 
+                         (static_cast<uint32_t>(hash[i + 1]) << 8) | 
+                         static_cast<uint32_t>(hash[i + 2]);
+        
+        result += base64_chars[(chunk >> 18) & 0x3F];
+        result += base64_chars[(chunk >> 12) & 0x3F];
+        result += base64_chars[(chunk >> 6) & 0x3F];
+        result += base64_chars[chunk & 0x3F];
+    }
+    
+    // Handle the last 2 bytes (special case for 32 bytes)
+    uint32_t last_chunk = (static_cast<uint32_t>(hash[30]) << 8) | static_cast<uint32_t>(hash[31]);
+    result += base64_chars[(last_chunk >> 10) & 0x3F];
+    result += base64_chars[(last_chunk >> 4) & 0x3F];
+    result += base64_chars[(last_chunk << 2) & 0x3F];
+    
+    // Convert to base64url (replace + with - and / with _)
+    for (char& c : result) {
+        if (c == '+') c = '-';
+        if (c == '/') c = '_';
     }
     
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated code challenge: " + result.substr(0, 10) + "...");
@@ -346,7 +369,6 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
              << "?response_type=code"
              << "&client_id=" << UrlEncode(config.client_id)
              << "&redirect_uri=" << UrlEncode(config.redirect_uri)
-             << "&scope=" << UrlEncode(config.scope)
              << "&state=" << UrlEncode(state)
              << "&code_challenge=" << UrlEncode(code_challenge)
              << "&code_challenge_method=S256";
@@ -354,6 +376,28 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
     std::string url = auth_url.str();
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Built authorization URL: " + url);
     return url;
+}
+
+void OAuth2FlowV2::DisplayOAuth2Instructions(const std::string& auth_url) {
+    std::cout << "\n";
+    std::cout << "🔐  OAuth2 Authentication Required  🔐\n";
+    std::cout << "=====================================\n\n";
+    
+    std::cout << "📋 To complete the authentication:\n\n";
+    
+    std::cout << "1️⃣ A browser window should open automatically\n";
+    std::cout << "2️⃣ If it doesn't open, manually copy and paste this URL:\n\n";
+    
+    std::cout << " 🌐  " << auth_url << "\n\n";
+    
+    std::cout << "3️⃣ Sign in with your SAP Datasphere credentials\n";
+    std::cout << "4️⃣ Grant permission to the application\n";
+    std::cout << "5️⃣ You'll be redirected back automatically\n\n";
+    
+    std::cout << "⏱️ Timeout: 60 seconds\n";
+    std::cout << "🔄 Status: Waiting for authorization...\n\n";
+    
+    std::cout << "💡 Tip: Make sure to use your company/enterprise browser session, not private/incognito mode\n\n";
 }
 
 void OAuth2FlowV2::OpenBrowser(const std::string& url) {
