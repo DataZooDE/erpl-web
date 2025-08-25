@@ -112,6 +112,8 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
                         if (is_datasphere_url) {
                             odata_client->SetMetadataContextUrl(clean_context_url);
                             ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Stored metadata context URL in OData client: " + clean_context_url);
+                            // Also extract and store entity set name from context fragment
+                            odata_client->SetEntitySetNameFromContextFragment(context_url);
                         }
                         
                         // Extract column names and infer types from the first data row (OData v4 format)
@@ -125,39 +127,81 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
                             if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
                                 ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found first row object in OData v4 response");
                                 ExtractColumnNames(first_row, extracted_column_names);
+                                // Guard: service document typically returns only name/url entries
+                                if (extracted_column_names.size() == 2 &&
+                                    ((extracted_column_names[0] == "name" && extracted_column_names[1] == "url") ||
+                                     (extracted_column_names[0] == "url" && extracted_column_names[1] == "name"))) {
+                                    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Detected service document columns (name,url); ignoring extracted columns to defer to metadata");
+                                    extracted_column_names.clear();
+                                    // Additionally, try to pick entity name from service document entries
+                                    // Prefer exact match with last segment of URL, otherwise first entry
+                                    std::string service_entity_name;
+                                    // Determine last segment hint from entity_set_url
+                                    {
+                                        std::string path_hint = HttpUrl(entity_set_url).Path();
+                                        if (!path_hint.empty() && path_hint.back() == '/') {
+                                            path_hint.pop_back();
+                                        }
+                                        auto pos = path_hint.find_last_of('/');
+                                        if (pos != std::string::npos) {
+                                            path_hint = path_hint.substr(pos + 1);
+                                        }
+                                        // Iterate value array to find matching name/url
+                                        duckdb_yyjson::yyjson_arr_iter it2;
+                                        duckdb_yyjson::yyjson_arr_iter_init(value_arr, &it2);
+                                        duckdb_yyjson::yyjson_val *row;
+                                        while ((row = duckdb_yyjson::yyjson_arr_iter_next(&it2))) {
+                                            auto name_v = duckdb_yyjson::yyjson_obj_get(row, "name");
+                                            auto url_v = duckdb_yyjson::yyjson_obj_get(row, "url");
+                                            std::string name_s = (name_v && duckdb_yyjson::yyjson_is_str(name_v)) ? duckdb_yyjson::yyjson_get_str(name_v) : "";
+                                            std::string url_s = (url_v && duckdb_yyjson::yyjson_is_str(url_v)) ? duckdb_yyjson::yyjson_get_str(url_v) : "";
+                                            if (!path_hint.empty() && (name_s == path_hint || url_s == path_hint)) {
+                                                service_entity_name = name_s.empty() ? url_s : name_s;
+                                                break;
+                                            }
+                                            if (service_entity_name.empty() && !name_s.empty()) {
+                                                service_entity_name = name_s; // fallback to first
+                                            }
+                                        }
+                                    }
+                                    if (!service_entity_name.empty()) {
+                                        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Setting entity set name from service document: " + service_entity_name);
+                                        odata_client->SetEntitySetName(service_entity_name);
+                                    }
+                                }
                             } else {
                                 ERPL_TRACE_WARN("ODATA_READ_BIND", "First row is not an object in OData v4 response");
                             }
                         } else {
                             ERPL_TRACE_WARN("ODATA_READ_BIND", "Could not find 'value' array in OData v4 response");
                         }
-                            } else {
-            // No @odata.context found, try OData v2 format
-            ERPL_TRACE_DEBUG("ODATA_READ_BIND", "No @odata.context found, trying OData v2 format");
-            auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
-            if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
-                ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found 'd' object in OData v2 response");
-                auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
-                if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
-                    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found 'results' array in OData v2 response");
-                    duckdb_yyjson::yyjson_arr_iter arr_it;
-                    duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
-                    duckdb_yyjson::yyjson_val *first_row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
-                    if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
-                        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found first row object in OData v2 response");
-                        ExtractColumnNames(first_row, extracted_column_names);
                     } else {
-                        ERPL_TRACE_WARN("ODATA_READ_BIND", "First row is not an object in OData v2 response");
+                        // No @odata.context found, try OData v2 format
+                        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "No @odata.context found, trying OData v2 format");
+                        auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+                        if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
+                            ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found 'd' object in OData v2 response");
+                            auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
+                            if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
+                                ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found 'results' array in OData v2 response");
+                                duckdb_yyjson::yyjson_arr_iter arr_it;
+                                duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
+                                duckdb_yyjson::yyjson_val *first_row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
+                                if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
+                                    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found first row object in OData v2 response");
+                                    ExtractColumnNames(first_row, extracted_column_names);
+                                } else {
+                                    ERPL_TRACE_WARN("ODATA_READ_BIND", "First row is not an object in OData v2 response");
+                                }
+                            } else {
+                                ERPL_TRACE_WARN("ODATA_READ_BIND", "Could not find 'results' array in OData v2 response");
+                            }
+                        } else {
+                            ERPL_TRACE_WARN("ODATA_READ_BIND", "Could not find 'd' object in OData v2 response");
+                        }
                     }
-                } else {
-                    ERPL_TRACE_WARN("ODATA_READ_BIND", "Could not find 'results' array in OData v2 response");
+                    duckdb_yyjson::yyjson_doc_free(doc);
                 }
-            } else {
-                ERPL_TRACE_WARN("ODATA_READ_BIND", "Could not find 'd' object in OData v2 response");
-            }
-        }
-        duckdb_yyjson::yyjson_doc_free(doc);
-    }
             } else {
                 ERPL_TRACE_WARN("ODATA_READ_BIND", "Direct HTTP request failed with status: " + std::to_string(resp ? resp->Code() : 0));
             }
@@ -284,6 +328,12 @@ std::vector<duckdb::LogicalType> ODataReadBindData::GetResultTypes(bool all_colu
 
 unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output)
 {
+    // Pass input parameters to OData client before making HTTP request (if any)
+    if (!input_parameters.empty()) {
+        odata_client->SetInputParameters(input_parameters);
+        ERPL_TRACE_INFO("ODATA_READ_BIND", "Passed " + std::to_string(input_parameters.size()) + " input parameters to OData client before HTTP request");
+    }
+    
     auto response = odata_client->Get();
     
     // Use our extracted names and types instead of calling OData client methods
@@ -460,6 +510,22 @@ std::string ODataReadBindData::GetOriginalColumnName(duckdb::column_t activated_
         ERPL_TRACE_DEBUG("ODATA_READ_BIND", duckdb::StringUtil::Format("Activated index %d maps to original index %d which is column '%s' (from result names)", activated_column_index, original_index, column_name.c_str()));
         return column_name;
     }
+}
+
+void ODataReadBindData::SetInputParameters(const std::map<std::string, std::string>& input_params)
+{
+    input_parameters = input_params;
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Stored " + std::to_string(input_params.size()) + " input parameters");
+}
+
+const std::map<std::string, std::string>& ODataReadBindData::GetInputParameters() const
+{
+    return input_parameters;
+}
+
+std::shared_ptr<ODataEntitySetClient> ODataReadBindData::GetODataClient() const
+{
+    return odata_client;
 }
 
 

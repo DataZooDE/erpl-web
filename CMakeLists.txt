@@ -43,6 +43,7 @@ else()
     message(STATUS "mold linker not found, using default linker")
 endif()
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(${TARGET_NAME})
 include_directories(
