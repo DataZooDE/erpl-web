@@ -276,37 +276,45 @@ std::vector<duckdb::LogicalType> ODataReadBindData::GetResultTypes(bool all_colu
     if (all_result_types.empty()) {
         all_result_types = odata_client->GetResultTypes();
         
-        // If we have extracted column names, we need to map the metadata types to match the extracted column names order
-        if (!extracted_column_names.empty() && extracted_column_names.size() == all_result_types.size()) {
-            // Create a mapping from extracted column names to metadata types
-            std::vector<duckdb::LogicalType> mapped_types;
-            mapped_types.reserve(extracted_column_names.size());
-            
-            // Get the metadata column names to map them to extracted names
-            auto metadata_names = odata_client->GetResultNames();
-            
-            for (const auto& extracted_name : extracted_column_names) {
-                // Find the index of this column in the metadata
-                auto it = std::find(metadata_names.begin(), metadata_names.end(), extracted_name);
-                if (it != metadata_names.end()) {
-                    size_t metadata_index = std::distance(metadata_names.begin(), it);
-                    if (metadata_index < all_result_types.size()) {
-                        mapped_types.push_back(all_result_types[metadata_index]);
-                        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Mapped column '" + extracted_name + "' to type: " + all_result_types[metadata_index].ToString());
+        // If we have extracted column names, align types to those names
+        if (!extracted_column_names.empty()) {
+            if (extracted_column_names.size() == all_result_types.size()) {
+                // Create a mapping from extracted column names to metadata types
+                std::vector<duckdb::LogicalType> mapped_types;
+                mapped_types.reserve(extracted_column_names.size());
+                
+                // Get the metadata column names to map them to extracted names
+                auto metadata_names = odata_client->GetResultNames();
+                
+                for (const auto& extracted_name : extracted_column_names) {
+                    // Find the index of this column in the metadata
+                    auto it = std::find(metadata_names.begin(), metadata_names.end(), extracted_name);
+                    if (it != metadata_names.end()) {
+                        size_t metadata_index = std::distance(metadata_names.begin(), it);
+                        if (metadata_index < all_result_types.size()) {
+                            mapped_types.push_back(all_result_types[metadata_index]);
+                            ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Mapped column '" + extracted_name + "' to type: " + all_result_types[metadata_index].ToString());
+                        } else {
+                            // Fallback to VARCHAR if metadata index is out of bounds
+                            mapped_types.push_back(duckdb::LogicalType::VARCHAR);
+                            ERPL_TRACE_WARN("ODATA_READ_BIND", "Column '" + extracted_name + "' metadata index out of bounds, using VARCHAR fallback");
+                        }
                     } else {
-                        // Fallback to VARCHAR if metadata index is out of bounds
+                        // Fallback to VARCHAR if column not found in metadata
                         mapped_types.push_back(duckdb::LogicalType::VARCHAR);
-                        ERPL_TRACE_WARN("ODATA_READ_BIND", "Column '" + extracted_name + "' metadata index out of bounds, using VARCHAR fallback");
+                        ERPL_TRACE_WARN("ODATA_READ_BIND", "Column '" + extracted_name + "' not found in metadata, using VARCHAR fallback");
                     }
-                } else {
-                    // Fallback to VARCHAR if column not found in metadata
-                    mapped_types.push_back(duckdb::LogicalType::VARCHAR);
-                    ERPL_TRACE_WARN("ODATA_READ_BIND", "Column '" + extracted_name + "' not found in metadata, using VARCHAR fallback");
                 }
+                
+                // Replace all_result_types with the mapped types
+                all_result_types = mapped_types;
+            } else {
+                // Sizes mismatch (common in OData v2 when inferring from data) -> default all to VARCHAR
+                ERPL_TRACE_INFO("ODATA_READ_BIND", duckdb::StringUtil::Format(
+                    "Metadata column count (%d) does not match extracted column count (%d); defaulting all types to VARCHAR",
+                    all_result_types.size(), extracted_column_names.size()));
+                all_result_types.assign(extracted_column_names.size(), duckdb::LogicalType::VARCHAR);
             }
-            
-            // Replace all_result_types with the mapped types
-            all_result_types = mapped_types;
         }
     }
 

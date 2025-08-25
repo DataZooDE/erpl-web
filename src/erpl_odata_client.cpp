@@ -157,14 +157,22 @@ std::string ODataEntitySetClient::GetMetadataContextUrl()
     if (!path.empty()) {
         // Find the service root by looking for common OData patterns
         if (path.find("/V2/") != std::string::npos) {
-            // OData v2: metadata is at service root
-            auto v2_pos = path.find("/V2/");
-            auto service_pos = path.find("/", v2_pos + 4);
-            if (service_pos != std::string::npos) {
-                auto service_root = path.substr(0, service_pos);
+            // OData v2: prefer service roots ending with .svc
+            // Example: /V2/Northwind/Northwind.svc/Customers -> /V2/Northwind/Northwind.svc/$metadata
+            auto svc_pos = path.find(".svc");
+            if (svc_pos != std::string::npos) {
+                auto service_root = path.substr(0, svc_pos + 4);
                 base.Path(service_root + "/$metadata");
             } else {
-                base.Path(path + "/$metadata");
+                // Fallback: use the segment after /V2/
+                auto v2_pos = path.find("/V2/");
+                auto service_pos = path.find("/", v2_pos + 4);
+                if (service_pos != std::string::npos) {
+                    auto service_root = path.substr(0, service_pos);
+                    base.Path(service_root + "/$metadata");
+                } else {
+                    base.Path(path + "/$metadata");
+                }
             }
         } else if (path.find("/V4/") != std::string::npos) {
             // OData v4: metadata is at service root
