@@ -1,6 +1,7 @@
 #pragma once
 #include "cpptrace/cpptrace.hpp"
 #include "yyjson.hpp"
+#include <type_traits>
 
 #include "erpl_http_client.hpp"
 #include "erpl_odata_edm.hpp"
@@ -113,6 +114,7 @@ public:
 
     virtual Edmx GetMetadata()
     {    
+        // Always resolve metadata; for Datasphere parameterized reads, use @odata.context (without fragment)
         auto metadata_url = GetMetadataContextUrl();
         auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);
         if (cached_edmx) {
@@ -136,6 +138,12 @@ public:
 
     virtual std::shared_ptr<TResponse> Get(bool get_next = false) = 0;
     virtual std::string GetMetadataContextUrl() = 0;
+    
+    // Virtual method to add input parameters to URL (default implementation does nothing)
+    virtual HttpUrl AddInputParametersToUrl(const HttpUrl& url) const { return url; }
+    
+    // Virtual method to check if input parameters are present (default implementation returns false)
+    virtual bool HasInputParameters() const { return false; }
 
     std::string Url() { return url.ToString(); }
     std::shared_ptr<HttpClient> GetHttpClient() { return http_client->GetHttpClient(); }
@@ -149,7 +157,17 @@ protected:
     std::string metadata_context_url; // For Datasphere dual-URL pattern
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
-        auto http_request = HttpRequest(HttpMethod::GET, url);
+        // Create a copy of the URL to modify with input parameters
+        HttpUrl modified_url = url;
+        
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "DoHttpGet: calling AddInputParametersToUrl");
+        
+        // Add input parameters to the URL if they exist (virtual method call)
+        modified_url = AddInputParametersToUrl(modified_url);
+        
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "DoHttpGet: URL after input parameters: " + modified_url.ToString());
+        
+        auto http_request = HttpRequest(HttpMethod::GET, modified_url);
         
         // Set OData version and add appropriate headers
         http_request.SetODataVersion(odata_version);
@@ -221,7 +239,7 @@ protected:
                 }
                 response_trace << std::endl << "  Response Body Size: " << metadata_response->Content().length() << " bytes";
                 if (metadata_response->Content().length() > 0) {
-                    response_trace << std::endl << "  Response Body Preview (first 500 chars): " << metadata_response->Content().substr(0, 500);
+                    response_trace << std::endl << "  Response Body Preview (first 4000 chars): " << metadata_response->Content().substr(0, 4000);
                 }
                 ERPL_TRACE_DEBUG("ODATA_CLIENT", response_trace.str());
                 
@@ -238,7 +256,7 @@ protected:
                 for (const auto& header : metadata_response->headers) {
                     error_trace << std::endl << "    " << header.first << ": " << header.second;
                 }
-                error_trace << std::endl << "  Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+                error_trace << std::endl << "  Response Body (first 4000 chars): " << metadata_response->Content().substr(0, 4000);
                 ERPL_TRACE_WARN("ODATA_CLIENT", error_trace.str());
             } else {
                 ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " failed: No response received");
@@ -264,7 +282,7 @@ protected:
         if (metadata_response != nullptr) {
             final_error << "  Final Status Code: " << metadata_response->Code() << std::endl;
             final_error << "  Final Content Type: " << metadata_response->ContentType() << std::endl;
-            final_error << "  Final Response Body (first 1000 chars): " << metadata_response->Content().substr(0, 1000);
+            final_error << "  Final Response Body (first 4000 chars): " << metadata_response->Content().substr(0, 4000);
         } else {
             final_error << "  No response received on final attempt";
         }
@@ -298,10 +316,30 @@ public:
 
     std::vector<std::string> GetResultNames();
     std::vector<duckdb::LogicalType> GetResultTypes();
+    
+    // For Datasphere input parameters: set input parameters that will be included in requests
+    void SetInputParameters(const std::map<std::string, std::string>& input_params);
+    
+    // Override to add input parameters to URL
+    HttpUrl AddInputParametersToUrl(const HttpUrl& url) const override;
+    
+    // Override to check if input parameters are present
+    bool HasInputParameters() const override { return !input_parameters.empty(); }
+
+    // Explicitly set the current entity set name from an @odata.context value or fragment
+    void SetEntitySetNameFromContextFragment(const std::string &context_or_fragment);
+    // Explicitly set the current entity set name directly
+    void SetEntitySetName(const std::string &entity_name) { current_entity_name_from_fragment = entity_name; }
 
 private:
     EntitySet GetCurrentEntitySetType();
     EntityType GetCurrentEntityType();
+    
+    // For Datasphere input parameters: storage for input parameters
+    std::map<std::string, std::string> input_parameters;
+    
+    // For Datasphere input parameters: store entity name extracted from metadata context fragment
+    std::string current_entity_name_from_fragment;
 };
 
 // -------------------------------------------------------------------------------------------------

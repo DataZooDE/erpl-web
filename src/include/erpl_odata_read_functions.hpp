@@ -6,6 +6,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/function/function_set.hpp"
+#include <map>
 
 #include "erpl_odata_client.hpp"
 #include "erpl_odata_edm.hpp"
@@ -45,6 +46,13 @@ public:
     // Get the original column name for a given activated column index
     std::string GetOriginalColumnName(duckdb::column_t activated_column_index) const;
     
+    // For Datasphere input parameters: set and get input parameters
+    void SetInputParameters(const std::map<std::string, std::string>& input_params);
+    const std::map<std::string, std::string>& GetInputParameters() const;
+    
+    // Get the underlying OData client for advanced operations
+    std::shared_ptr<ODataEntitySetClient> GetODataClient() const;
+    
 private:
     bool first_fetch = true;
     std::shared_ptr<ODataEntitySetClient> odata_client;
@@ -57,6 +65,9 @@ private:
     
     // Mapping from activated column index to original column name index
     std::vector<duckdb::column_t> activated_to_original_mapping;
+    
+    // For Datasphere input parameters: storage for input parameters
+    std::map<std::string, std::string> input_parameters;
     
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;
 };

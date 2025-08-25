@@ -47,6 +47,8 @@ void ODataClient<TResponse>::DetectODataVersion()
         return;
     }
     
+    // For Datasphere, prefer using @odata.context from prior responses; do not skip metadata
+    
     // Get the current metadata to detect version
     auto metadata_url = GetMetadataContextUrl();
     
@@ -96,6 +98,13 @@ ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_clie
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
 {
+    // If we have input parameters, we need to regenerate the metadata URL
+    // because the cached URL might be incorrect for the parameterized request
+    if (!input_parameters.empty()) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Input parameters present, clearing cached metadata URL");
+        metadata_context_url.clear();
+    }
+    
     // First, check if we have a stored metadata context URL (for Datasphere dual-URL pattern)
     if (!metadata_context_url.empty()) {
         ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using stored metadata context URL: " + metadata_context_url);
@@ -126,28 +135,25 @@ std::string ODataEntitySetClient::GetMetadataContextUrl()
     }
     
     // Fallback to conventional $metadata next to service root
-    // Only log this once to reduce noise in the logs
-    static bool logged_fallback = false;
-    if (!logged_fallback) {
-        ERPL_TRACE_INFO("ODATA_CLIENT", "Determining metadata URL for: " + url.ToString());
-        ERPL_TRACE_INFO("ODATA_CLIENT", "Using fallback metadata URL generation");
-        logged_fallback = true;
-    } else {
-        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using cached fallback metadata URL");
-    }
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Determining metadata URL for: " + url.ToString());
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Using fallback metadata URL generation");
     
     HttpUrl base(url);
     
-    // For OData v2, metadata is typically at the service root level
+    // For Datasphere URLs, metadata is at the service root level
     // Extract the service root by removing entity set and query parameters
     auto path = base.Path();
     auto query = base.Query();
     
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Processing path: " + path);
+    ERPL_TRACE_INFO("ODATA_CLIENT", "Path contains /api/v1/dwc/consumption/relational/: " + std::string(path.find("/api/v1/dwc/consumption/relational/") != std::string::npos ? "true" : "false"));
+    
     // Remove query parameters from metadata URL
     base.Query("");
     
-    // For OData v2, metadata is typically at the service root
-    // Remove entity set segments and append $metadata
+    // For Datasphere URLs, the structure is typically:
+    // /api/v1/dwc/consumption/relational/{tenant}/{space_id}/{asset_id}...
+    // We want to extract the service root: /api/v1/dwc/consumption/relational/{tenant}
     if (!path.empty()) {
         // Find the service root by looking for common OData patterns
         if (path.find("/V2/") != std::string::npos) {
@@ -169,6 +175,55 @@ std::string ODataEntitySetClient::GetMetadataContextUrl()
                 base.Path(service_root + "/$metadata");
             } else {
                 base.Path(path + "/$metadata");
+            }
+        } else if (path.find("/api/v1/dwc/consumption/relational/") != std::string::npos) {
+            // Datasphere: metadata is at the asset service root level
+            // Extract /api/v1/dwc/consumption/relational/{tenant}/{asset}
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Detected Datasphere URL pattern");
+            auto datasphere_pos = path.find("/api/v1/dwc/consumption/relational/");
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Datasphere pattern found at position: " + std::to_string(datasphere_pos));
+            if (datasphere_pos != std::string::npos) {
+                auto after_relational = datasphere_pos + 35; // length of "/api/v1/dwc/consumption/relational/"
+                ERPL_TRACE_INFO("ODATA_CLIENT", "After /relational/ at position: " + std::to_string(after_relational));
+                
+                // Collect path segments after /relational/
+                std::vector<std::string> segments;
+                {
+                    size_t i = after_relational;
+                    while (i < path.size()) {
+                        size_t j = path.find('/', i);
+                        if (j == std::string::npos) j = path.size();
+                        if (j > i) segments.push_back(path.substr(i, j - i));
+                        i = j + 1;
+                    }
+                }
+                if (segments.size() >= 2) {
+                    auto tenant = segments[0];
+                    auto asset  = segments[1];
+                    auto service_root = std::string("/api/v1/dwc/consumption/relational/") + tenant + "/" + asset;
+                    ERPL_TRACE_INFO("ODATA_CLIENT", "Extracted Datasphere service root: " + service_root);
+                    base.Path(service_root + "/$metadata");
+                } else {
+                    // Fallback to tenant-level if asset not present
+                    auto tenant_end = path.find("/", after_relational);
+                    if (tenant_end != std::string::npos) {
+                        auto service_root = path.substr(0, tenant_end);
+                        ERPL_TRACE_INFO("ODATA_CLIENT", "Fallback service root (tenant): " + service_root);
+                        base.Path(service_root + "/$metadata");
+                    } else {
+                        base.Path(path + "/$metadata");
+                    }
+                }
+            } else {
+                ERPL_TRACE_INFO("ODATA_CLIENT", "Datasphere pattern not found in path");
+                // Generic fallback: remove last segment and append $metadata
+                auto last_slash = path.find_last_of('/');
+                if (last_slash != std::string::npos && last_slash > 0) {
+                    auto service_root = path.substr(0, last_slash);
+                    base.Path(service_root + "/$metadata");
+                } else {
+                    base.Path("/$metadata");
+                }
             }
         } else {
             // Generic fallback: remove last segment and append $metadata
@@ -243,8 +298,15 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
         ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using next URL: " + url.ToString());
     }
 
+    // Add input parameters to the URL if they exist
+    HttpUrl request_url = url;
+    if (!input_parameters.empty()) {
+        request_url = AddInputParametersToUrl(url);
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Modified URL with input parameters: " + request_url.ToString());
+    }
+
     ERPL_TRACE_DEBUG("ODATA_CLIENT", "Executing HTTP GET request");
-    auto http_response = DoHttpGet(url);
+    auto http_response = DoHttpGet(request_url);
     
     // Detect OData version from raw HTTP response content if not already known
     if (odata_version == ODataVersion::UNKNOWN) {
@@ -267,15 +329,99 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
     if (current_response) {
         auto ctx = current_response->MetadataContextUrl();
         if (!ctx.empty()) {
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Raw metadata context URL: " + ctx);
+            
+            // Parse the fragment to extract entity information
             auto hash_pos = ctx.find('#');
             if (hash_pos != std::string::npos) {
+                auto fragment = ctx.substr(hash_pos + 1);
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata context fragment: " + fragment);
+                
+                // Extract entity name from fragment. Supported forms:
+                //  - "Entity(params)/Set"
+                //  - "Entity/Set"
+                //  - "Entity"
+                std::string entity_name;
+                auto open_paren_pos = fragment.find('(');
+                if (open_paren_pos != std::string::npos) {
+                    entity_name = fragment.substr(0, open_paren_pos);
+                } else {
+                    auto slash_pos = fragment.find('/');
+                    if (slash_pos != std::string::npos) {
+                        entity_name = fragment.substr(0, slash_pos);
+                    } else {
+                        entity_name = fragment; // plain entity name
+                    }
+                }
+                if (!entity_name.empty()) {
+                    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Extracted entity name from fragment: " + entity_name);
+                    current_entity_name_from_fragment = entity_name;
+                }
+                
+                // Strip the fragment for the metadata URL
                 ctx = ctx.substr(0, hash_pos);
             }
+            
             HttpUrl meta_url = HttpUrl::MergeWithBaseUrlIfRelative(url, ctx);
             auto final_url = meta_url.ToString();
             if (metadata_context_url != final_url) {
                 ERPL_TRACE_INFO("ODATA_CLIENT", "Updated metadata context URL from response: " + final_url);
                 metadata_context_url = final_url;
+            }
+        } else if (!input_parameters.empty()) {
+            // When input parameters are used but no metadata context URL is provided,
+            // extract the entity name from the URL path since we know the structure
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "No metadata context URL, extracting entity name from URL path with input parameters");
+            
+            auto path = url.Path();
+            if (!path.empty() && path != "/") {
+                // Remove leading slash if present
+                if (path[0] == '/') {
+                    path = path.substr(1);
+                }
+                
+                // Find the last path segment
+                auto last_slash_pos = path.find_last_of('/');
+                if (last_slash_pos != std::string::npos) {
+                    auto last_segment = path.substr(last_slash_pos + 1);
+                    
+                    // Extract entity name from segment like "flights_view(CARRIER='AA')/Set"
+                    auto open_paren_pos = last_segment.find('(');
+                    if (open_paren_pos != std::string::npos) {
+                        auto entity_name = last_segment.substr(0, open_paren_pos);
+                        current_entity_name_from_fragment = entity_name;
+                        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Extracted entity name from URL path with input parameters: " + entity_name);
+                    }
+                }
+            }
+            
+            // Also try to construct a proper metadata context URL with the fragment
+            // This might help with metadata lookup
+            if (!current_entity_name_from_fragment.empty()) {
+                // Construct the fragment like "flights_view('AA')/Set"
+                std::string fragment = current_entity_name_from_fragment + "(";
+                bool first = true;
+                for (const auto& [key, value] : input_parameters) {
+                    if (!first) {
+                        fragment += ",";
+                    }
+                    first = false;
+                    
+                    // Handle different value types according to SAP Datasphere documentation
+                    if (value.find_first_not_of("0123456789.-") == std::string::npos && value.find('.') != std::string::npos) {
+                        // Numeric value (no quotes needed)
+                        fragment += key + "=" + value;
+                    } else if (value.find_first_not_of("0123456789-") == std::string::npos && value.find('-') != std::string::npos && value.length() == 10) {
+                        // Date value (no quotes needed)
+                        fragment += key + "=" + value;
+                    } else {
+                        // Text value (enclosed in single quotes)
+                        fragment += key + "='" + value + "'";
+                    }
+                }
+                fragment += ")/Set";
+                
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Constructed metadata context fragment: " + fragment);
             }
         }
     }
@@ -287,46 +433,160 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
 
 // (duplicate definition removed)
 
+void ODataEntitySetClient::SetEntitySetNameFromContextFragment(const std::string &context_or_fragment)
+{
+    // Only extract from a fragment part after '#'. If none, do nothing.
+    auto hash_pos = context_or_fragment.find('#');
+    if (hash_pos == std::string::npos) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "No fragment present in @odata.context; skipping entity name extraction");
+        return;
+    }
+    std::string fragment = context_or_fragment.substr(hash_pos + 1);
+    // Extract entity name as in Get(): before '(' or before '/' or whole fragment
+    std::string entity_name;
+    auto open_paren_pos = fragment.find('(');
+    if (open_paren_pos != std::string::npos) {
+        entity_name = fragment.substr(0, open_paren_pos);
+    } else {
+        auto slash_pos = fragment.find('/');
+        if (slash_pos != std::string::npos) {
+            entity_name = fragment.substr(0, slash_pos);
+        } else {
+            entity_name = fragment;
+        }
+    }
+    if (!entity_name.empty()) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Set entity set name from @odata.context: " + entity_name);
+        current_entity_name_from_fragment = entity_name;
+    } else {
+        ERPL_TRACE_WARN("ODATA_CLIENT", "Failed to extract entity name from @odata.context fragment: " + context_or_fragment);
+    }
+}
+
 EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
 {
-    auto edmx = GetMetadata();
-
-    // Extract entity set name from the URL path
-    // For URLs like https://services.odata.org/TripPinRESTierService/People
-    // Extract "People" as the entity set name
-    auto path = url.Path();
-    if (path.empty() || path == "/") {
-        throw std::runtime_error("Invalid entity set URL: no path segment found");
-    }
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "GetCurrentEntitySetType called");
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Current URL path: " + url.Path());
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Input parameters count: " + std::to_string(input_parameters.size()));
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Current entity name from fragment: " + (current_entity_name_from_fragment.empty() ? "empty" : current_entity_name_from_fragment));
     
-    // Remove leading slash if present
-    if (path[0] == '/') {
-        path = path.substr(1);
-    }
-    
-    // Find the last path segment
-    auto last_slash_pos = path.find_last_of('/');
     std::string entity_set_name;
-    if (last_slash_pos == std::string::npos) {
-        entity_set_name = path;
+    
+    // First, try to use the entity name extracted from the metadata context fragment
+    if (!current_entity_name_from_fragment.empty()) {
+        entity_set_name = current_entity_name_from_fragment;
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using entity name from metadata context fragment: " + entity_set_name);
     } else {
-        entity_set_name = path.substr(last_slash_pos + 1);
+        // No fragment-based name available; do not guess from URL. Defer to metadata lookup below.
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "No entity name from @odata.context; deferring to metadata lookup");
     }
     
+    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Final entity set name: " + entity_set_name);
+    
+    // If still empty, use metadata to find the single entity set name if unique
     if (entity_set_name.empty()) {
-        throw std::runtime_error("Invalid entity set URL: empty entity set name");
+        auto edmx_probe = GetMetadata();
+        auto sets = edmx_probe.FindEntitySets();
+        if (sets.size() == 1) {
+            entity_set_name = sets[0].name;
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved single entity set from metadata: " + entity_set_name);
+        } else {
+            // Prefer the entity set name extracted earlier from @odata.context fragment if available
+            if (!current_entity_name_from_fragment.empty()) {
+                entity_set_name = current_entity_name_from_fragment;
+                ERPL_TRACE_INFO("ODATA_CLIENT", "Using entity set from @odata.context fragment: " + entity_set_name);
+            } else {
+                // For non-Datasphere services, derive entity set name from URL path when multiple sets exist
+                const auto url_str = url.ToString();
+                const bool is_datasphere = (url_str.find("hcs.cloud.sap") != std::string::npos) ||
+                                           (url_str.find("/api/v1/dwc/consumption/relational/") != std::string::npos);
+                if (!is_datasphere) {
+                    auto path = url.Path();
+                    // Remove trailing slash
+                    if (!path.empty() && path.back() == '/') {
+                        path.pop_back();
+                    }
+                    // Extract last segment
+                    auto last_slash = path.find_last_of('/');
+                    std::string candidate = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+                    ERPL_TRACE_INFO("ODATA_CLIENT", "Derived entity set candidate from URL: " + candidate);
+                    // Validate against metadata entity sets
+                    bool found = false;
+                    for (const auto &es : sets) {
+                        if (es.name == candidate) { found = true; break; }
+                    }
+                    if (found) {
+                        entity_set_name = candidate;
+                        ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved entity set from URL path: " + entity_set_name);
+                    } else {
+                        throw std::runtime_error("Unable to resolve entity set from @odata.context or URL; metadata has multiple sets");
+                    }
+                } else {
+                    throw std::runtime_error("Unable to resolve entity set from @odata.context and metadata has multiple sets");
+                }
+            }
+        }
     }
-    
+    auto edmx = GetMetadata();
     auto entity_set_type = edmx.FindEntitySet(entity_set_name);
     return entity_set_type;
 }
 
 EntityType ODataEntitySetClient::GetCurrentEntityType()
 {
+    auto entity_set_type = GetCurrentEntitySetType();
     auto edmx = GetMetadata();
 
-    auto entity_set_type = GetCurrentEntitySetType();
-    auto entity_type = std::get<EntityType>(edmx.FindType(entity_set_type.entity_type_name));
+    // Resolve the base entity type from the entity set
+    std::string resolved_entity_type_name = entity_set_type.entity_type_name; // e.g., StandaloneService.flights_viewParameters
+
+    // Datasphere parameterized pattern: when addressing ...(<params>)/Set, the result type is the
+    // navigation property "Set" of the parameters entity, typically Collection(StandaloneService.<entity>Type)
+    auto path_has_set = false;
+    {
+        auto p = url.Path();
+        if (!p.empty()) {
+            if (p.size() >= 4 && p.substr(p.size() - 4) == "/Set") path_has_set = true;
+            if (p.find(")/Set") != std::string::npos) path_has_set = true;
+        }
+    }
+
+    // Prefer explicit signal from @odata.context fragment if present
+    if (current_response) {
+        auto ctx = current_response->MetadataContextUrl();
+        auto hash_pos = ctx.find('#');
+        if (hash_pos != std::string::npos) {
+            auto fragment = ctx.substr(hash_pos + 1);
+            if (fragment.find("/Set") != std::string::npos) {
+                path_has_set = true;
+            }
+        }
+    }
+
+    if (path_has_set || HasInputParameters()) {
+        // Resolve parameters entity and then follow nav property "Set"
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Resolving entity type via navigation property 'Set' from: " + resolved_entity_type_name);
+        auto params_entity_type = std::get<EntityType>(edmx.FindType(resolved_entity_type_name));
+        std::string nav_type_name;
+        for (const auto &nav_prop : params_entity_type.navigation_properties) {
+            if (nav_prop.name == "Set") {
+                nav_type_name = nav_prop.type; // e.g., Collection(StandaloneService.flights_viewType)
+                break;
+            }
+        }
+        if (!nav_type_name.empty()) {
+            // Strip Collection(...) if present
+            if (nav_type_name.find("Collection(") == 0 && nav_type_name.back() == ')') {
+                nav_type_name = nav_type_name.substr(std::string("Collection(").size(), nav_type_name.size() - std::string("Collection(").size() - 1);
+            }
+            resolved_entity_type_name = nav_type_name;
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved result entity type via 'Set': " + resolved_entity_type_name);
+        } else {
+            ERPL_TRACE_WARN("ODATA_CLIENT", "Navigation property 'Set' not found on type: " + params_entity_type.name + "; falling back to entity set type");
+        }
+    }
+
+    auto entity_type = std::get<EntityType>(edmx.FindType(resolved_entity_type_name));
     return entity_type;
 }
 
@@ -359,6 +619,94 @@ std::vector<duckdb::LogicalType> ODataEntitySetClient::GetResultTypes()
     }
 
     return ret_types;
+}
+
+void ODataEntitySetClient::SetInputParameters(const std::map<std::string, std::string>& input_params)
+{
+    input_parameters = input_params;
+    ERPL_TRACE_INFO("ODATA_CLIENT", "SetInputParameters called - storing " + std::to_string(input_params.size()) + " input parameters for OData client at " + std::to_string(reinterpret_cast<uintptr_t>(this)));
+    for (const auto& [key, value] : input_params) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "  Parameter: " + key + " = " + value);
+    }
+}
+
+HttpUrl ODataEntitySetClient::AddInputParametersToUrl(const HttpUrl& url) const
+{
+    ERPL_TRACE_INFO("ODATA_CLIENT", "AddInputParametersToUrl called with " + std::to_string(input_parameters.size()) + " parameters on client at " + std::to_string(reinterpret_cast<uintptr_t>(this)));
+    
+    if (input_parameters.empty()) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "No input parameters to add");
+        return url;
+    }
+    
+    // Create a copy of the URL to modify
+    HttpUrl modified_url = url;
+    std::string current_path = modified_url.Path();
+    std::string new_path = current_path;
+    
+    // Build the input parameters string in SAP Datasphere format: (param1=value1,param2=value2)/Set
+    std::string params_string = "(";
+    bool first = true;
+    
+    for (const auto& [key, value] : input_parameters) {
+        if (!first) {
+            params_string += ",";
+        }
+        first = false;
+        
+        // Handle different value types according to SAP Datasphere documentation
+        if (value.find_first_not_of("0123456789.-") == std::string::npos && value.find('.') != std::string::npos) {
+            // Numeric value (no quotes needed)
+            params_string += key + "=" + value;
+        } else if (value.find_first_not_of("0123456789-") == std::string::npos && value.find('-') != std::string::npos && value.length() == 10) {
+            // Date value (no quotes needed)
+            params_string += key + "=" + value;
+        } else {
+            // Text value (enclosed in single quotes)
+            params_string += key + "='" + value + "'";
+        }
+    }
+    
+    params_string += ")";
+    
+    // Check if the URL already ends with /Set to avoid duplicates
+    bool already_has_set = (current_path.length() >= 4 && 
+                           current_path.substr(current_path.length() - 4) == "/Set");
+    
+    // If the URL already has /Set, we need to insert parameters before it
+    if (already_has_set) {
+        // Remove /Set suffix temporarily
+        new_path = current_path.substr(0, current_path.length() - 4);
+        // Add parameters
+        new_path += params_string;
+        // Add /Set back
+        new_path += "/Set";
+    } else {
+        // URL doesn't have /Set, add parameters with /Set
+        new_path += params_string + "/Set";
+    }
+    
+    // Check if parameters are already in the path to avoid duplicates
+    // Remove /Set suffix from params_string for comparison since the URL might already have it
+    std::string params_without_set = params_string;
+    if (params_without_set.length() >= 4 && 
+        params_without_set.substr(params_without_set.length() - 4) == "/Set") {
+        params_without_set = params_without_set.substr(0, params_without_set.length() - 4);
+    }
+    
+    if (current_path.find(params_without_set) != std::string::npos) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Input parameters already exist in path, skipping");
+        return url;
+    }
+    
+    // Add the parameters to the path
+    modified_url.Path(new_path);
+    
+    if (new_path != current_path) {
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Added input parameters to URL path: " + modified_url.ToString());
+    }
+    
+    return modified_url;
 }
 
 // ----------------------------------------------------------------------
