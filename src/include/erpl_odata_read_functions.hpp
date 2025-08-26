@@ -11,6 +11,7 @@
 #include "erpl_odata_client.hpp"
 #include "erpl_odata_edm.hpp"
 #include "erpl_odata_predicate_pushdown_helper.hpp"
+#include <deque>
 
 using namespace duckdb;
 
@@ -39,6 +40,11 @@ public:
 
     void UpdateUrlFromPredicatePushdown();
     std::shared_ptr<ODataPredicatePushdownHelper> PredicatePushdownHelper();
+    // Report cumulative progress in [0,1], or <0 when unknown (to hide DuckDB progress)
+    double GetProgressFraction() const;
+
+    // Prefetch first page after predicate pushdown (called from init state)
+    void PrefetchFirstPage();
     
     // For Datasphere dual-URL pattern: set column names extracted from first data row
     void SetExtractedColumnNames(const std::vector<std::string>& column_names);
@@ -70,6 +76,16 @@ private:
     std::map<std::string, std::string> input_parameters;
     
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;
+
+    // Progress reporting state
+    uint64_t progress_rows_fetched_ = 0;
+    uint64_t progress_total_count_ = 0;
+    bool progress_has_total_ = false;
+
+    // Buffered rows across pages to align with DuckDB vector size
+    std::deque<std::vector<duckdb::Value>> row_buffer_;
+    bool has_next_page_ = false;
+    bool first_page_cached_ = false;
 };
 
 
@@ -78,6 +94,7 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data, DataChunk &
 
 unique_ptr<GlobalTableFunctionState> ODataReadTableInitGlobalState(ClientContext &context, TableFunctionInitInput &input);
 unique_ptr<FunctionData> ODataReadBind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types, vector<string> &names);
+double ODataReadTableProgress(ClientContext &, const FunctionData *func_data, const GlobalTableFunctionState *);
 
 TableFunctionSet CreateODataReadFunction();
 

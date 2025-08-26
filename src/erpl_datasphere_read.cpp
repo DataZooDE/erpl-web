@@ -206,6 +206,7 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
         ODataReadScan, DatasphereReadRelationalBind, DatasphereReadRelationalTableInitGlobalState);
     relational_function_2_params.filter_pushdown = true;
     relational_function_2_params.projection_pushdown = true;
+    relational_function_2_params.table_scan_progress = ODataReadTableProgress;
     relational_function_2_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_2_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_2_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
@@ -221,6 +222,13 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
         ODataReadScan, DatasphereReadRelationalBind, DatasphereReadRelationalTableInitGlobalState);
     relational_function_3_params.filter_pushdown = true;
     relational_function_3_params.projection_pushdown = true;
+    relational_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
+                                                          const duckdb::FunctionData *bind_data,
+                                                          const duckdb::GlobalTableFunctionState *gstate) -> double {
+        if (!bind_data) return -1.0;
+        auto odata_bind = static_cast<const ODataReadBindData *>(bind_data);
+        return odata_bind ? odata_bind->GetProgressFraction() : -1.0;
+    };
     relational_function_3_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_3_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_3_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
