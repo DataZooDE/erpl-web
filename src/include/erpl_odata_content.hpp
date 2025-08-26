@@ -24,6 +24,8 @@ public:
     virtual std::optional<std::string> NextUrl() = 0;
     virtual std::vector<std::vector<duckdb::Value>> ToRows(std::vector<std::string> &column_names, 
                                                            std::vector<duckdb::LogicalType> &column_types) = 0;
+    // Optional total row count for OData v4 when $count=true is used
+    virtual std::optional<uint64_t> TotalCount() { return std::nullopt; }
 };
 
 struct ODataEntitySetReference {
@@ -105,6 +107,8 @@ public:
 
     std::vector<std::vector<duckdb::Value>> ToRows(std::vector<std::string> &column_names, 
                                                    std::vector<duckdb::LogicalType> &column_types) override;
+
+    std::optional<uint64_t> TotalCount() override;
 };
 
 class ODataServiceJsonContent : public ODataServiceContent, public ODataJsonContentMixin {

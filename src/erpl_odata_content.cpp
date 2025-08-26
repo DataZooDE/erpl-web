@@ -997,6 +997,29 @@ void ODataEntitySetJsonContent::PrettyPrint()
     ODataJsonContentMixin::PrettyPrint();
 }
 
+std::optional<uint64_t> ODataEntitySetJsonContent::TotalCount()
+{
+    auto root = yyjson_doc_get_root(doc.get());
+    if (!root || !yyjson_is_obj(root)) {
+        return std::nullopt;
+    }
+    // OData v4 count when $count=true
+    auto count_val = yyjson_obj_get(root, "@odata.count");
+    if (count_val) {
+        if (yyjson_is_int(count_val)) {
+            return static_cast<uint64_t>(yyjson_get_int(count_val));
+        }
+        if (yyjson_is_str(count_val)) {
+            try {
+                return static_cast<uint64_t>(std::stoull(yyjson_get_str(count_val)));
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 // ----------------------------------------------------------------------
 
 ODataServiceJsonContent::ODataServiceJsonContent(const std::string& content)

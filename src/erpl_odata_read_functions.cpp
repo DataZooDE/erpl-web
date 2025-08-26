@@ -336,51 +336,90 @@ std::vector<duckdb::LogicalType> ODataReadBindData::GetResultTypes(bool all_colu
 
 unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output)
 {
-    // Pass input parameters to OData client before making HTTP request (if any)
+    // Ensure input parameters are set on client before any request
     if (!input_parameters.empty()) {
         odata_client->SetInputParameters(input_parameters);
-        ERPL_TRACE_INFO("ODATA_READ_BIND", "Passed " + std::to_string(input_parameters.size()) + " input parameters to OData client before HTTP request");
     }
-    
-    auto response = odata_client->Get();
-    
-    // Use our extracted names and types instead of calling OData client methods
-    // to avoid triggering metadata fetching
+
+    // Make sure first page is prefetched once and buffered
+    if (!first_page_cached_) {
+        PrefetchFirstPage();
+    }
+
     auto result_names = GetResultNames();
     auto result_types = GetResultTypes();
-    
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "FetchNextResult: Using " + std::to_string(result_types.size()) + " result types");
-    for (size_t i = 0; i < result_types.size(); i++) {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "FetchNextResult: Type " + std::to_string(i) + ": " + result_types[i].ToString());
-    }
-    
-    auto rows = response->ToRows(result_names, result_types);
+
+    const idx_t target = STANDARD_VECTOR_SIZE;
+    idx_t emitted = 0;
     auto null_value = duckdb::Value();
 
-    for (idx_t i = 0; i < rows.size(); i++) {
+    // Fetch additional pages until we have enough buffered rows to fill the vector or no more pages
+    while (row_buffer_.size() < target && has_next_page_) {
+        auto next_response = odata_client->Get(true);
+        if (!next_response) {
+            has_next_page_ = false;
+            break;
+        }
+        // Capture total count once for progress
+        if (next_response->GetODataVersion() == ODataVersion::V4) {
+            auto total = next_response->Content()->TotalCount();
+            if (total.has_value() && (!progress_has_total_ || progress_total_count_ == 0)) {
+                progress_total_count_ = total.value();
+                progress_has_total_ = true;
+            }
+        }
+        auto page_rows = next_response->ToRows(result_names, result_types);
+        for (auto &r : page_rows) {
+            row_buffer_.emplace_back(std::move(r));
+        }
+        has_next_page_ = next_response->NextUrl().has_value();
+    }
+
+    // Emit up to target rows from buffer
+    idx_t to_emit = std::min<idx_t>(row_buffer_.size(), target);
+    for (idx_t i = 0; i < to_emit; i++) {
+        const auto &row = row_buffer_.front();
         for (idx_t j = 0; j < output.ColumnCount(); j++) {
             if (j >= result_names.size()) {
                 auto col_type = output.data[j].GetType();
                 output.SetValue(j, i, null_value.DefaultCastAs(col_type));
             } else {
-                output.SetValue(j, i, rows[i][j]);
+                output.SetValue(j, i, row[j]);
             }
         }
+        row_buffer_.pop_front();
+        emitted++;
     }
-    
-    output.SetCardinality(rows.size());
-    return rows.size();
+
+    output.SetCardinality(emitted);
+
+    // Update cumulative progress
+    progress_rows_fetched_ += static_cast<uint64_t>(emitted);
+    if (progress_has_total_ && progress_total_count_ > 0) {
+        double pct = 100.0 * (double)progress_rows_fetched_ / (double)progress_total_count_;
+        if (pct > 100.0) pct = 100.0;
+        ERPL_TRACE_INFO("ODATA_SCAN", duckdb::StringUtil::Format(
+            "Progress: %.2f%% (%llu/%llu)",
+            pct,
+            (unsigned long long)progress_rows_fetched_,
+            (unsigned long long)progress_total_count_));
+    }
+
+    return emitted;
 }
 
 bool ODataReadBindData::HasMoreResults()
 {
-    if (first_fetch) {
-        first_fetch = false;
+    // If buffer still has rows, we have results to emit
+    if (!row_buffer_.empty()) {
         return true;
     }
-
-    auto response = odata_client->Get(true);
-    return response != nullptr;
+    // If first page hasn't been cached yet, we need to deliver it
+    if (!first_page_cached_) {
+        return true;
+    }
+    // Otherwise, only if server indicated a next page
+    return has_next_page_;
 }
 
 void ODataReadBindData::ActivateColumns(const std::vector<duckdb::column_t> &column_ids)
@@ -482,6 +521,66 @@ std::shared_ptr<ODataPredicatePushdownHelper> ODataReadBindData::PredicatePushdo
     }
 
     return predicate_pushdown_helper;
+}
+
+double ODataReadBindData::GetProgressFraction() const
+{
+    if (!progress_has_total_ || progress_total_count_ == 0) {
+        return -1.0; // unknown -> DuckDB will not show progress
+    }
+    // Include buffered rows so progress moves while we are prefetching pages to fill the chunk
+    uint64_t rows_seen = progress_rows_fetched_ + (uint64_t)row_buffer_.size();
+    double progress = 100 * (double)rows_seen / (double)progress_total_count_;
+    if (progress < 0.0) progress = 0.0;
+	return MinValue<double>(100, progress);
+}
+
+void ODataReadBindData::PrefetchFirstPage()
+{
+    if (first_page_cached_) {
+        return;
+    }
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "PrefetchFirstPage: starting first page fetch");
+
+    // Ensure input parameters are set on client before any request
+    if (!input_parameters.empty()) {
+        odata_client->SetInputParameters(input_parameters);
+    }
+
+    auto response = odata_client->Get();
+    if (!response) {
+        ERPL_TRACE_WARN("ODATA_READ_BIND", "PrefetchFirstPage: no response received");
+        first_page_cached_ = true;
+        has_next_page_ = false;
+        return;
+    }
+
+    // Capture total count once for progress (v4 only, when available)
+    if (response->GetODataVersion() == ODataVersion::V4) {
+        auto total = response->Content()->TotalCount();
+        if (total.has_value()) {
+            progress_total_count_ = total.value();
+            progress_has_total_ = true;
+            ERPL_TRACE_INFO("ODATA_READ_BIND", duckdb::StringUtil::Format(
+                "Service reported total row count: %llu",
+                (unsigned long long)progress_total_count_));
+        }
+    }
+
+    auto result_names = GetResultNames();
+    auto result_types = GetResultTypes();
+
+    auto page_rows = response->ToRows(result_names, result_types);
+    for (auto &r : page_rows) {
+        row_buffer_.emplace_back(std::move(r));
+    }
+
+    has_next_page_ = response->NextUrl().has_value();
+    first_page_cached_ = true;
+
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND", duckdb::StringUtil::Format(
+        "PrefetchFirstPage: buffered %d rows, has_next_page=%s",
+        (int)row_buffer_.size(), has_next_page_ ? "true" : "false"));
 }
 
 void ODataReadBindData::SetExtractedColumnNames(const std::vector<std::string>& column_names)
@@ -604,8 +703,18 @@ unique_ptr<GlobalTableFunctionState> ODataReadTableInitGlobalState(ClientContext
     bind_data.AddFilters(input.filters);
     
     bind_data.UpdateUrlFromPredicatePushdown();
+    // Prefetch first page after URL is finalized so progress can show early and tiny scans return immediately
+    bind_data.PrefetchFirstPage();
 
     return duckdb::make_uniq<GlobalTableFunctionState>();
+}
+
+double ODataReadTableProgress(ClientContext &, const FunctionData *func_data, const GlobalTableFunctionState *)
+{
+    auto &bind_data = func_data->CastNoConst<ODataReadBindData>();
+    ERPL_TRACE_DEBUG("ODATA_READ_TABLE_PROGRESS", "Progress fraction: " + std::to_string(bind_data.GetProgressFraction()));
+
+    return bind_data.GetProgressFraction();
 }
 
 void ODataReadScan(ClientContext &context, 
@@ -633,6 +742,7 @@ TableFunctionSet CreateODataReadFunction()
     TableFunction read_entity_set({LogicalType::VARCHAR}, ODataReadScan, ODataReadBind, ODataReadTableInitGlobalState);
     read_entity_set.filter_pushdown = true;
     read_entity_set.projection_pushdown = true;
+    read_entity_set.table_scan_progress = ODataReadTableProgress;
     
     // Add named parameters for TOP and SKIP
     read_entity_set.named_parameters["top"] = LogicalType::UBIGINT;
