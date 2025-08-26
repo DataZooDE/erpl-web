@@ -1,18 +1,14 @@
 #include "erpl_datasphere_read.hpp"
 #include "erpl_datasphere_client.hpp"
-#include "erpl_odata_client.hpp"
-#include "erpl_odata_content.hpp"
-#include "erpl_oauth2_flow_v2.hpp"
+// #include "erpl_odata_client.hpp"
 #include "erpl_odata_functions.hpp"
 #include "erpl_odata_read_functions.hpp"
 #include "erpl_datasphere_secret.hpp"
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-#include "duckdb/main/secret/secret_manager.hpp"
-#include "duckdb/main/secret/secret.hpp"
+// #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "erpl_tracing.hpp"
 #include <sstream>
-#include <algorithm>
+#include <sstream>
 
 namespace erpl_web {
 
@@ -52,6 +48,38 @@ namespace {
         }
         
         return input_params;
+    }
+    
+    // Helper function to build the analytical data URL
+    std::string BuildAnalyticalDataUrl(const std::string& space_id, const std::string& asset_id, 
+                                       const std::string& tenant, const std::string& data_center) {
+        if (space_id.find("http") == 0) {
+            // space_id is already a full URL
+            std::string data_url = space_id;
+            if (!space_id.empty() && space_id.back() != '/' && !asset_id.empty()) {
+                // Check if URL already ends with asset_id to avoid duplication
+                if (space_id.length() <= asset_id.length() || 
+                    space_id.substr(space_id.length() - asset_id.length()) != asset_id) {
+                    data_url += "/" + asset_id;
+                }
+            }
+            // For Datasphere: ensure double asset segment (/{asset}/{asset}) when no params
+            if (data_url.find("hcs.cloud.sap") != std::string::npos) {
+                // If not already double, append second asset segment
+                if (data_url.rfind("/" + asset_id) != data_url.length() - (asset_id.length() + 1)) {
+                    data_url += "/" + asset_id;
+                }
+            }
+            return data_url;
+        } else {
+            // Build URL from components
+            auto base = DatasphereUrlBuilder::BuildAnalyticalUrl(tenant, data_center, space_id, asset_id);
+            // For Datasphere: include double asset segment
+            if (base.find("hcs.cloud.sap") != std::string::npos) {
+                return base + "/" + asset_id;
+            }
+            return base;
+        }
     }
     
     // Helper function to build the data URL
@@ -236,6 +264,186 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
     set.AddFunction(relational_function_3_params);
     
     ERPL_TRACE_DEBUG("DATASPHERE_FUNCTION_REGISTRATION", "=== DATASPHERE_RELATIONAL FUNCTION REGISTRATION COMPLETED ===");
+    return set;
+}
+
+// ================================================================================================
+// Analytical read (metrics/dimensions -> $select)
+// ================================================================================================
+
+namespace {
+    static std::vector<std::string> ExtractStringList(const duckdb::Value &val) {
+        std::vector<std::string> out;
+        if (val.type().id() != duckdb::LogicalTypeId::LIST) {
+            return out;
+        }
+        auto children = duckdb::ListValue::GetChildren(val);
+        out.reserve(children.size());
+        for (auto &c : children) {
+            if (c.type().id() == duckdb::LogicalTypeId::VARCHAR) {
+                out.emplace_back(c.GetValue<std::string>());
+            }
+        }
+        return out;
+    }
+}
+
+static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duckdb::ClientContext &context, 
+                                                                             duckdb::TableFunctionBindInput &input,
+                                                                             duckdb::vector<duckdb::LogicalType> &return_types,
+                                                                             duckdb::vector<std::string> &names) {
+    ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_BIND", "=== DATASPHERE_ANALYTICAL_BIND CALLED ===");
+
+    // Extract basic parameters
+    auto space_id = input.inputs[0].GetValue<std::string>();
+    auto asset_id = input.inputs[1].GetValue<std::string>();
+
+    // Extract secret name
+    std::string secret_name = "datasphere";
+    if (input.inputs.size() > 2) {
+        secret_name = input.inputs[2].GetValue<std::string>();
+    } else if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters["secret"].GetValue<std::string>();
+    }
+
+    // Resolve authentication
+    auto auth = ResolveDatasphereAuth(context, secret_name);
+    ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_BIND", "Using tenant: " + auth.tenant_name + 
+                    ", data_center: " + auth.data_center + ", space_id: " + space_id + 
+                    ", asset_id: " + asset_id);
+
+    // Build data URL
+    auto data_url = BuildAnalyticalDataUrl(space_id, asset_id, auth.tenant_name, auth.data_center);
+
+    // Parse metrics and dimensions named parameters and translate to $select
+    std::vector<std::string> select_fields;
+    if (input.named_parameters.find("dimensions") != input.named_parameters.end()) {
+        auto dims = ExtractStringList(input.named_parameters["dimensions"]);
+        select_fields.insert(select_fields.end(), dims.begin(), dims.end());
+    }
+    if (input.named_parameters.find("metrics") != input.named_parameters.end()) {
+        auto mets = ExtractStringList(input.named_parameters["metrics"]);
+        select_fields.insert(select_fields.end(), mets.begin(), mets.end());
+    }
+    if (!select_fields.empty()) {
+        std::ostringstream ss;
+        for (size_t i = 0; i < select_fields.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << select_fields[i];
+        }
+        if (data_url.find('?') == std::string::npos) {
+            data_url += "?";
+        } else if (!data_url.empty() && data_url.back() != '?' && data_url.back() != '&') {
+            data_url += "&";
+        }
+        // Use standard OData $select; ApplyFiltersToUrl will skip adding another when present
+        data_url += "$select=" + ss.str();
+        ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_BIND", "Applied $select from metrics/dimensions: " + ss.str());
+    }
+
+    ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_BIND", "Data URL: " + data_url);
+
+    // Create OData bind data
+    auto read_bind = ODataReadBindData::FromEntitySetRoot(data_url, auth.auth_params);
+
+    // Extract and apply input parameters BEFORE metadata extraction
+    if (input.named_parameters.find("params") != input.named_parameters.end()) {
+        auto input_params = ExtractInputParameters(input.named_parameters["params"]);
+        if (!input_params.empty()) {
+            read_bind->SetInputParameters(input_params);
+            auto odata_client = read_bind->GetODataClient();
+            if (odata_client) {
+                odata_client->SetInputParameters(input_params);
+                ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_BIND", "Passed input parameters to OData client");
+            } else {
+                ERPL_TRACE_ERROR("DATASPHERE_ANALYTICAL_BIND", "Failed to get OData client");
+            }
+        }
+    }
+
+    // Apply other named parameters
+    ApplyNamedParameters(read_bind.get(), input);
+
+    // Get result schema
+    names = read_bind->GetResultNames(false);
+    return_types = read_bind->GetResultTypes(false);
+
+    ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_BIND", "=== DATASPHERE_ANALYTICAL_BIND COMPLETED ===");
+    return std::move(read_bind);
+}
+
+static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> DatasphereReadAnalyticalTableInitGlobalState(duckdb::ClientContext &context,
+                                                                                                         duckdb::TableFunctionInitInput &input) 
+{
+    auto &bind_data = input.bind_data->CastNoConst<ODataReadBindData>();
+    auto column_ids = input.column_ids;
+
+    ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_INIT", "Initializing with " + std::to_string(column_ids.size()) + " columns");
+    
+    bind_data.ActivateColumns(column_ids);
+    bind_data.AddFilters(input.filters);
+
+    // Ensure input parameters are still available in OData client
+    auto input_params = bind_data.GetInputParameters();
+    if (!input_params.empty()) {
+        auto odata_client = bind_data.GetODataClient();
+        if (odata_client) {
+            odata_client->SetInputParameters(input_params);
+            ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_INIT", "Re-applied " + std::to_string(input_params.size()) + " input parameters");
+        }
+    }
+
+    bind_data.UpdateUrlFromPredicatePushdown();
+
+    return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
+}
+
+duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction() {
+    ERPL_TRACE_DEBUG("DATASPHERE_FUNCTION_REGISTRATION", "=== REGISTERING DATASPHERE_ANALYTICAL FUNCTION ===");
+
+    duckdb::TableFunctionSet set("datasphere_read_analytical");
+
+    // 2-parameter version (space_id, asset_id)
+    duckdb::TableFunction analytical_function_2_params(
+        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
+        ODataReadScan, DatasphereReadAnalyticalBind, DatasphereReadAnalyticalTableInitGlobalState);
+    analytical_function_2_params.filter_pushdown = true;
+    analytical_function_2_params.projection_pushdown = true;
+    analytical_function_2_params.table_scan_progress = ODataReadTableProgress;
+    analytical_function_2_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
+    analytical_function_2_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
+    analytical_function_2_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                                                                                         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    analytical_function_2_params.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    analytical_function_2_params.named_parameters["metrics"] = duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    analytical_function_2_params.named_parameters["dimensions"] = duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    set.AddFunction(analytical_function_2_params);
+
+    // 3-parameter version (space_id, asset_id, secret_name)
+    duckdb::TableFunction analytical_function_3_params(
+        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
+        ODataReadScan, DatasphereReadAnalyticalBind, DatasphereReadAnalyticalTableInitGlobalState);
+    analytical_function_3_params.filter_pushdown = true;
+    analytical_function_3_params.projection_pushdown = true;
+    analytical_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
+                                                          const duckdb::FunctionData *bind_data,
+                                                          const duckdb::GlobalTableFunctionState *gstate) -> double {
+        if (!bind_data) return -1.0;
+        auto odata_bind = static_cast<const ODataReadBindData *>(bind_data);
+        return odata_bind ? odata_bind->GetProgressFraction() : -1.0;
+    };
+    analytical_function_3_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
+    analytical_function_3_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
+    analytical_function_3_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
+                                                                                         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    analytical_function_3_params.named_parameters["metrics"] = duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    analytical_function_3_params.named_parameters["dimensions"] = duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    set.AddFunction(analytical_function_3_params);
+
+    ERPL_TRACE_DEBUG("DATASPHERE_FUNCTION_REGISTRATION", "=== DATASPHERE_ANALYTICAL FUNCTION REGISTRATION COMPLETED ===");
     return set;
 }
 
