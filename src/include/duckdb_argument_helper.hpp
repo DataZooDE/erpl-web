@@ -1,6 +1,9 @@
 #pragma once
 
-#include "duckdb.hpp"
+#include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types.hpp"
+#include "duckdb/common/vector.hpp"
+#include "duckdb/common/named_parameter_map.hpp"
 #include <vector>
 #include <string>
 
@@ -49,5 +52,8 @@ namespace erpl_web
     using named_parameter_map_t = duckdb::named_parameter_map_t;
     bool HasParam(const named_parameter_map_t& named_params, const std::string& name);
     duckdb::Value ConvertBoolArgument(const named_parameter_map_t& named_params, const std::string& name, const bool default_value);
+
+    // Utility: extract list of strings from a DuckDB Value of LIST(VARCHAR)
+    std::vector<std::string> GetStringList(const duckdb::Value &val);
     
 } // namespace erpl_web

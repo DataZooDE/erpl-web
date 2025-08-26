@@ -1,14 +1,10 @@
 
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-
-#include <numeric>
 
 #include "erpl_odata_read_functions.hpp"
 #include "erpl_http_client.hpp"
 #include "yyjson.hpp"
 
-#include "telemetry.hpp"
 #include "erpl_tracing.hpp"
 
 namespace erpl_web {

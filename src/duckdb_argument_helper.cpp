@@ -208,14 +208,11 @@ namespace erpl_web
         }
 
         auto list_values = ListValue::GetChildren(current_list);
-        if (!list_values.empty())
-        {
+        if (!list_values.empty()) {
             auto current_type = list_values[0].type();
-            auto casted_type = new_value.DefaultCastAs(current_type);
-            list_values.push_back(new_value);
-        }
-        else
-        {
+            auto casted = new_value.DefaultCastAs(current_type);
+            list_values.push_back(casted);
+        } else {
             list_values.push_back(new_value);
         }
 
@@ -352,4 +349,22 @@ namespace erpl_web
         }
     }
     
+    std::vector<std::string> GetStringList(const Value &val) {
+        std::vector<std::string> out;
+        if (val.IsNull()) {
+            return out;
+        }
+        if (val.type().id() != LogicalTypeId::LIST) {
+            return out;
+        }
+        auto children = ListValue::GetChildren(val);
+        out.reserve(children.size());
+        for (auto &c : children) {
+            if (!c.IsNull() && c.type().id() == LogicalTypeId::VARCHAR) {
+                out.emplace_back(StringValue::Get(c));
+            }
+        }
+        return out;
+    }
+
 } // namespace erpl_web

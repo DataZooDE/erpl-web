@@ -1,5 +1,4 @@
 #include <cpptrace/cpptrace.hpp>
-#include <regex>
 
 #include "erpl_odata_client.hpp"
 #include "erpl_tracing.hpp"
