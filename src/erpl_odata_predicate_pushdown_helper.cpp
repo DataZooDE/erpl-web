@@ -1,5 +1,4 @@
 #include "erpl_odata_predicate_pushdown_helper.hpp"
-#include <algorithm>
 #include <set>
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "erpl_tracing.hpp"
@@ -123,8 +122,8 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     // Collect all query clauses
     std::vector<std::string> clauses;
     
-    // Handle $select - only add if not already present in URL
-    if (!select_clause.empty() && existing_params.find("$select") == existing_params.end()) {
+    // Handle $select - only add if not already present in URL (support both "$select" and "select")
+    if (!select_clause.empty() && existing_params.find("$select") == existing_params.end() && existing_params.find("select") == existing_params.end()) {
         clauses.push_back(select_clause);
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding select clause: " + select_clause);
     }

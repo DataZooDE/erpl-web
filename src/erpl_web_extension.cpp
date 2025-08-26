@@ -1,6 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "duckdb.hpp"
+// #include "duckdb.hpp"
 
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
@@ -224,6 +224,7 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
     
     // Register asset consumption functions
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereReadRelationalFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereReadAnalyticalFunction());
     
     // Register Datasphere secret management functions
     erpl_web::CreateDatasphereSecretFunctions::Register(instance);
