@@ -4,6 +4,7 @@
 #include "erpl_odata_functions.hpp"
 #include "erpl_odata_read_functions.hpp"
 #include "erpl_datasphere_secret.hpp"
+#include "duckdb_argument_helper.hpp"
 #include "duckdb/function/table_function.hpp"
 // #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "erpl_tracing.hpp"
@@ -271,22 +272,7 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
 // Analytical read (metrics/dimensions -> $select)
 // ================================================================================================
 
-namespace {
-    static std::vector<std::string> ExtractStringList(const duckdb::Value &val) {
-        std::vector<std::string> out;
-        if (val.type().id() != duckdb::LogicalTypeId::LIST) {
-            return out;
-        }
-        auto children = duckdb::ListValue::GetChildren(val);
-        out.reserve(children.size());
-        for (auto &c : children) {
-            if (c.type().id() == duckdb::LogicalTypeId::VARCHAR) {
-                out.emplace_back(c.GetValue<std::string>());
-            }
-        }
-        return out;
-    }
-}
+namespace { }
 
 static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duckdb::ClientContext &context, 
                                                                              duckdb::TableFunctionBindInput &input,
@@ -318,11 +304,11 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duc
     // Parse metrics and dimensions named parameters and translate to $select
     std::vector<std::string> select_fields;
     if (input.named_parameters.find("dimensions") != input.named_parameters.end()) {
-        auto dims = ExtractStringList(input.named_parameters["dimensions"]);
+        auto dims = erpl_web::GetStringList(input.named_parameters["dimensions"]);
         select_fields.insert(select_fields.end(), dims.begin(), dims.end());
     }
     if (input.named_parameters.find("metrics") != input.named_parameters.end()) {
-        auto mets = ExtractStringList(input.named_parameters["metrics"]);
+        auto mets = erpl_web::GetStringList(input.named_parameters["metrics"]);
         select_fields.insert(select_fields.end(), mets.begin(), mets.end());
     }
     if (!select_fields.empty()) {
