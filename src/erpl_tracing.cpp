@@ -1,6 +1,6 @@
-#include "include/erpl_tracing.hpp"
+#include "erpl_tracing.hpp"
 #include <filesystem>
-#include <iomanip>
+#include <iostream>
 
 namespace erpl_web {
 
@@ -204,3 +204,44 @@ std::string ErplTracer::LevelToString(TraceLevel level) {
 }
 
 } // namespace erpl_web
+
+// C-style lightweight wrappers to ensure macros don't depend on class symbol
+void erpl_trace_error(const std::string &component, const std::string &message) {
+    erpl_web::ErplTracer::Instance().Error(component, message);
+}
+
+void erpl_trace_error_data(const std::string &component, const std::string &message, const std::string &data) {
+    erpl_web::ErplTracer::Instance().Error(component, message, data);
+}
+
+void erpl_trace_warn(const std::string &component, const std::string &message) {
+    erpl_web::ErplTracer::Instance().Warn(component, message);
+}
+
+void erpl_trace_warn_data(const std::string &component, const std::string &message, const std::string &data) {
+    erpl_web::ErplTracer::Instance().Warn(component, message, data);
+}
+
+void erpl_trace_info(const std::string &component, const std::string &message) {
+    erpl_web::ErplTracer::Instance().Info(component, message);
+}
+
+void erpl_trace_info_data(const std::string &component, const std::string &message, const std::string &data) {
+    erpl_web::ErplTracer::Instance().Info(component, message, data);
+}
+
+void erpl_trace_debug(const std::string &component, const std::string &message) {
+    erpl_web::ErplTracer::Instance().Debug(component, message);
+}
+
+void erpl_trace_debug_data(const std::string &component, const std::string &message, const std::string &data) {
+    erpl_web::ErplTracer::Instance().Debug(component, message, data);
+}
+
+void erpl_trace_trace(const std::string &component, const std::string &message) {
+    erpl_web::ErplTracer::Instance().Trace(component, message);
+}
+
+void erpl_trace_trace_data(const std::string &component, const std::string &message, const std::string &data) {
+    erpl_web::ErplTracer::Instance().Trace(component, message, data);
+}

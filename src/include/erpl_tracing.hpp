@@ -4,9 +4,6 @@
 #include <memory>
 #include <fstream>
 #include <mutex>
-#include <chrono>
-#include <sstream>
-#include <iostream>
 
 namespace erpl_web {
 
@@ -71,35 +68,47 @@ private:
     std::mutex trace_mutex;
 };
 
-// Convenience macros for tracing
+} // namespace erpl_web
+
+// Lightweight C-style tracing wrappers to avoid dependency on class name in macros
+void erpl_trace_error(const std::string &component, const std::string &message);
+void erpl_trace_error_data(const std::string &component, const std::string &message, const std::string &data);
+void erpl_trace_warn(const std::string &component, const std::string &message);
+void erpl_trace_warn_data(const std::string &component, const std::string &message, const std::string &data);
+void erpl_trace_info(const std::string &component, const std::string &message);
+void erpl_trace_info_data(const std::string &component, const std::string &message, const std::string &data);
+void erpl_trace_debug(const std::string &component, const std::string &message);
+void erpl_trace_debug_data(const std::string &component, const std::string &message, const std::string &data);
+void erpl_trace_trace(const std::string &component, const std::string &message);
+void erpl_trace_trace_data(const std::string &component, const std::string &message, const std::string &data);
+
+// Convenience macros for tracing (defined outside namespace)
 #define ERPL_TRACE_ERROR(component, message) \
-    ::erpl_web::ErplTracer::Instance().Error(component, message)
+    ::erpl_trace_error(component, message)
 
 #define ERPL_TRACE_ERROR_DATA(component, message, data) \
-    ::erpl_web::ErplTracer::Instance().Error(component, message, data)
+    ::erpl_trace_error_data(component, message, data)
 
 #define ERPL_TRACE_WARN(component, message) \
-    ::erpl_web::ErplTracer::Instance().Warn(component, message)
+    ::erpl_trace_warn(component, message)
 
 #define ERPL_TRACE_WARN_DATA(component, message, data) \
-    ::erpl_web::ErplTracer::Instance().Warn(component, message, data)
+    ::erpl_trace_warn_data(component, message, data)
 
 #define ERPL_TRACE_INFO(component, message) \
-    ::erpl_web::ErplTracer::Instance().Info(component, message)
+    ::erpl_trace_info(component, message)
 
 #define ERPL_TRACE_INFO_DATA(component, message, data) \
-    ::erpl_web::ErplTracer::Instance().Info(component, message, data)
+    ::erpl_trace_info_data(component, message, data)
 
 #define ERPL_TRACE_DEBUG(component, message) \
-    ::erpl_web::ErplTracer::Instance().Debug(component, message)
+    ::erpl_trace_debug(component, message)
 
 #define ERPL_TRACE_DEBUG_DATA(component, message, data) \
-    ::erpl_web::ErplTracer::Instance().Debug(component, message, data)
+    ::erpl_trace_debug_data(component, message, data)
 
 #define ERPL_TRACE_TRACE(component, message) \
-    ::erpl_web::ErplTracer::Instance().Trace(component, message)
+    ::erpl_trace_trace(component, message)
 
 #define ERPL_TRACE_TRACE_DATA(component, message, data) \
-    ::erpl_web::ErplTracer::Instance().Trace(component, message, data)
-
-} // namespace erpl_web
+    ::erpl_trace_trace_data(component, message, data)

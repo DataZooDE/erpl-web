@@ -54,6 +54,7 @@ include_directories(
 )
 
 set(EXTENSION_SOURCES
+    src/erpl_tracing.cpp
     src/duckdb_argument_helper.cpp
     src/charset_converter.cpp
     src/erpl_http_client.cpp
@@ -70,7 +71,6 @@ set(EXTENSION_SOURCES
     src/erpl_web_functions.cpp
     src/erpl_web_extension.cpp
     src/telemetry.cpp
-    src/erpl_tracing.cpp
     src/erpl_datasphere_client.cpp
     src/erpl_datasphere_catalog.cpp
     src/erpl_datasphere_read.cpp
