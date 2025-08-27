@@ -1,13 +1,34 @@
 #include "erpl_datasphere_secret.hpp"
 #include "erpl_oauth2_flow_v2.hpp"
+#include "erpl_http_client.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "yyjson.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/main/client_properties.hpp"
 #include <fstream>
 #include <sstream>
 #include <chrono>
 
 namespace erpl_web {
+
+namespace {
+static std::string UrlEncode(const std::string &value) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+    for (unsigned char c : value) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else if (c == ' ') {
+            escaped << '+';
+        } else {
+            escaped << '%' << std::uppercase << std::setw(2) << int(c) << std::nouppercase;
+        }
+    }
+    return escaped.str();
+}
+}
 
 // DatasphereSecretData implementation
 bool DatasphereSecretData::HasValidToken() const {
@@ -60,6 +81,9 @@ void CreateDatasphereSecretFunctions::Register(duckdb::DatabaseInstance &db) {
     oauth2_function.named_parameters["data_center"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     oauth2_function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     oauth2_function.named_parameters["redirect_uri"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    // Optional for explicit grant/endpoints
+    oauth2_function.named_parameters["grant_type"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    oauth2_function.named_parameters["token_url"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(oauth2_function);
     
     // Register the config secret provider
@@ -99,6 +123,8 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateDatasphereSecretFunctions::CreateDa
     copy_param("data_center");
     copy_param("scope");
     copy_param("redirect_uri");
+    copy_param("grant_type");
+    copy_param("token_url");
     
     // Set default values if not provided
     if (result->secret_map.find("scope") == result->secret_map.end()) {
@@ -311,7 +337,96 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
     auto data_center_val = kv_secret->secret_map.find("data_center");
     auto scope_val = kv_secret->secret_map.find("scope");
     auto redirect_uri_val = kv_secret->secret_map.find("redirect_uri");
-    
+    auto grant_type_val = kv_secret->secret_map.find("grant_type");
+    auto token_url_val = kv_secret->secret_map.find("token_url");
+
+    // Branch for client_credentials (no refresh token, renew on expiry)
+    std::string grant_type = (grant_type_val != kv_secret->secret_map.end()) ? duckdb::StringUtil::Lower(grant_type_val->second.ToString()) : std::string("authorization_code");
+    if (grant_type == "client_credentials") {
+        if (client_id_val == kv_secret->secret_map.end()) {
+            throw duckdb::InvalidInputException("'client_id' not found in 'datasphere' secret");
+        }
+        if (client_secret_val == kv_secret->secret_map.end()) {
+            throw duckdb::InvalidInputException("'client_secret' not found in 'datasphere' secret");
+        }
+
+        // Determine token URL from secret or tenant/data_center
+        std::string token_url;
+        if (token_url_val != kv_secret->secret_map.end() && !token_url_val->second.IsNull()) {
+            token_url = token_url_val->second.ToString();
+        } else {
+            if (tenant_name_val == kv_secret->secret_map.end() || data_center_val == kv_secret->secret_map.end()) {
+                throw duckdb::InvalidInputException("For client_credentials, either 'token_url' must be provided or both 'tenant_name' and 'data_center' must be set in the secret");
+            }
+            OAuth2Config tmp_cfg; tmp_cfg.tenant_name = tenant_name_val->second.ToString(); tmp_cfg.data_center = data_center_val->second.ToString();
+            token_url = tmp_cfg.GetTokenUrl();
+        }
+
+        // Build request body
+        std::string body = "grant_type=client_credentials";
+        // Determine effective scope: default to 'apiaccess' when missing or set to 'default'
+        std::string effective_scope;
+        if (scope_val != kv_secret->secret_map.end()) {
+            effective_scope = scope_val->second.ToString();
+        }
+        if (effective_scope.empty() || duckdb::StringUtil::Lower(effective_scope) == "default") {
+            effective_scope = "openid uaa.resource dmi-api-proxy-sac-saceu10!t3650.apiaccess";
+        }
+        body += "&scope=" + UrlEncode(effective_scope);
+
+        HttpRequest request(HttpMethod::POST, token_url, "application/x-www-form-urlencoded", body);
+        request.headers.emplace("Accept", "application/json");
+        // Use Basic auth
+        auto basic = HttpAuthParams::Base64Encode(client_id_val->second.ToString() + ":" + client_secret_val->second.ToString());
+        request.headers.emplace("Authorization", "Basic " + basic);
+
+        HttpClient http;
+        auto resp = http.SendRequest(request);
+        if (!resp) {
+            throw duckdb::IOException("No response from token endpoint");
+        }
+        if (resp->Code() != 200) {
+            throw duckdb::IOException(duckdb::StringUtil::Format("Token endpoint returned HTTP %d: %s", resp->Code(), resp->Content().c_str()));
+        }
+
+        OAuth2Tokens tokens;
+        auto content = resp->Content();
+        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+        if (!doc) {
+            throw duckdb::IOException("Failed to parse token JSON");
+        }
+        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto access_token_json = duckdb_yyjson::yyjson_obj_get(root, "access_token");
+        if (access_token_json && duckdb_yyjson::yyjson_is_str(access_token_json)) {
+            tokens.access_token = duckdb_yyjson::yyjson_get_str(access_token_json);
+        } else {
+            duckdb_yyjson::yyjson_doc_free(doc);
+            throw duckdb::IOException("access_token missing in token response");
+        }
+        auto token_type_json = duckdb_yyjson::yyjson_obj_get(root, "token_type");
+        if (token_type_json && duckdb_yyjson::yyjson_is_str(token_type_json)) {
+            tokens.token_type = duckdb_yyjson::yyjson_get_str(token_type_json);
+        } else {
+            tokens.token_type = "Bearer";
+        }
+        auto scope_json = duckdb_yyjson::yyjson_obj_get(root, "scope");
+        if (scope_json && duckdb_yyjson::yyjson_is_str(scope_json)) {
+            tokens.scope = duckdb_yyjson::yyjson_get_str(scope_json);
+        } else if (scope_val != kv_secret->secret_map.end()) {
+            tokens.scope = scope_val->second.ToString();
+        }
+        auto expires_in_json = duckdb_yyjson::yyjson_obj_get(root, "expires_in");
+        if (expires_in_json && duckdb_yyjson::yyjson_is_int(expires_in_json)) {
+            tokens.expires_in = static_cast<int>(duckdb_yyjson::yyjson_get_int(expires_in_json));
+            tokens.CalculateExpiresAfter();
+        }
+        // Client credentials does not usually return refresh_token
+        tokens.refresh_token.clear();
+        duckdb_yyjson::yyjson_doc_free(doc);
+        return tokens;
+    }
+
+    // Interactive authorization_code (existing behavior)
     if (client_id_val == kv_secret->secret_map.end()) {
         throw duckdb::InvalidInputException("'client_id' not found in 'datasphere' secret");
     }
@@ -324,18 +439,15 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
     if (data_center_val == kv_secret->secret_map.end()) {
         throw duckdb::InvalidInputException("'data_center' not found in 'datasphere' secret");
     }
-    
-    // Create OAuth2 config
+
     OAuth2Config config;
     config.client_id = client_id_val->second.ToString();
     config.client_secret = client_secret_val->second.ToString();
     config.tenant_name = tenant_name_val->second.ToString();
     config.data_center = data_center_val->second.ToString();
-    // Optional fields with sensible defaults
     config.scope = (scope_val != kv_secret->secret_map.end()) ? scope_val->second.ToString() : std::string("default");
     config.redirect_uri = (redirect_uri_val != kv_secret->secret_map.end()) ? redirect_uri_val->second.ToString() : std::string("http://localhost:65000");
-    
-    // Perform the OAuth2 flow using the clean implementation
+
     OAuth2FlowV2 oauth2_flow;
     return oauth2_flow.ExecuteFlow(config);
 }
