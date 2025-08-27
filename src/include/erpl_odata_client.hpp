@@ -305,10 +305,16 @@ protected:
         ERPL_TRACE_ERROR("ODATA_CLIENT", final_error.str());
         
         std::stringstream ss;
-        ss << "Failed to get OData metadata from " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString();
-        if (metadata_response == nullptr) {
-            ss << ": " << metadata_response->Code() << std::endl;
-            ss << "Content: " << std::endl << metadata_response->Content() << std::endl;
+        ss << "Failed to get OData metadata from "
+           << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString();
+        if (metadata_response != nullptr) {
+            ss << " (HTTP " << metadata_response->Code() << ")";
+            auto body = metadata_response->Content();
+            if (!body.empty()) {
+                ss << "\nResponse: " << body.substr(0, 4000);
+            }
+        } else {
+            ss << ": no response received";
         }
         throw std::runtime_error(ss.str());
 
