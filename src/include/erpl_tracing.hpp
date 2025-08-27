@@ -73,33 +73,33 @@ private:
 
 // Convenience macros for tracing
 #define ERPL_TRACE_ERROR(component, message) \
-    erpl_web::ErplTracer::Instance().Error(component, message)
+    ::erpl_web::ErplTracer::Instance().Error(component, message)
 
 #define ERPL_TRACE_ERROR_DATA(component, message, data) \
-    erpl_web::ErplTracer::Instance().Error(component, message, data)
+    ::erpl_web::ErplTracer::Instance().Error(component, message, data)
 
 #define ERPL_TRACE_WARN(component, message) \
-    erpl_web::ErplTracer::Instance().Warn(component, message)
+    ::erpl_web::ErplTracer::Instance().Warn(component, message)
 
 #define ERPL_TRACE_WARN_DATA(component, message, data) \
-    erpl_web::ErplTracer::Instance().Warn(component, message, data)
+    ::erpl_web::ErplTracer::Instance().Warn(component, message, data)
 
 #define ERPL_TRACE_INFO(component, message) \
-    erpl_web::ErplTracer::Instance().Info(component, message)
+    ::erpl_web::ErplTracer::Instance().Info(component, message)
 
 #define ERPL_TRACE_INFO_DATA(component, message, data) \
-    erpl_web::ErplTracer::Instance().Info(component, message, data)
+    ::erpl_web::ErplTracer::Instance().Info(component, message, data)
 
 #define ERPL_TRACE_DEBUG(component, message) \
-    erpl_web::ErplTracer::Instance().Debug(component, message)
+    ::erpl_web::ErplTracer::Instance().Debug(component, message)
 
 #define ERPL_TRACE_DEBUG_DATA(component, message, data) \
-    erpl_web::ErplTracer::Instance().Debug(component, message, data)
+    ::erpl_web::ErplTracer::Instance().Debug(component, message, data)
 
 #define ERPL_TRACE_TRACE(component, message) \
-    erpl_web::ErplTracer::Instance().Trace(component, message)
+    ::erpl_web::ErplTracer::Instance().Trace(component, message)
 
 #define ERPL_TRACE_TRACE_DATA(component, message, data) \
-    erpl_web::ErplTracer::Instance().Trace(component, message, data)
+    ::erpl_web::ErplTracer::Instance().Trace(component, message, data)
 
 } // namespace erpl_web
