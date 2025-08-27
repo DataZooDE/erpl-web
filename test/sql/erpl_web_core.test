@@ -25,7 +25,7 @@ SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web';
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%' OR function_name LIKE '%odata%' OR function_name LIKE '%http%';
 ----
-23
+21
 
 # ============================================================================
 # SECTION 2: Core Extension Settings
@@ -63,7 +63,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%odata%';
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%';
 ----
-11
+9
 
 # ============================================================================
 # SECTION 4: Final Verification
