@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 
+# Prevent Windows min/max macro conflicts for all Windows builds
+if(WIN32)
+    add_compile_options(-DNOMINMAX)
+endif()
+
+if(MSVC)
+    add_compile_options(/wd4996)
+    # Prevent Windows min/max macro conflicts
+    add_compile_options(/DNOMINMAX)
+endif()
+
 option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." ON)
 
 # Set extension name here
@@ -18,9 +29,7 @@ if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-deprecated-declarations)
 endif()
 
-if(MSVC)
-    add_compile_options(/wd4996)
-endif()
+
 
 # Try to find mold binary
 include(CheckCXXCompilerFlag)
