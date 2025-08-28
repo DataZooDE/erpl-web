@@ -13,6 +13,14 @@
 #include <vector>
 #include <iostream>
 
+// Cross-platform string comparison
+#ifdef _WIN32
+#include <string.h>
+#define strcasecmp _stricmp
+#else
+#include <strings.h>
+#endif
+
 #include "duckdb.hpp"
 #include "tinyxml2.h"
 
