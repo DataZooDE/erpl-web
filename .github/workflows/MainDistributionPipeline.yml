@@ -1,6 +1,7 @@
 #
 # This workflow calls the main distribution pipeline from DuckDB to build, test and (optionally) release the extension
 #
+
 name: Main Extension Distribution Pipeline
 on:
   push:
@@ -26,7 +27,7 @@ jobs:
       extension_name: erpl_web
       ci_tools_version: main
       vcpkg_commit: ce613c41372b23b1f51333815feb3edd87ef8a8b
-      exclude_archs: 'windows_amd64_rtools;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
@@ -36,7 +37,7 @@ jobs:
     with:
       duckdb_version: v1.3.2
       extension_name: erpl_web
-      exclude_archs: 'windows_amd64_rtools;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
       deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
 
