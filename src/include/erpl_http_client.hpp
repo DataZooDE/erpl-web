@@ -1,5 +1,12 @@
 #pragma once
 
+// Windows headers define min/max macros that conflict with C++ std:: functions
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <chrono>
 #include <filesystem>
 #include <optional>

@@ -24,6 +24,13 @@
 
 #endif
 
+// Windows headers define min/max macros that conflict with C++ std:: functions
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.hpp"
 
