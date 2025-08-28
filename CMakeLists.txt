@@ -95,34 +95,30 @@ set(EXTENSION_SOURCES
     src/erpl_timeout_http_client.cpp
 )
 
+# Build only the static extension to avoid linking conflicts
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
-build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+# build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
 
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
-target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 if (WIN32)
       target_link_libraries(${EXTENSION_NAME} iphlpapi)
-      target_link_libraries(${LOADABLE_EXTENSION_NAME} iphlpapi)
 endif()
 
 if(MINGW)
    find_package(ZLIB)
    target_link_libraries(${EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
-   target_link_libraries(${LOADABLE_EXTENSION_NAME} ZLIB::ZLIB -lcrypt32)
 endif()
 
 if(APPLE)
    find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
    find_library(APPLICATIONSERVICES_FRAMEWORK ApplicationServices)
    target_link_libraries(${EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
-   target_link_libraries(${LOADABLE_EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
 endif()
 
 if(${BUILD_UNITTESTS})
