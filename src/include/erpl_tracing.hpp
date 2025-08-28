@@ -5,6 +5,26 @@
 #include <fstream>
 #include <mutex>
 
+// Windows headers (via httplib → winsock2/windows.h) define macros like ERROR/TRACE that
+// collide with our enum member names. Clean them up if present.
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef TRACE
+#undef TRACE
+#endif
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#endif
+
 namespace erpl_web {
 
 enum class TraceLevel {
