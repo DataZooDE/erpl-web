@@ -35,7 +35,6 @@ target_link_libraries(erpl_web_tests
                     
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
-target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
