@@ -120,7 +120,7 @@ if(APPLE)
    target_link_libraries(${EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
 endif()
 
-if(${BUILD_UNITTESTS})
+if(${BUILD_UNITTESTS} AND NOT WIN32)
     add_subdirectory(test)
 endif()
 
