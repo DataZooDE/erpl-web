@@ -27,7 +27,7 @@ set(TEST_SOURCES
 add_executable(erpl_web_tests ${TEST_SOURCES})
 target_link_libraries(erpl_web_tests 
                       ${EXTENSION_NAME} 
-                      duckdb 
+                      duckdb_static 
                       test_helpers
                       OpenSSL::SSL OpenSSL::Crypto 
                       tinyxml2::tinyxml2)
