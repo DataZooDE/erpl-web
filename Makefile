@@ -8,3 +8,7 @@ VCPKG_TOOLCHAIN_PATH?=$(PROJ_DIR)vcpkg/scripts/buildsystems/vcpkg.cmake
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
+
+release_win: ${EXTENSION_CONFIG_STEP}
+	cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_RELEASE_FLAGS) $(VCPKG_MANIFEST_FLAGS) -DCMAKE_BUILD_TYPE=Release -S $(DUCKDB_SRCDIR) -B build/release
+	cmake --build build/release --config Release --parallel
