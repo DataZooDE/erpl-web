@@ -20,6 +20,8 @@ endif()
 
 if(MSVC)
     add_compile_options(/wd4996)
+    # Disable min/max macros to prevent conflicts with std::min/std::max
+    add_compile_definitions(NOMINMAX)
 endif()
 
 # Try to find mold binary
