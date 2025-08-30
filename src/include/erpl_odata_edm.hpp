@@ -2139,6 +2139,10 @@ class DuckTypeConverter
                 AddPropertiesFromBaseType(fields, base_type);  
             }
             AddPropertiesAsFields(fields, type.properties);
+            
+            // TODO: Add navigation properties as fields once we resolve the circular reference issue
+            // For now, navigation properties are excluded to prevent crashes
+            // AddNavigationPropertiesAsFields(fields, type.navigation_properties);
 
             return duckdb::LogicalType::STRUCT(fields);
         }
@@ -2152,6 +2156,10 @@ class DuckTypeConverter
                 AddPropertiesFromBaseType(fields, base_type);  
             }
             AddPropertiesAsFields(fields, type.properties);
+            
+            // TODO: Add navigation properties as fields once we resolve the circular reference issue
+            // For now, navigation properties are excluded to prevent crashes
+            // AddNavigationPropertiesAsFields(fields, type.navigation_properties);
 
             return duckdb::LogicalType::STRUCT(fields);
         }

@@ -353,9 +353,11 @@ public:
     // Explicitly set the current entity set name directly
     void SetEntitySetName(const std::string &entity_name) { current_entity_name_from_fragment = entity_name; }
 
+    // Public access to entity type information for navigation property filtering
+    EntityType GetCurrentEntityType();
+
 private:
     EntitySet GetCurrentEntitySetType();
-    EntityType GetCurrentEntityType();
     
     // For Datasphere input parameters: storage for input parameters
     std::map<std::string, std::string> input_parameters;
