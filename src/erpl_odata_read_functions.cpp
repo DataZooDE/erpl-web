@@ -6,12 +6,14 @@
 #include "yyjson.hpp"
 
 #include "erpl_tracing.hpp"
+#include <set>
 
 namespace erpl_web {
 
 // Helper function to extract column names from a JSON object
 static void ExtractColumnNames(duckdb_yyjson::yyjson_val *first_row, 
-                              std::vector<std::string>& extracted_column_names) {
+                              std::vector<std::string>& extracted_column_names,
+                              const std::vector<std::string>& navigation_property_names = {}) {
     // Extract column names from first row
     duckdb_yyjson::yyjson_obj_iter it;
     duckdb_yyjson::yyjson_obj_iter_init(first_row, &it);
@@ -20,11 +22,20 @@ static void ExtractColumnNames(duckdb_yyjson::yyjson_val *first_row,
     // Use a map to store key-value pairs to maintain order
     std::map<std::string, std::string> column_map;
     
+    // Convert navigation property names to a set for faster lookup
+    std::set<std::string> nav_prop_set(navigation_property_names.begin(), navigation_property_names.end());
+    
     while ((k = duckdb_yyjson::yyjson_obj_iter_next(&it))) {
         auto key = duckdb_yyjson::yyjson_get_str(k);
         
         // Skip metadata fields that start with "__"
         if (key[0] == '_' && key[1] == '_') {
+            continue;
+        }
+        
+        // Skip navigation properties
+        if (nav_prop_set.find(key) != nav_prop_set.end()) {
+            ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Excluding navigation property: " + std::string(key));
             continue;
         }
         
@@ -36,7 +47,7 @@ static void ExtractColumnNames(duckdb_yyjson::yyjson_val *first_row,
         extracted_column_names.emplace_back(pair.first);
     }
     
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Extracted " + std::to_string(extracted_column_names.size()) + " column names from first data row");
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Extracted " + std::to_string(extracted_column_names.size()) + " column names from first data row (excluding " + std::to_string(navigation_property_names.size()) + " navigation properties)");
     
     // Log the extracted column names for debugging
     for (size_t i = 0; i < extracted_column_names.size(); ++i) {
@@ -122,7 +133,19 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
                             duckdb_yyjson::yyjson_val *first_row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
                             if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
                                 ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found first row object in OData v4 response");
-                                ExtractColumnNames(first_row, extracted_column_names);
+                                
+                                // Get navigation property names to exclude them
+                                std::vector<std::string> nav_prop_names;
+                                try {
+                                    auto entity_type = odata_client->GetCurrentEntityType();
+                                    for (const auto& nav_prop : entity_type.navigation_properties) {
+                                        nav_prop_names.push_back(nav_prop.name);
+                                    }
+                                } catch (const std::exception& e) {
+                                    ERPL_TRACE_WARN("ODATA_READ_BIND", "Failed to get navigation properties: " + std::string(e.what()));
+                                }
+                                
+                                ExtractColumnNames(first_row, extracted_column_names, nav_prop_names);
                                 // Guard: service document typically returns only name/url entries
                                 if (extracted_column_names.size() == 2 &&
                                     ((extracted_column_names[0] == "name" && extracted_column_names[1] == "url") ||
@@ -185,7 +208,19 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
                                 duckdb_yyjson::yyjson_val *first_row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
                                 if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
                                     ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Found first row object in OData v2 response");
-                                    ExtractColumnNames(first_row, extracted_column_names);
+                                    
+                                    // Get navigation property names to exclude them
+                                    std::vector<std::string> nav_prop_names;
+                                    try {
+                                        auto entity_type = odata_client->GetCurrentEntityType();
+                                        for (const auto& nav_prop : entity_type.navigation_properties) {
+                                            nav_prop_names.push_back(nav_prop.name);
+                                        }
+                                    } catch (const std::exception& e) {
+                                        ERPL_TRACE_WARN("ODATA_READ_BIND", "Failed to get navigation properties: " + std::string(e.what()));
+                                    }
+                                    
+                                    ExtractColumnNames(first_row, extracted_column_names, nav_prop_names);
                                 } else {
                                     ERPL_TRACE_WARN("ODATA_READ_BIND", "First row is not an object in OData v2 response");
                                 }

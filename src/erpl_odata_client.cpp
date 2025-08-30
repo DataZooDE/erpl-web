@@ -496,12 +496,12 @@ EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
         auto sets = edmx_probe.FindEntitySets();
         if (sets.size() == 1) {
             entity_set_name = sets[0].name;
-            ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved single entity set from metadata: " + entity_set_name);
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Resolved single entity set from metadata: " + entity_set_name);
         } else {
             // Prefer the entity set name extracted earlier from @odata.context fragment if available
             if (!current_entity_name_from_fragment.empty()) {
                 entity_set_name = current_entity_name_from_fragment;
-                ERPL_TRACE_INFO("ODATA_CLIENT", "Using entity set from @odata.context fragment: " + entity_set_name);
+                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using entity set from @odata.context fragment: " + entity_set_name);
             } else {
                 // For non-Datasphere services, derive entity set name from URL path when multiple sets exist
                 const auto url_str = url.ToString();
@@ -516,7 +516,7 @@ EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
                     // Extract last segment
                     auto last_slash = path.find_last_of('/');
                     std::string candidate = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
-                    ERPL_TRACE_INFO("ODATA_CLIENT", "Derived entity set candidate from URL: " + candidate);
+                    ERPL_TRACE_DEBUG("ODATA_CLIENT", "Derived entity set candidate from URL: " + candidate);
                     // Validate against metadata entity sets
                     bool found = false;
                     for (const auto &es : sets) {
@@ -524,7 +524,7 @@ EntitySet ODataEntitySetClient::GetCurrentEntitySetType()
                     }
                     if (found) {
                         entity_set_name = candidate;
-                        ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved entity set from URL path: " + entity_set_name);
+                        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Resolved entity set from URL path: " + entity_set_name);
                     } else {
                         throw std::runtime_error("Unable to resolve entity set from @odata.context or URL; metadata has multiple sets");
                     }
