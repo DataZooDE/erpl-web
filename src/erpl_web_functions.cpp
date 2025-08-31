@@ -53,7 +53,7 @@ unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
 
 static void PopulateHeadersFromHeadersParam(duckdb::named_parameter_map_t &named_params, 
                                             duckdb::vector<duckdb::Value> &header_keys, 
-                                     duckdb::vector<duckdb::Value> &header_vals)
+                                            duckdb::vector<duckdb::Value> &header_vals)
 {
     if (! HasParam(named_params, "headers"))
     {
@@ -196,9 +196,54 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
 {
     auto args = input.inputs;
     auto url = args[0].ToString();
+    auto named_params = input.named_parameters;
+    
+    // Check if auth parameter is provided - this takes precedence over secrets
+    if (HasParam(named_params, "auth")) {
+        auto auth_value = named_params["auth"].GetValue<std::string>();
+        ERPL_TRACE_DEBUG("HTTP_AUTH", "Using auth parameter: " + auth_value);
+        
+        auto auth_params = std::make_shared<HttpAuthParams>();
+        
+        // Check if auth_type is specified, default to BASIC if not provided
+        std::string auth_type = "BASIC";
+        if (HasParam(named_params, "auth_type")) {
+            auth_type = named_params["auth_type"].GetValue<std::string>();
+            ERPL_TRACE_DEBUG("HTTP_AUTH", "Using auth_type parameter: " + auth_type);
+        } else {
+            ERPL_TRACE_DEBUG("HTTP_AUTH", "No auth_type specified, defaulting to BASIC");
+        }
+        
+        if (auth_type == "BASIC") {
+            // Parse the auth string (assume format: username:password)
+            size_t colon_pos = auth_value.find(':');
+            if (colon_pos != std::string::npos) {
+                std::string username = auth_value.substr(0, colon_pos);
+                std::string password = auth_value.substr(colon_pos + 1);
+                
+                auth_params->basic_credentials = std::make_tuple(username, password);
+                ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed basic auth from parameter - username: " + username + ", password: ***");
+            } else {
+                // If no colon found, treat the entire string as username with empty password
+                auth_params->basic_credentials = std::make_tuple(auth_value, "");
+                ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed basic auth from parameter - username: " + auth_value + ", password: (empty)");
+            }
+        } else if (auth_type == "BEARER") {
+            // For bearer auth, the entire auth_value is the token
+            auth_params->bearer_token = auth_value;
+            ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed bearer auth from parameter - token: ***");
+        } else {
+            ERPL_TRACE_ERROR("HTTP_AUTH", "Unsupported auth_type: " + auth_type + ", falling back to registered secrets");
+            return HttpAuthParams::FromDuckDbSecrets(context, url);
+        }
+        
+        return auth_params;
+    }
+    
+    // Fall back to registered secrets
+    ERPL_TRACE_DEBUG("HTTP_AUTH", "No auth parameter provided, using registered secrets");
     return HttpAuthParams::FromDuckDbSecrets(context, url);
 }
-
 
 
 static unique_ptr<FunctionData> HttpGetBind(ClientContext &context, 

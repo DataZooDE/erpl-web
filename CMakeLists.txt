@@ -66,6 +66,7 @@ set(EXTENSION_SOURCES
     src/erpl_odata_content.cpp
     src/erpl_odata_edm.cpp
     src/erpl_odata_predicate_pushdown_helper.cpp
+    src/erpl_odata_expand_parser.cpp
     src/erpl_odata_read_functions.cpp
     src/erpl_odata_storage.cpp
     src/erpl_odata_transaction_manager.cpp
@@ -80,7 +81,7 @@ set(EXTENSION_SOURCES
     src/erpl_oauth2_types.cpp
     src/erpl_datasphere_browser.cpp
     src/erpl_datasphere_local_server.cpp
-
+    src/erpl_odata_odp_functions.cpp
     src/erpl_datasphere_secret.cpp
     src/erpl_oauth2_callback_handler.cpp
     src/erpl_oauth2_flow_v2.cpp

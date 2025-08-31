@@ -37,6 +37,9 @@ public:
     
     // Method to consume result modifiers (for LIMIT/OFFSET)
     void ConsumeResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers);
+    
+    // Method to consume expand clause
+    void ConsumeExpand(const std::string& expand_clause);
 
     HttpUrl ApplyFiltersToUrl(const HttpUrl &base_url);
 
@@ -44,6 +47,7 @@ public:
     std::string FilterClause() const;
     std::string TopClause() const;
     std::string SkipClause() const;
+    std::string ExpandClause() const;
     
     // OData v2-specific query options
     void SetInlineCount(bool enabled) { inline_count_enabled = enabled; }
@@ -62,6 +66,9 @@ private:
     // New clauses for LIMIT and OFFSET
     std::string top_clause;
     std::string skip_clause;
+    
+    // Expand clause
+    std::string expand_clause;
     
     // OData v2-specific options
     bool inline_count_enabled = false;

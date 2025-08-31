@@ -68,6 +68,16 @@ void ODataPredicatePushdownHelper::ConsumeOffset(duckdb::idx_t offset) {
     }
 }
 
+void ODataPredicatePushdownHelper::ConsumeExpand(const std::string& expand_clause) {
+    if (!expand_clause.empty()) {
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Consuming expand clause: " + expand_clause);
+        this->expand_clause = "$expand=" + expand_clause;
+    } else {
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "No expand clause to consume");
+        this->expand_clause = "";
+    }
+}
+
 void ODataPredicatePushdownHelper::ConsumeResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers)
 {
     if (modifiers.empty()) {
@@ -95,6 +105,7 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Filter clause: '" + filter_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Top clause: '" + top_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Skip clause: '" + skip_clause + "'");
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Expand clause: '" + expand_clause + "'");
     
     // Parse existing query parameters to avoid duplicates
     std::map<std::string, std::string> existing_params;
@@ -142,6 +153,12 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     if (!skip_clause.empty()) {
         clauses.push_back(skip_clause);
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding skip clause: " + skip_clause);
+    }
+    
+    // Add expand clause
+    if (!expand_clause.empty()) {
+        clauses.push_back(expand_clause);
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding expand clause: " + expand_clause);
     }
     
 
@@ -622,6 +639,10 @@ std::string ODataPredicatePushdownHelper::TopClause() const {
 
 std::string ODataPredicatePushdownHelper::SkipClause() const {
     return skip_clause;
+}
+
+std::string ODataPredicatePushdownHelper::ExpandClause() const {
+    return expand_clause;
 }
 
 

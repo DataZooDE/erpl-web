@@ -59,6 +59,11 @@ public:
     // Get the underlying OData client for advanced operations
     std::shared_ptr<ODataEntitySetClient> GetODataClient() const;
     
+    // Expand clause support
+    void SetExpandClause(const std::string& expand_clause);
+    std::string GetExpandClause() const;
+    void ProcessExpandedData(const std::vector<std::string>& expand_paths);
+    
 private:
     bool first_fetch = true;
     std::shared_ptr<ODataEntitySetClient> odata_client;
@@ -74,6 +79,9 @@ private:
     
     // For Datasphere input parameters: storage for input parameters
     std::map<std::string, std::string> input_parameters;
+    
+    // Expand clause storage
+    std::string expand_clause;
     
     std::shared_ptr<ODataPredicatePushdownHelper> predicate_pushdown_helper;
 

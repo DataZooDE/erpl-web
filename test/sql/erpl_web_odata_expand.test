@@ -1,0 +1,38 @@
+-- Test OData expand functionality
+-- This test file verifies that the expand parameter works correctly
+
+-- Test basic expand functionality
+SELECT * FROM odata_read('http://test.service/Customers', expand='Category,Orders') LIMIT 1;
+
+-- Test expand with URL parameter
+SELECT * FROM odata_read('http://test.service/Customers?$expand=Category,Orders') LIMIT 1;
+
+-- Test expand with other parameters
+SELECT * FROM odata_read('http://test.service/Customers', expand='Category,Orders', top=10) LIMIT 1;
+
+-- Test complex expand syntax
+SELECT * FROM odata_read('http://test.service/Customers', expand='Products($filter=DiscontinuedDate eq null),Category($select=Name)') LIMIT 1;
+
+-- Test nested expand
+SELECT * FROM odata_read('http://test.service/Categories', expand='Products/Supplier') LIMIT 1;
+
+-- Test expand with filter and select
+SELECT * FROM odata_read('http://test.service/Products', expand='Category($select=Name),Supplier($select=CompanyName)') LIMIT 1;
+
+-- Test expand with top and skip
+SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($top=5;$skip=10)') LIMIT 1;
+
+-- Test empty expand parameter
+SELECT * FROM odata_read('http://test.service/Customers', expand='') LIMIT 1;
+
+-- Test expand with whitespace
+SELECT * FROM odata_read('http://test.service/Customers', expand=' Category , Orders ') LIMIT 1;
+
+-- Test expand with complex nested structure
+SELECT * FROM odata_read('http://test.service/Categories', expand='Products($filter=Price gt 100;$select=Name,Price;$top=10)/Supplier($select=CompanyName,Country)') LIMIT 1;
+
+-- Test expand with OData V2 syntax
+SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($filter=Total gt 1000)') LIMIT 1;
+
+-- Test expand with OData V4 syntax
+SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($filter=Total gt 1000;$select=OrderID,Total)') LIMIT 1;
