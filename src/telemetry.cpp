@@ -65,6 +65,14 @@ std::string PostHogEvent::GetNowISO8601() const
 
 void PostHogProcess(const std::string api_key, const PostHogEvent &event)
 {
+    // Check if telemetry is disabled via environment variable
+    const char* disable_telemetry = std::getenv("ERPL_DISABLE_TELEMETRY");
+    if (disable_telemetry && (std::string(disable_telemetry) == "1" || 
+                              std::string(disable_telemetry) == "true" ||
+                              std::string(disable_telemetry) == "yes")) {
+        return; // Skip telemetry to avoid OpenSSL memory leaks
+    }
+    
     auto re = duckdb_re2::Regex("*");
     std::string payload = StringUtil::Format(R"(
         {
@@ -79,17 +87,35 @@ void PostHogProcess(const std::string api_key, const PostHogEvent &event)
     )", api_key, event.event_name, event.distinct_id,
         event.GetPropertiesJson(), event.GetNowISO8601());
 
-    auto cli = duckdb_httplib_openssl::Client("https://eu.posthog.com");
-    auto url = "/batch/";
-    if (cli.is_valid() == false) {
-        throw new std::runtime_error("Invalid client");
+    try {
+        // NOTE: There are known OpenSSL memory leaks when creating SSL clients
+        // This is a limitation of the httplib library and OpenSSL integration
+        // The leaks are primarily in SSL context creation and are not easily fixable
+        // from application code. The client.stop() call helps but doesn't eliminate all leaks.
+        // To avoid these leaks in development, set ERPL_DISABLE_TELEMETRY=1
+        auto cli = duckdb_httplib_openssl::Client("https://eu.posthog.com");
+        if (cli.is_valid() == false) {
+            throw std::runtime_error("Invalid client");
+        }
+        
+        auto url = "/batch/";
+        auto res = cli.Post(url, payload, "application/json");
+        
+        if (res && res->status != 200) {
+            throw std::runtime_error(StringUtil::Format("Sending posthog event failed: %s", res->body));
+        }
+        
+        // Explicitly stop the client to clean up SSL context
+        cli.stop();
+        
+    } catch (const std::exception& e) {
+        // Log the error but don't throw to avoid crashing the extension
+        // In a production environment, you might want to log this to a file
+        std::cerr << "PostHog telemetry error: " << e.what() << std::endl;
+    } catch (...) {
+        // Catch any other exceptions
+        std::cerr << "PostHog telemetry unknown error" << std::endl;
     }
-    auto res = cli.Post(url, payload, "application/json");
-    if (res && res->status != 200) {
-        throw new std::runtime_error(StringUtil::Format("Sending posthog event failed: %s", res->body));
-    }
-
-    cli.stop();
 }
 
 // PostHogProcess ----------------------------------------------------------------
@@ -199,7 +225,7 @@ std::string PostHogTelemetry::GetMacAddress()
         return mac_address;
     }
 
-    throw new std::runtime_error(StringUtil::Format("Could not read mac address of device %s", device));
+    throw std::runtime_error(StringUtil::Format("Could not read mac address of device %s", device));
 }
 
 bool PostHogTelemetry::IsPhysicalDevice(const std::string& device) {
@@ -211,7 +237,7 @@ std::string PostHogTelemetry::FindFirstPhysicalDevice()
 {
     DIR* dir = opendir("/sys/class/net");
     if (!dir) {
-        throw new std::runtime_error("Could not open /sys/class/net");
+        throw std::runtime_error("Could not open /sys/class/net");
     }
 
     std::vector<std::string> devices;

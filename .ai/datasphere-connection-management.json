@@ -1,0 +1,651 @@
+{
+  "openapi": "3.0.3",
+  "x-sap-api-type": "REST",
+  "x-sap-shortText": "Allows you to manage connections in SAP Datasphere",
+  "info": {
+    "version": "1.0.1",
+    "title": "Connections",
+    "description": "Manage connections for a selected space. You can list all connections available in the space. You can also validate, delete, or read the details of a connection. Additionally, you can create or edit a connection for supported connection types."
+  },
+  "servers": [
+    {
+      "url": "https://{tenant_name}.{data_center}.hcs.cloud.sap",
+      "description": "SAP Datasphere Connection Management APIs",
+      "variables": {
+        "tenant_name": {
+          "description": "SAP Datasphere Customer Tenant Name",
+          "default": "your_tenant_name"
+        },
+        "data_center": {
+          "description": "SAP Datasphere Data Center",
+          "enum": [
+            "us10",
+            "eu10",
+            "eu11",
+            "ap10",
+            "jp10",
+            "us20",
+            "eu20"
+          ],
+          "default": "eu10"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Connections"
+    }
+  ],
+  "paths": {
+    "/api/v1/datasphere/spaces/{spaceId}/connections/{name}": {
+      "get": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Returns a connection definition",
+        "description": "Returns the definition of a connection in a space (without its credentials).",
+        "operationId": "RetrieveConnectionOfSpace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpacePath"
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The technical name of the connection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Updates a connection",
+        "description": "Updates a connection in a space.",
+        "operationId": "UpdateConnectionInSpace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpacePath"
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The technical name of the connection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Deletes a connection",
+        "description": "Deletes a connection from a space.",
+        "operationId": "DeleteConnectionInSpace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpacePath"
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The technical name of the connection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/datasphere/spaces/{spaceId}/connections/{name}/validation": {
+      "get": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Validates a connection",
+        "description": "Validates a connection in a space.",
+        "operationId": "ValidateConnectionInSpace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpacePath"
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The technical name of the connection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operations"
+          },
+          "400": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/api/v1/datasphere/spaces/{spaceId}/connections": {
+      "get": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Returns a list of connections available in a space",
+        "description": "Returns a list of connections available in a space.",
+        "operationId": "ListConnectionsInSpace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpacePath"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Requests that the service returns only the connections' technical names." ,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "details",
+            "in": "query",
+            "description": "Requests that the service returns the connections with all their details except for credentials." ,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "features",
+            "in": "query",
+            "description": "Requests that the service returns the connections with their technical names and their information about enabled and disabled features.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "$top",
+            "in": "query",
+            "description": "Specifies a value N that limits the number of items returned.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "$skip",
+            "in": "query",
+            "description": "Specifies a value N that excludes the first N items.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Creates a connection",
+        "description": "Creates a connection in a space.",
+        "operationId": "CreateConnectionInSpace",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "description": "The Space ID to create an SAP SuccessFactors connection",
+            "required": true,
+            "allowEmptyValue": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "typeId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SAPSF"
+              ]
+            },
+            "description": "The ID of the connection type"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "oauth2": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "description": "You need to configure your SAP Datasphere system's public APIs to be consumed via OAuth 2.0 clients. SAML bearer tokens are used to access OAuth 2.0 resources. The authorization and token URL are required when setting up new clients.",
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/authorize",
+            "tokenUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/token",
+            "scopes": {
+              "default": "Default scope"
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "SpacePath": {
+        "name": "spaceId",
+        "in": "path",
+        "description": "The Space ID",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "stack": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "RemoteConnectionRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the connection"
+          },
+          "businessName": {
+            "type": "string",
+            "description": "Business name associated with the connection"
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of the connection"
+          },
+          "authType": {
+            "type": "string",
+            "description": "Authentication type"
+          }
+        },
+        "required": [
+          "name",
+          "authType"
+        ],
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SAPSFConnection"
+              }
+            ]
+          }
+        ]
+      },
+      "SAPSFConnection": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          } 
+        },
+        "oneOf": [
+              {
+                "$ref": "#/components/schemas/BasicAuthentication"
+              },
+              {
+                "$ref": "#/components/schemas/OAuth2Authentication"
+              }
+            ],
+            "example": {
+              "name":"string",
+              "businessName":"string",
+              "description":"string",
+              "authType":"string",
+              "url": "string",
+              "version": "string",
+              "username": "string",
+              "password": "string"
+            },
+        "required": [
+          "url",
+          "version"
+        ]
+      },
+      "BasicAuthentication": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ]
+      },
+      "OAuth2Authentication": {
+        "type": "object",
+        "properties": {
+          "oauth2GrantType": {
+            "type": "string"
+          },
+          "oauth2TokenEndpoint": {
+            "type": "string"
+          },
+          "oauth2Scope": {
+            "type": "string"
+          },
+          "oauth2CompanyId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "samlAssertion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "oauth2GrantType",
+          "oauth2TokenEndpoint",
+          "oauth2CompanyId",
+          "clientId",
+          "samlAssertion"
+        ]
+      }
+    }
+  }
+}

@@ -666,6 +666,20 @@ std::shared_ptr<ODataEntitySetClient> ODataReadBindData::GetODataClient() const
     return odata_client;
 }
 
+void ODataReadBindData::SetExpandClause(const std::string& expand_clause) {
+    this->expand_clause = expand_clause;
+}
+
+std::string ODataReadBindData::GetExpandClause() const {
+    return expand_clause;
+}
+
+void ODataReadBindData::ProcessExpandedData(const std::vector<std::string>& expand_paths) {
+    // This method will be used to process expanded data and add it to the result set
+    // For now, we just store the expand paths for future use
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Processing expand paths: " + std::to_string(expand_paths.size()));
+}
+
 
 
 // -------------------------------------------------------------------------------------------------
@@ -703,6 +717,12 @@ duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context,
         auto offset_value = input.named_parameters["skip"].GetValue<duckdb::idx_t>();
         ERPL_TRACE_DEBUG("ODATA_BIND", duckdb::StringUtil::Format("Named parameter 'skip' set to: %d", offset_value));
         bind_data->PredicatePushdownHelper()->ConsumeOffset(offset_value);
+    }
+    
+    if (input.named_parameters.find("expand") != input.named_parameters.end()) {
+        auto expand_value = input.named_parameters["expand"].GetValue<std::string>();
+        ERPL_TRACE_DEBUG("ODATA_BIND", duckdb::StringUtil::Format("Named parameter 'expand' set to: %s", expand_value.c_str()));
+        bind_data->PredicatePushdownHelper()->ConsumeExpand(expand_value);
     }
 
     names = bind_data->GetResultNames();
@@ -775,9 +795,10 @@ TableFunctionSet CreateODataReadFunction()
     read_entity_set.projection_pushdown = true;
     read_entity_set.table_scan_progress = ODataReadTableProgress;
     
-    // Add named parameters for TOP and SKIP
+    // Add named parameters for TOP, SKIP, and EXPAND
     read_entity_set.named_parameters["top"] = LogicalType::UBIGINT;
     read_entity_set.named_parameters["skip"] = LogicalType::UBIGINT;
+    read_entity_set.named_parameters["expand"] = LogicalType::VARCHAR;
 
     function_set.AddFunction(read_entity_set);
     return function_set;

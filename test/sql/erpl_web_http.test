@@ -123,3 +123,61 @@ SELECT 'Testing HTTP retry configuration...' as status;
 # Reset to defaults
 statement ok
 SELECT 'HTTP configuration tests completed...' as status;
+
+# ============================================================================
+# SECTION 6: Authentication Precedence Testing
+# ============================================================================
+
+# Test 1: Create a test secret for authentication fallback
+statement ok
+CREATE SECRET test_auth_secret (
+    TYPE http_basic,
+    USERNAME 'secret_user',
+    PASSWORD 'secret_pass',
+    SCOPE 'https://httpbun.com/'
+);
+
+# Test 2: Function parameter auth takes precedence over secrets
+# This should use the auth parameter and ignore the secret
+query I
+SELECT status FROM http_get('https://httpbun.com/status/200', 
+                           auth := 'param_user:param_pass') LIMIT 1;
+----
+200
+
+# Test 3: Function parameter auth with explicit auth_type
+# This should use the auth parameter with bearer token
+query I
+SELECT status FROM http_get('https://httpbun.com/status/200', 
+                           auth := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token',
+                           auth_type := 'BEARER') LIMIT 1;
+----
+200
+
+# Test 4: Username only (password will be empty, defaults to BASIC)
+# This should use the auth parameter with empty password
+query I
+SELECT status FROM http_get('https://httpbun.com/status/200', 
+                           auth := 'username_only') LIMIT 1;
+----
+200
+
+# Test 5: Explicit BASIC authentication
+# This should use the auth parameter with explicit BASIC type
+query I
+SELECT status FROM http_get('https://httpbun.com/status/200', 
+                           auth := 'explicit_user:explicit_pass',
+                           auth_type := 'BASIC') LIMIT 1;
+----
+200
+
+# Test 6: No auth parameter - should fall back to registered secret
+# This should use the secret since no auth parameter is provided
+query I
+SELECT status FROM http_get('https://httpbun.com/status/200') LIMIT 1;
+----
+200
+
+# Test 8: Clean up test secret
+statement ok
+DROP SECRET test_auth_secret;

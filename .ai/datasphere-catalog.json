@@ -1,0 +1,946 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Catalog",
+    "description": "Browse your SAP Datasphere spaces to find consumable data assets.",
+    "version": "1.0.0"
+  },
+  "x-odata-version": "4.0",
+  "x-sap-api-type": "ODATAV4",
+  "x-sap-shortText": "Allows you to navigate and search spaces and assets from SAP Datasphere",
+  "x-servers": [
+    {
+      "url": "https://{tenant_name}.{data_center}.hcs.cloud.sap/api",
+      "description": "SAP Datasphere Consumption APIs",
+      "templates": {
+        "tenant_name": {
+          "description": "SAP Datasphere Customer Tenant Name",
+          "default": "your_tenant_name"
+        },
+        "data_center": {
+          "description": "SAP Datasphere",
+          "enum": [
+            "us10",
+            "eu10",
+            "eu11",
+            "eu11",
+            "ap10",
+            "jp10",
+            "us20",
+            "eu20"
+          ],
+          "default": "eu10"
+        }
+      }
+    }
+  ],
+  "externalDocs": {
+    "description": "For more information, see the business documentation.",
+    "url": "https://help.sap.com/docs/SAP_DATA_WAREHOUSE_CLOUD/c8a54ee704e94e15926551293243fd1d/7a453609c8694b029493e7d87e0de60a.html"
+  },
+  "servers": [
+    {
+      "url": "https://hostname/api"
+    }
+  ],
+  "security": [
+    {
+      "oauth2": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "SAP Datasphere Consumption - Catalog"
+    }
+  ],
+  "paths": {
+    "/v1/dwc/catalog/$metadata": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns the CSDL XML Representation of the catalog service",
+        "description": "Returns the CSDL XML Representation of the catalog service providing the metadata definition for all available entities, fields, and associations between entities.<br><br>For more details, see [OData Common Schema Definition Language (CSDL) XML Representation](https://docs.oasis-open.org/odata/odata-csdl-xml/v4.01/odata-csdl-xml-v4.01.html).",
+        "operationId": "getMetadata",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {}
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns a list of available OData entity types",
+        "description": "Returns a list of available OData entity types.",
+        "operationId": "getCatalogResources",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataServiceV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/assets": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns a list of all available consumable data assets",
+        "description": "Returns a list of all available consumable data assets in all the SAP Datasphere spaces you have access to.",
+        "operationId": "getAssets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataAssetsListV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/assets({assetCompoundId})": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns the catalog entry for one consumable data asset",
+        "description": "Returns the catalog entry for one consumable data asset.<br><br>The response contains links to access the asset's data and metadata.",
+        "operationId": "getAssetById",
+        "parameters": [
+          {
+            "name": "assetCompoundId",
+            "in": "path",
+            "description": "SAP Datasphere Space Id & Asset Id - (spaceName='{spaceId}',name='{assetId}')",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataAssetV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/spaces": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns a list of all SAP Datasphere spaces you have access to",
+        "description": "Returns a list of all SAP Datasphere spaces you have access to.",
+        "operationId": "getSpaces",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataSpacesListV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/spaces('{spaceId}')": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns the catalog entry for one SAP Datasphere space",
+        "description": "Returns the catalog entry for one SAP Datasphere space.",
+        "operationId": "getSpaceById",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "description": "The space ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataSpaceV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/spaces('{spaceId}')/assets": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns a list of all available consumable data assets in a space",
+        "description": "Returns a list of all available consumable data assets in a space.",
+        "operationId": "getAssetsBySpace",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "description": "The space ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataAssetsListV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dwc/catalog/spaces('{spaceId}')/assets('{assetId}')": {
+      "get": {
+        "tags": [
+          "SAP Datasphere Consumption - Catalog"
+        ],
+        "summary": "Returns the catalog entry for one consumable data asset",
+        "description": "Returns the catalog entry for one consumable data asset.",
+        "operationId": "getAssetIdFromSpace",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "description": "The space ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assetId",
+            "in": "path",
+            "description": "The asset technical name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ODataAssetV1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ODataService": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the entity type of OData service"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL path to be appended to the current path in order to access the entity resource route"
+          }
+        },
+        "description": "SAP Datasphere OData Service"
+      },
+      "ODataServiceV1": {
+        "type": "object",
+        "properties": {
+          "odataContext": {
+            "type": "string"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          },
+          "@odata.metadataEtag": {
+            "type": "string",
+            "description": " The odata.metadataEtag annotation MAY appear in a response in order to specify the entity tag (ETag) that can be used to determine the version of the metadata of the response."
+          },
+          "value": {
+            "type": "array",
+            "description": "List of available OData Services",
+            "items": {
+              "$ref": "#/components/schemas/ODataService"
+            }
+          }
+        },
+        "description": "Lists the OData entities types available"
+      },
+      "AssetEntityV1": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere asset"
+          },
+          "spaceName": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere space to which the asset belongs to"
+          },
+          "label": {
+            "type": "string",
+            "description": "User friendly label of the SAP Datasphere asset"
+          },
+          "assetRelationalMetadataUrl": {
+            "type": "string",
+            "description": "URL to the asset metadata information for relational (row-by-row) access pattern"
+          },
+          "assetRelationalDataUrl": {
+            "type": "string",
+            "description": "URL to the OData service which exposes the asset information for relational (row-by-row) access pattern"
+          },
+          "assetAnalyticalMetadataUrl": {
+            "type": "string",
+            "description": "URL to the asset metadata information for analytical (aggregated) access pattern. Null if analytical consumption is not available"
+          },
+          "assetAnalyticalDataUrl": {
+            "type": "string",
+            "description": "URL to the OData service which exposes the asset information for analytical (aggregated) access pattern. Null if analytical consumption is not available"
+          },
+          "supportsAnalyticalQueries": {
+            "type": "string",
+            "description": "Boolean value which indicates this asset supports access in analytical consumption mode"
+          }
+        },
+        "description": "SAP Datasphere asset details"
+      },
+      "ODataAssetsListV1": {
+        "type": "object",
+        "properties": {
+          "odataContext": {
+            "type": "string"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          },
+          "value": {
+            "type": "array",
+            "description": "List of assets user has access",
+            "items": {
+              "$ref": "#/components/schemas/AssetEntityV1"
+            }
+          }
+        },
+        "description": "Lists the SAP Datasphere assets user has access"
+      },
+      "ODataAssetV1": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere asset"
+          },
+          "spaceName": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere space to which the asset belongs to"
+          },
+          "label": {
+            "type": "string",
+            "description": "User friendly label of the SAP Datasphere asset"
+          },
+          "assetRelationalMetadataUrl": {
+            "type": "string",
+            "description": "URL to the asset metadata information for relational (row-by-row) access pattern"
+          },
+          "assetRelationalDataUrl": {
+            "type": "string",
+            "description": "URL to the OData service which exposes the asset information for relational (row-by-row) access pattern"
+          },
+          "assetAnalyticalMetadataUrl": {
+            "type": "string",
+            "description": "URL to the asset metadata information for analytical (aggregated) access pattern. Null if analytical consumption is not available"
+          },
+          "assetAnalyticalDataUrl": {
+            "type": "string",
+            "description": "URL to the OData service which exposes the asset information for analytical (aggregated) access pattern. Null if analytical consumption is not available"
+          },
+          "supportsAnalyticalQueries": {
+            "type": "string",
+            "description": "Boolean value which indicates this asset supports access in analytical consumption mode"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          }
+        },
+        "description": "SAP Datasphere asset details"
+      },
+      "ODataSpacesListV1": {
+        "type": "object",
+        "properties": {
+          "odataContext": {
+            "type": "string"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          },
+          "value": {
+            "type": "array",
+            "description": "List of spaces user has access",
+            "items": {
+              "$ref": "#/components/schemas/SpaceEntityV1"
+            }
+          }
+        },
+        "description": "Lists the SAP Datasphere spaces user has access"
+      },
+      "SpaceEntityV1": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere space"
+          },
+          "label": {
+            "type": "string",
+            "description": "User friendly label of the SAP Datasphere space"
+          }
+        },
+        "description": "SAP Datasphere space details"
+      },
+      "ODataSpaceV1": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Technical name of the SAP Datasphere space"
+          },
+          "label": {
+            "type": "string",
+            "description": "User friendly label of the SAP Datasphere space"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          }
+        },
+        "description": "SAP Datasphere spaces summary"
+      },
+      "ODataConsumptionV1": {
+        "type": "object",
+        "properties": {
+          "odataContext": {
+            "type": "string"
+          },
+          "@odata.context": {
+            "type": "string",
+            "description": "The odata.context annotation returns the context URL (see [OData-Protocol]) for the payload"
+          },
+          "value": {
+            "type": "array",
+            "description": "List entries returned by the consumed SAP Datasphere model",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        },
+        "description": "List entries returned by the consumed SAP Datasphere model"
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "stack": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "select": {
+        "name": "$select",
+        "in": "query",
+        "description": "Requests that the service returns only the specified properties (see [System Query Option $select](https://help.sap.com/docs/link-disclaimer?site=http%3A%2F%2Fdocs.oasis-open.org%2Fodata%2Fodata%2Fv4.0%2Ferrata03%2Fos%2Fcomplete%2Fpart1-protocol%2Fodata-v4.0-errata03-os-part1-protocol-complete.html%23_System_Query_Option_3) in the OData Version 4.0 Specification).<br><br>For example, to retrieve only the columns Partner_ID and Value, append the syntax ?$select=Partner_ID,Value.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "filter": {
+        "name": "$filter",
+        "in": "query",
+        "description": "Request the service to restrict returned results according to the provided criteria: <br> - eq - Equals <br> - ne - Not equal <br> - gt - Greater Than <br> - ge - Greater Than or Equal To <br> - lt - Less Than <br> - le - Less Than or Equal To <br> - and - And <br> - or - Or <br> - not - Not <br> - () - Grouping <br><br>For example, to retrieve only records where Partner_ID=100000005, append the syntax ?$filter=Partner_ID eq 100000005.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "orderby": {
+        "name": "$orderby",
+        "in": "query",
+        "description": "Specifies the order in which items are returned from the service (see [System Query Option $orderby](https://help.sap.com/docs/link-disclaimer?site=http%3A%2F%2Fdocs.oasis-open.org%2Fodata%2Fodata%2Fv4.0%2Ferrata03%2Fos%2Fcomplete%2Fpart1-protocol%2Fodata-v4.0-errata03-os-part1-protocol-complete.html%23_The_%24orderby_System) in the OData Version 4.0 Specification).<br><br>For example, to order records by descending order of Value, append the syntax ?$orderby=Value desc.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "top": {
+        "name": "$top",
+        "in": "query",
+        "description": "Specifies a value N that limits the number of items returned from a collection (see [System Query Option $top](https://help.sap.com/docs/link-disclaimer?site=http%3A%2F%2Fdocs.oasis-open.org%2Fodata%2Fodata%2Fv4.0%2Ferrata03%2Fos%2Fcomplete%2Fpart1-protocol%2Fodata-v4.0-errata03-os-part1-protocol-complete.html%23_The_%24top_System_1) in the OData Version 4.0 Specification).<br><br>For example, to retrieve only the top 5 records by descending order of Value, append the syntax ?$orderby=Value desc&$top=5.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "skip": {
+        "name": "$skip",
+        "in": "query",
+        "description": "Specifies a value N that excludes the first N items of the selected collection (see [System Query Option $skip](https://help.sap.com/docs/link-disclaimer?site=http%3A%2F%2Fdocs.oasis-open.org%2Fodata%2Fodata%2Fv4.0%2Ferrata03%2Fos%2Fcomplete%2Fpart1-protocol%2Fodata-v4.0-errata03-os-part1-protocol-complete.html%23_The_%24top_System_1) in the OData Version 4.0 Specification).<br><br>For example, to retrieve only records 6-10 by descending order of Value, append the syntax ?$orderby=Value desc&$skip=5&$top=5.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "description": "You need to configure your SAP Datasphere system's public APIs to be consumed via OAuth 2.0 clients. SAML bearer tokens are used to access OAuth 2.0 resources. The authorization and token URL are required when setting up new clients.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/authorize",
+            "tokenUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/token",
+            "scopes": {
+              "default": "Default scope"
+            }
+          }
+        }
+      }
+    }
+  }
+}

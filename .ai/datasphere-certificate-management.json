@@ -1,0 +1,318 @@
+{
+  "openapi": "3.0.3",
+  "x-sap-api-type": "REST",
+  "x-sap-shortText": "Allows you to manage certificates in SAP Datasphere",
+  "info": {
+    "version": "1.0.0",
+    "title": "Certificates",
+    "description": "List, upload, or delete TLS server certificates required for connections in SAP Datasphere."
+  },
+  "servers": [
+    {
+      "url": "https://{tenant_name}.{data_center}.hcs.cloud.sap",
+      "description": "SAP Datasphere Certificate Management APIs",
+      "variables": {
+        "tenant_name": {
+          "description": "SAP Datasphere Customer Tenant Name",
+          "default": "your_tenant_name"
+        },
+        "data_center": {
+          "description": "SAP Datasphere Data Center",
+          "enum": [
+            "us10",
+            "eu10",
+            "eu11",
+            "ap10",
+            "jp10",
+            "us20",
+            "eu20"
+          ],
+          "default": "eu10"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Certificates"
+    }
+  ],
+  "paths": {
+    "/api/v1/datasphere/configuration/security/certificates": {
+      "get": {
+        "tags": [
+          "Certificates"
+        ],
+        "summary": "Returns a list of all available certificates",
+        "description": "Returns a list of all TLS server certificates available in SAP Datasphere with their fingerprints.",
+        "operationId": "getListOfCertificates",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/certificateSchema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Certificates"
+        ],
+        "summary": "Uploads a certificate",
+        "description": "Uploads a TLS server certificate to SAP Datasphere.",
+        "operationId": "uploadPemCertificate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The certificate file to upload. Supported file extensions are .pem (privacy-enhanced mail), .crt, or .cer."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description":  "Intelligible information on the certificate, for example to point out to which connection type the certificate applies.",
+                    "example": "My TLS certificate for secure communication with Google BigQuery" 
+                  }
+                },
+                "required": [
+                  "file",
+                  "description"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation "
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/datasphere/configuration/security/certificates/{fingerprint}": {
+      "delete": {
+        "tags": [
+          "Certificates"
+        ],
+        "summary": "Deletes a certificate",
+        "description": "Deletes a TLS server certificate from SAP Datasphere by its fingerprint.",
+        "operationId": "deleteCertificate",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "description": "The fingerprint of the certificate to be deleted. You can retrieve the fingerprint from the list of certificates.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated user is not permitted to perform the requested operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A server error has occurred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": { 
+    "securitySchemes": {
+      "oauth2": {
+        "description": "You need to configure your SAP Datasphere system's public APIs to be consumed via OAuth 2.0 clients. SAML bearer tokens are used to access OAuth 2.0 resources. The authorization and token URL are required when setting up new clients.",
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/authorize",
+            "tokenUrl": "https://{tenant_name}.{data_center}.hcs.cloud.sap/oauth/token",
+            "scopes": {
+              "default": "Default scope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "certificateSchema": {
+      "type": "object",
+      "properties": {
+        "pseName": {
+          "type": "string"
+        },
+        "certificateName": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "fingerPrint": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    }
+  }
+  },
+  "security": [
+    {
+      "oauth2": []
+    }
+  ]
+}

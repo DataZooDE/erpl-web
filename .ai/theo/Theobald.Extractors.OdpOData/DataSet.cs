@@ -1,0 +1,24 @@
+﻿// Decompiled with JetBrains decompiler
+// Type: Theobald.Extractors.OdpOData.DataSet
+// Assembly: Theobald.Extractors.OdpOData, Version=2025.7.11.11, Culture=neutral, PublicKeyToken=0d3889221f26497f
+// MVID: 67F12262-922B-4974-998F-CC8914B0DD3F
+// Assembly location: C:\Program Files\XtractUniversal\Theobald.Extractors.OdpOData.dll
+
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Threading.Tasks;
+
+#nullable enable
+namespace Theobald.Extractors.OdpOData;
+
+public sealed class DataSet
+{
+  public required HttpContent Content { get; init; }
+
+  public required IReadOnlyList<KeyValuePair<string, Field>> Fields { get; init; }
+
+  public async Task<JsonResultV2> ReadAsync()
+  {
+    return new JsonReaderV2(this.Fields).Read(await this.Content.ReadAsStreamAsync());
+  }
+}

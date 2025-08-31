@@ -246,6 +246,7 @@ std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::Client
 
     auto basic_match = secret_manager.LookupSecret(transaction, url, "http_basic");
 	if (basic_match.HasMatch()) {
+        ERPL_TRACE_DEBUG("HTTP_AUTH", "Found http_basic secret for URL: " + url);
         const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(basic_match.GetSecret());
 		auto username = kv_secret.TryGetValue("username", true); // error_on_missing = true
 		auto password = kv_secret.TryGetValue("password", true); // error_on_missing = true
@@ -256,11 +257,16 @@ std::shared_ptr<HttpAuthParams> HttpAuthParams::FromDuckDbSecrets(duckdb::Client
 
     auto bearer_match = secret_manager.LookupSecret(transaction, url, "http_bearer");
 	if (bearer_match.HasMatch()) {
+        ERPL_TRACE_DEBUG("HTTP_AUTH", "Found http_bearer secret for URL: " + url);
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(bearer_match.GetSecret());
 		auto token = kv_secret.TryGetValue("token", true); // error_on_missing = true
 		ret->bearer_token = token.ToString();
 	}
 
+    if (ret->AuthType() == HttpAuthType::NONE) {
+        ERPL_TRACE_DEBUG("HTTP_AUTH", "No authentication secrets found for URL: " + url);
+    }
+    
 	return ret;
 }
 

@@ -15,7 +15,7 @@
 #include "erpl_datasphere_catalog.hpp"
 #include "erpl_datasphere_read.hpp"
 #include "erpl_datasphere_secret.hpp"
-
+#include "erpl_odata_odp_functions.hpp"
 #include "telemetry.hpp"
 #include "erpl_tracing.hpp"
 
@@ -230,6 +230,13 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
     erpl_web::CreateDatasphereSecretFunctions::Register(instance);
 }
 
+static void RegisterOdpFunctions(DatabaseInstance &instance)
+{
+    // Register ODP discovery functions
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateSapODataShowFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
+}
+
 static void RegisterTracingPragmas(DatabaseInstance &instance)
 {
     // Register tracing pragma functions
@@ -254,6 +261,7 @@ void ErplWebExtension::Load(DuckDB &db)
     RegisterWebFunctions(*db.instance);
     RegisterODataFunctions(*db.instance);
     RegisterDatasphereFunctions(*db.instance);
+    RegisterOdpFunctions(*db.instance);
     RegisterTracingPragmas(*db.instance);
 }
 std::string ErplWebExtension::Name() 

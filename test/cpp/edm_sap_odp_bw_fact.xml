@@ -1,0 +1,110 @@
+[jr@bigfox ~]$ http -a 'DEVELOPER:ABAPtr2023#00' 'http://localhost:50000/sap/opu/odata/sap/Z_ODP_BW_1_SRV/$metadata'
+HTTP/1.1 200 OK
+cache-control: max-age=0
+content-encoding: gzip
+content-length: 1695
+content-type: application/xml
+dataserviceversion: 2.0
+last-modified: Sun, 31 Aug 2025 06:05:40 GMT
+sap-perf-fesrec: 73959.000000
+sap-processing-info: ODataBEP=,crp=,RAL=,st=,MedCacheHub=Table,codeployed=X,softstate=
+sap-server: true
+set-cookie: sap-usercontext=sap-client=001; path=/
+set-cookie: MYSAPSSO2=AjQxMDMBABhEAEUAVgBFAEwATwBQAEUAUgAgACAAIAACAAYwADAAMQADABBBADQASAAgACAAIAAgACAABAAYMgAwADIANQAwADgAMwAxADAANgAzADMABQAEAAAACAYAAlgACQACRQD%2fAPswgfgGCSqGSIb3DQEHAqCB6jCB5wIBATELMAkGBSsOAwIaBQAwCwYJKoZIhvcNAQcBMYHHMIHEAgEBMBowDjEMMAoGA1UEAxMDQTRIAggKIBcCAhUJATAJBgUrDgMCGgUAoF0wGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjUwODMxMDYzMzI5WjAjBgkqhkiG9w0BCQQxFgQUqRkZLpehSuZ%21q5wsdubMXSPK%21QQwCQYHKoZIzjgEAwQuMCwCFHqcvCK0kNbqagCuwbbI%2frpRDP0bAhQgWHe%21poiQYLso3rGkAKBNkCwOTg%3d%3d; path=/; domain=localhost
+set-cookie: SAP_SESSIONID_A4H_001=uhiX_u6HoCQdBqptazGGQWhacS-GNBHwuKICQqwRAAI%3d; path=/
+
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" xmlns:sap="http://www.sap.com/Protocols/SAPData" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="2.0">
+    <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" Namespace="Z_ODP_BW_1_SRV" xml:lang="en" sap:schema-version="1">
+      <EntityType Name="FactsOf0D_NW_C01" sap:content-version="1">
+        <Key>
+          <PropertyRef Name="CALMONTH"/>
+          <PropertyRef Name="CALYEAR"/>
+          <PropertyRef Name="D_NW_CHANN"/>
+          <PropertyRef Name="D_NW_SORG"/>
+          <PropertyRef Name="D_NW_SHIP"/>
+          <PropertyRef Name="D_NW_SOLD"/>
+          <PropertyRef Name="D_NW_PAYER"/>
+          <PropertyRef Name="D_NW_CNTRY"/>
+          <PropertyRef Name="D_NW_REGIO"/>
+          <PropertyRef Name="D_NW_CODE"/>
+          <PropertyRef Name="D_NW_DIV"/>
+          <PropertyRef Name="D_NW_VERS"/>
+          <PropertyRef Name="D_NW_VTYPE"/>
+          <PropertyRef Name="D_NW_PROD"/>
+          <PropertyRef Name="D_NW_COSTV"/>
+          <PropertyRef Name="D_NW_NETV"/>
+          <PropertyRef Name="D_NW_OORV"/>
+          <PropertyRef Name="D_NW_OORQT"/>
+          <PropertyRef Name="D_NW_QUANT"/>
+          <PropertyRef Name="D_NW_DOCUM"/>
+          <PropertyRef Name="D_NW_PLANT"/>
+          <PropertyRef Name="D_NW_SGRP"/>
+          <PropertyRef Name="CURRENCY"/>
+          <PropertyRef Name="UNIT"/>
+          <PropertyRef Name="ODQ_CHANGEMODE"/>
+          <PropertyRef Name="ODQ_ENTITYCNTR"/>
+        </Key>
+        <Property Name="CALMONTH" Type="Edm.String" Nullable="false" MaxLength="6" sap:aggregation-role="dimension" sap:semantics="yearmonth" sap:label="Calendar Year/Month" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="CALYEAR" Type="Edm.String" Nullable="false" MaxLength="4" sap:aggregation-role="dimension" sap:semantics="year" sap:label="Calendar Year" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_CHANN" Type="Edm.String" Nullable="false" MaxLength="2" sap:aggregation-role="dimension" sap:label="Distribution Channel" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_SORG" Type="Edm.String" Nullable="false" MaxLength="4" sap:aggregation-role="dimension" sap:label="Sales Organization" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_SHIP" Type="Edm.String" Nullable="false" MaxLength="10" sap:aggregation-role="dimension" sap:label="Ship-to Party" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_SOLD" Type="Edm.String" Nullable="false" MaxLength="10" sap:aggregation-role="dimension" sap:label="Sold-to Party" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_PAYER" Type="Edm.String" Nullable="false" MaxLength="10" sap:aggregation-role="dimension" sap:label="Payer" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_CNTRY" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Country" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_REGIO" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Region" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_CODE" Type="Edm.String" Nullable="false" MaxLength="4" sap:aggregation-role="dimension" sap:label="Company code" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_DIV" Type="Edm.String" Nullable="false" MaxLength="2" sap:aggregation-role="dimension" sap:label="Division" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_VERS" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Version" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_VTYPE" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Value Type for Rep" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_PROD" Type="Edm.String" Nullable="false" MaxLength="60" sap:aggregation-role="dimension" sap:label="Product" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_COSTV" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="2" sap:aggregation-role="measure" sap:unit="CURRENCY" sap:label="Cost in statistics c" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_NETV" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="2" sap:aggregation-role="measure" sap:unit="CURRENCY" sap:label="Net Value stat curr" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_OORV" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="2" sap:aggregation-role="measure" sap:unit="CURRENCY" sap:label="Open order stat curr" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_OORQT" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="3" sap:aggregation-role="measure" sap:unit="UNIT" sap:label="Open order quantity" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_QUANT" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="3" sap:aggregation-role="measure" sap:unit="UNIT" sap:label="Qu. in base units" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_DOCUM" Type="Edm.Decimal" Nullable="false" Precision="33" Scale="3" sap:aggregation-role="measure" sap:label="Number of documents" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="D_NW_PLANT" Type="Edm.String" Nullable="false" MaxLength="4" sap:aggregation-role="dimension" sap:label="Plant" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="D_NW_SGRP" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Sales Group" sap:creatable="false" sap:updatable="false"/>
+        <Property Name="CURRENCY" Type="Edm.String" Nullable="false" MaxLength="5" sap:aggregation-role="dimension" sap:label="Currency" sap:creatable="false" sap:updatable="false" sap:semantics="currency-code"/>
+        <Property Name="UNIT" Type="Edm.String" Nullable="false" MaxLength="3" sap:aggregation-role="dimension" sap:label="Unit of Measure" sap:creatable="false" sap:updatable="false" sap:semantics="unit-of-measure"/>
+        <Property Name="ODQ_CHANGEMODE" Type="Edm.String" Nullable="false" MaxLength="1" sap:semantics="change-mode" sap:label="String" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+        <Property Name="ODQ_ENTITYCNTR" Type="Edm.Decimal" Nullable="false" Precision="37" Scale="0" sap:semantics="entity-counter" sap:creatable="false" sap:updatable="false" sap:filterable="false"/>
+      </EntityType>
+      <EntityType Name="DeltaLinksOfFactsOf0D_NW_C01" sap:content-version="1">
+        <Key>
+          <PropertyRef Name="DeltaToken"/>
+        </Key>
+        <Property Name="DeltaToken" Type="Edm.String" Nullable="false" sap:label="Delta Token" sap:filterable="false"/>
+        <Property Name="CreatedAt" Type="Edm.DateTime" Nullable="false" Precision="0" sap:label="Created At"/>
+        <Property Name="IsInitialLoad" Type="Edm.Boolean" Nullable="false" sap:label="Is Initial Load" sap:filterable="false"/>
+        <NavigationProperty Name="ChangesAfter" Relationship="Z_ODP_BW_1_SRV.factsOf0D_NW_C01" FromRole="FromRole_factsOf0D_NW_C01" ToRole="ToRole_factsOf0D_NW_C01"/>
+      </EntityType>
+      <ComplexType Name="ChangeTrackingDetails">
+        <Property Name="SubscribedFlag" Type="Edm.Boolean" Nullable="false" sap:label="Is Subscribed"/>
+      </ComplexType>
+      <ComplexType Name="SubscriptionTerminationDetails">
+        <Property Name="ResultFlag" Type="Edm.Boolean" Nullable="false" sap:label="Successful Termination of Subscription"/>
+      </ComplexType>
+      <Association Name="factsOf0D_NW_C01" sap:content-version="1">
+        <End Type="Z_ODP_BW_1_SRV.DeltaLinksOfFactsOf0D_NW_C01" Multiplicity="1" Role="FromRole_factsOf0D_NW_C01"/>
+        <End Type="Z_ODP_BW_1_SRV.FactsOf0D_NW_C01" Multiplicity="*" Role="ToRole_factsOf0D_NW_C01"/>
+      </Association>
+      <EntityContainer Name="Z_ODP_BW_1_SRV_Entities" m:IsDefaultEntityContainer="true" sap:supported-formats="atom json xlsx">
+        <EntitySet Name="FactsOf0D_NW_C01" EntityType="Z_ODP_BW_1_SRV.FactsOf0D_NW_C01" sap:creatable="false" sap:updatable="false" sap:deletable="false" sap:content-version="1" sap:change-tracking="true" sap:maxpagesize="2000000000"/>
+        <EntitySet Name="DeltaLinksOfFactsOf0D_NW_C01" EntityType="Z_ODP_BW_1_SRV.DeltaLinksOfFactsOf0D_NW_C01" sap:content-version="1"/>
+        <AssociationSet Name="factsOf0D_NW_C01_AssocSet" Association="Z_ODP_BW_1_SRV.factsOf0D_NW_C01" sap:creatable="false" sap:updatable="false" sap:deletable="false" sap:content-version="1">
+          <End EntitySet="DeltaLinksOfFactsOf0D_NW_C01" Role="FromRole_factsOf0D_NW_C01"/>
+          <End EntitySet="FactsOf0D_NW_C01" Role="ToRole_factsOf0D_NW_C01"/>
+        </AssociationSet>
+        <FunctionImport Name="SubscribedToFactsOf0D_NW_C01" ReturnType="Z_ODP_BW_1_SRV.ChangeTrackingDetails" m:HttpMethod="GET"/>
+        <FunctionImport Name="TerminateDeltasForFactsOf0D_NW_C01" ReturnType="Z_ODP_BW_1_SRV.SubscriptionTerminationDetails" m:HttpMethod="GET"/>
+      </EntityContainer>
+      <Annotation xmlns="http://docs.oasis-open.org/odata/ns/edm" Term="Core.SchemaVersion" String="1.0.0"/>
+      <atom:link xmlns:atom="http://www.w3.org/2005/Atom" rel="self" href="http://localhost:50000/sap/opu/odata/sap/Z_ODP_BW_1_SRV/$metadata"/>
+      <atom:link xmlns:atom="http://www.w3.org/2005/Atom" rel="latest-version" href="http://localhost:50000/sap/opu/odata/sap/Z_ODP_BW_1_SRV/$metadata"/>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

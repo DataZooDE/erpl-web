@@ -1,0 +1,141 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--Project was exported from assembly: C:\Program Files\XtractUniversal\Theobald.Extractors.OdpOData.dll-->
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{CD4A2C8D-9D55-4423-97E3-9886EBAFF6E2}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Theobald.Extractors.OdpOData</AssemblyName>
+    <TargetFrameworkVersion>v8.0</TargetFrameworkVersion>
+    <ApplicationVersion>2025.7.11.11</ApplicationVersion>
+    <FileAlignment>512</FileAlignment>
+    <RootNamespace>Theobald.Extractors.OdpOData</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Collections" />
+    <Reference Include="System.Collections.Immutable" />
+    <Reference Include="System.Linq" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Net.Primitives" />
+    <Reference Include="System.Runtime" />
+    <Reference Include="System.Runtime.InteropServices" />
+    <Reference Include="System.Xml.ReaderWriter" />
+    <Reference Include="Theobald.Common">
+      <HintPath>lib\Theobald.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="Theobald.Extractors.Common">
+      <HintPath>lib\Theobald.Extractors.Common.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="DataSet.cs" />
+    <Compile Include="DefaultContainerMissing.cs" />
+    <Compile Include="ContainerFormatException.cs" />
+    <Compile Include="Definition.cs" />
+    <Compile Include="UnsupportedFilterRestrictionException.cs" />
+    <Compile Include="FilterRestriction.cs" />
+    <Compile Include="Field.cs" />
+    <Compile Include="FieldMissingInSerializationException.cs" />
+    <Compile Include="DefinitionSerialization.cs" />
+    <Compile Include="FieldSerialization.cs" />
+    <Compile Include="FieldsSerialization.cs" />
+    <Compile Include="Settings.cs" />
+    <Compile Include="NoFieldsSelectedException.cs" />
+    <Compile Include="ChangeTrackingNotSupportedException.cs" />
+    <Compile Include="InvalidErrorException.cs" />
+    <Compile Include="Extractor.cs" />
+    <Compile Include="SingleValueFilterNotAllowedException.cs" />
+    <Compile Include="MultiValueFilterNotAllowedException.cs" />
+    <Compile Include="IntervalFilterNotAllowedException.cs" />
+    <Compile Include="FilterQueryBuilder.cs" />
+    <Compile Include="FilterSerialization.cs" />
+    <Compile Include="InvalidFilterValueTypeException.cs" />
+    <Compile Include="FilterValue.cs" />
+    <Compile Include="IFilter.cs" />
+    <Compile Include="IntervalFilter.cs" />
+    <Compile Include="MultiValueFilter.cs" />
+    <Compile Include="SingleValueFilter.cs" />
+    <Compile Include="IHttpClient.cs" />
+    <Compile Include="HttpClientWrapper.cs" />
+    <Compile Include="IHttpWebConnection.cs" />
+    <Compile Include="Lookup.cs" />
+    <Compile Include="LookupJsonResult.cs" />
+    <Compile Include="LookupUrl.cs" />
+    <Compile Include="IOdpODataLookupApi.cs" />
+    <Compile Include="OdpODataLookupApi.cs" />
+    <Compile Include="ServiceCatalogEntry.cs" />
+    <Compile Include="ComplexType.cs" />
+    <Compile Include="EdmType.cs" />
+    <Compile Include="EntitiesUrl.cs" />
+    <Compile Include="ODataErrorResponseException.cs" />
+    <Compile Include="ErrorMessage.cs" />
+    <Compile Include="Error.cs" />
+    <Compile Include="NullValueInNonNullableProperty.cs" />
+    <Compile Include="JsonReaderV2.cs" />
+    <Compile Include="JsonResultStructureV2.cs" />
+    <Compile Include="JsonResultV2.cs" />
+    <Compile Include="IODataClient.cs" />
+    <Compile Include="DeltaPreferenceNotAppliedException.cs" />
+    <Compile Include="InvalidServiceVersionInResponseException.cs" />
+    <Compile Include="VersionInformationMissingInResponseException.cs" />
+    <Compile Include="ODataClient.cs" />
+    <Compile Include="ODataXmlRootElementMissingException.cs" />
+    <Compile Include="ODataService.cs" />
+    <Compile Include="PropertyTypeNotSupportedException.cs" />
+    <Compile Include="Property.cs" />
+    <Compile Include="DataServiceSchema.cs" />
+    <Compile Include="EntityContainer.cs" />
+    <Compile Include="EntityTypeNotFoundException.cs" />
+    <Compile Include="DifferentNamespaceNotSupportedException.cs" />
+    <Compile Include="EntitySet.cs" />
+    <Compile Include="PropertyNotFoundException.cs" />
+    <Compile Include="EntityType.cs" />
+    <Compile Include="ComplexTypeNotFoundException.cs" />
+    <Compile Include="FunctionImport.cs" />
+    <Compile Include="TerminateSubscriptionResult.cs" />
+    <Compile Include="NamedRefParseException.cs" />
+    <Compile Include="NamedRef.cs" />
+    <Compile Include="UnresolvedDataServiceSchema.cs" />
+    <Compile Include="UnresolvedEntityContainer.cs" />
+    <Compile Include="UnresolvedEntitySet.cs" />
+    <Compile Include="UnresolvedEntityType.cs" />
+    <Compile Include="UnresolvedFunctionImport.cs" />
+    <Compile Include="IXmlAttributeValue.cs" />
+    <Compile Include="IXmlNode.cs" />
+    <Compile Include="RequiredAttributeMissingException.cs" />
+    <Compile Include="XmlAttributeStash.cs" />
+    <Compile Include="XmlAttributeValue.cs" />
+    <Compile Include="XmlNodeWrapper.cs" />
+    <Compile Include="DeltaLinksEntitySetDoesNotExistException.cs" />
+    <Compile Include="SubscriptionTerminationFailedException.cs" />
+    <Compile Include="TerminateDeltasFunctionDoesNotExistException.cs" />
+    <Compile Include="IODataUrl.cs" />
+    <Compile Include="IOdpODataExtractionApi.cs" />
+    <Compile Include="OdpODataExtractionApi.cs" />
+    <Compile Include="OdpODataParameterization.cs" />
+    <Compile Include="RawODataUrl.cs" />
+    <Compile Include="TypeMappings.cs" />
+    <Compile Include="AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

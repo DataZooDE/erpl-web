@@ -1,0 +1,4900 @@
+{
+  "openapi": "3.0.2",
+  "x-sap-api-type": "REST",
+  "x-sap-shortText": "Allows you to interact, as a data provider, with assets from the SAP Datasphere Data Marketplace.",
+  "servers": [
+    {
+      "url": "https://{tenant_name}.{data_center}.hcs.cloud.sap/api",
+      "description": "SAP Datasphere Marketplace APIs",
+      "variables": {
+        "tenant_name": {
+          "description": "SAP Datasphere Customer Tenant Name",
+          "default": "your_tenant_name"
+        },
+        "data_center": {
+          "description": "SAP Datasphere",
+          "enum": [
+            "us10",
+            "eu10",
+            "eu11",
+            "eu11",
+            "ap10",
+            "jp10",
+            "us20",
+            "eu20"
+          ],
+          "default": "eu10"
+        }
+      }
+    }
+  ],
+  "info": {
+    "title": "Data Sharing Cockpit",
+    "version": "1.0",
+    "description": "The Data Sharing Cockpit APIs allow you to work within the data sharing cockpit of the Data Marketplace. The Data Sharing Cockpit is the central entry point to manage all data provider-specific tasks:</p><ul><li>Maintain your data provider profile.</li><li>Create and edit data products.</li><li>Manage licenses.</li><li>Create and publish releases.</li><li>Manage contexts.</li></ul>"
+  },
+  "paths": {
+    "/v1/datasphere/marketplace/dsc/providers": {
+      "get": {
+        "summary": "Returns a list of data providers.",
+        "description": "Returns a list of all the data providers that the current user has access to. To get access to a data provider, the user needs to be member of the data provider profile. If a contentAggregatorID is given as parameter, all data provider profiles that are managed by that content aggregator are returned.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Params_Provider_ContentAggregatorUUID_Query"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.providers.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Providers_Tuple_GET_200"
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.providers.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Providers_Details_GET_200"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new data provider.",
+        "description": "Creates a new data provider or a new managed data provider (managed by a content aggregator) based on a configuration following the data provider definition json format. Specify the .json in the request body. To create a managed data provider, specify the contentAggregatorID in the request body. Managed providers can only be created if you are a member of the assigned content aggregator profile.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.provider+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Providers_POST_PUT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "description": "returns a path to the created resource that can be used in GET,PUT,PATCH,DELETE calls.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "/api/v1/datasphere/marketplace/dsc/providers/1234-1234-1234-1234"
+              }
+            },
+            "links": {
+              "AccessProviderByUUID": {
+                "operationId": "accessProvider",
+                "parameters": {
+                  "identifier": "$response.header#/Location"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{identifier}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_Identifier_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a data provider.",
+        "description": "Lists all the properties of a certain data provider after specifying its UUID or its content aggregator UUID.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "operationId": "accessProvider",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.provider+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseBody_Providers_Details_GET_200"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites the properties of a data provider.",
+        "description": "Overwrites all the properties of a data provider after specifying its UUID or its content aggregator UUID.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.provider+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Providers_POST_PUT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates selected properties of a data provider.",
+        "description": "Updates only selected properties of the specified data provider which are defined in the provided data provider definition json.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.provider+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Providers_PATCH"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/activationKeys": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of all the existing activation keys for a specified data provider.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          },
+          {
+            "$ref": "#/components/parameters/Params_State"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.provider.keys+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "used",
+                          "unused"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Generates activation keys for a specified data provider.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.provider.generate-keys+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "amount"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/activationKeys/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Deletes all the activation keys for a specified data provider.",
+        "tags": [
+          "Providers (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.provider.keys.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "Successfully deleted Provider key: 0k9baf63-5b15-4577-82b7-d985cc39af0c",
+                      "Failed to delete Provider key: nmbfc8e3-5790-4b12-970e-238ae51e9783 because invalid key"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products": {
+      "get": {
+        "summary": "Returns a list of data products.",
+        "description": "Returns a list of all the existing data products assigned to your user. If no parameter is given, it returns all the data products of all the data provider the user has access to. If the given providerUUID represents a content aggregator, all products of all data provider belonging to the content aggregator are returned. If a providerUUID is given, all products of this data provider are returned.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Params_Provider_UUID_Query"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.products.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Products_Tuple_GET_200"
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.products.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new data product.",
+        "description": "Creates a new data product based on a configuration following the data product definition json format.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Products_POST_PUT"
+              }
+            },
+            "application/vnd.sap.marketplace.product.deepsea+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Products_POST_PUT_Deepsea"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "description": "returns a path to the created resource that can be used in GET,PUT,PATCH,DELETE calls.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "/api/v1/datasphere/marketplace/dsc/products/1234-1234-1234-1234"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a data product.",
+        "description": "Lists all the properties of a single data product. To do so, you must specify the data product UUID.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.product+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200"
+                }
+              },
+              "application/vnd.sap.marketplace.product.deepsea+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200_Deepsea"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites properties of a data product.",
+        "description": "Overwrites all the properties of a specified data product with the provided data from the data product definition json.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Products_POST_PUT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates selected properties of a data product.",
+        "description": "Updates only selected properties of a specified data product which are defined in the provided data product definition json.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Products_PATCH"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "summary": "Deletes a data product.",
+        "description": "Deletes an existing data product. To do so, you must specify the data product UUID.",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_DELETE_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_GET_DELETE_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/changeLifecycleStatus": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Changes the lifecycle status of a data product.",
+        "description": "Changes the lifecycle status of a data product. To do so, you must specify the data product UUID.",
+        "tags": [
+          "Products (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product.change-lifecycle-status+json": {
+              "schema": {
+                "title": "Products",
+                "type": "object",
+                "required": [
+                  "lifecycleStatus"
+                ],
+                "properties": {
+                  "lifecycleStatus": {
+                    "type": "string",
+                    "enum": [
+                      "Listed",
+                      "Delisted",
+                      "Deactivated"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_PUT_PATCH_GET_DELETE_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/products": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of data products for a data provider.",
+        "description": "Returns a list of all the data products of a data provider that the user has access to.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.products.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Products_Tuple_GET_200"
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.products.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new data product for a data provider.",
+        "description": "Creates a new data product for a specified data provider based on a configuration following the data product definition json format.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_ProductsByProvider_POST_PUT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "description": "returns a path to the created resource that can be used in GET,PUT,PATCH,DELETE calls.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "/api/v1/datasphere/marketplace/dsc/providers/1234-1234-1234-1234/products/1234-1234-1234-1234"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_ProdByProvider_POST_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/products/{productIdentifier}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_Product_Identifier_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a data product of a specified data provider.",
+        "description": "Lists all the properties of a data product. To do so, you must specify the technical ID and data provider UUID or content aggregator UUID.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.product+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites all the properties of a data product of a specified data provider.",
+        "description": "Overwrites all the properties of a specified data product with the provided data in the data product definition json.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_ProductsByProvider_POST_PUT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_ProdByProvider_POST_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates properties of a data product of a specified data provider.",
+        "description": "Updates only selected properties of a specified data product which are defined in the provided data product definition json.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Products_PATCH"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_ProdByProvider_POST_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_POST_PUT_PATCH_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "summary": "Deletes an existing data product of a specified data provider.",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/products/{productIdentifier}/changeLifecycleStatus": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_Product_Identifier_Path"
+        }
+      ],
+      "post": {
+        "summary": "Changes the lifecycle status of a data product of a specified data provider.",
+        "description": "Changes the lifecycle status of a data product. To do so, you must specify the data product UUID.",
+        "tags": [
+          "Products by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.product.change-lifecycle-status+json": {
+              "schema": {
+                "title": "Products",
+                "type": "object",
+                "required": [
+                  "lifecycleStatus"
+                ],
+                "properties": {
+                  "lifecycleStatus": {
+                    "type": "string",
+                    "enum": [
+                      "Listed",
+                      "Delisted",
+                      "Deactivated"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Responses_ProdByProvider_POST_PUT_PATCH_GET_DELETE_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_Products_STATUS_400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists licenses.",
+        "description": "Returns a simplified list of all the licenses available for your data provider profile.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.licenses.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "licenseUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "reference": {
+                        "type": "string"
+                      },
+                      "company": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.licenses.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "licenseUUID": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      },
+                      {
+                        "$ref": "#/components/schemas/License"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license+json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/License"
+                  },
+                  {
+                    "required": [
+                      "reference",
+                      "company"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "example": "/api/v1/datasphere/marketplace/dsc/providers/2a6c1772-a22b-418d-ad16-7272181df847/licenses/e2303a78-87d4-45a6-9145-deef6503fd9a"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Deletes all the licenses from a specified data provider.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.licenses.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "Successfully deleted License key: 0w1baf63-5b15-4577-82b7-d985cc39af0c",
+                      "Failed to delete License key:b3bfc8e3-5790-4b12-970e-238ae51e9783 because invalid key"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a license.",
+        "description": "Lists all the properties of a specified license. To do so, you must specify the license UUID.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.license+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/License"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites the properties of a license.",
+        "description": "Overwrites all the properties of a specified license with the provided data in the license definition json.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license+json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/License"
+                  },
+                  {
+                    "required": [
+                      "reference",
+                      "company"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates the properties of a license.",
+        "description": "Updates some properties of a specified license. To do so, you must specify the license UUID.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license+json": {
+              "schema": {
+                "$ref": "#/components/schemas/License"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deletes an existing license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}/changeLifecycleStatus": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Changes the lifecycle status of a license.",
+        "description": "Changes the lifecycle status of a license from Draft to Active, or vice versa.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license.change-lifecycle-status+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lifecycleStatus": {
+                    "type": "string",
+                    "enum": [
+                      "Activated"
+                    ]
+                  }
+                },
+                "required": [
+                  "lifecycleStatus"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}/products": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists data products assigned to a license.",
+        "description": "Returns a list of all the data products assigned to a specified license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.license.products+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "productUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Assigns data products to a license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license.products+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "productUUID": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "No Content",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "example": "/api/v1/datasphere/marketplace/dsc/providers/2a6c1772-a22b-418d-ad16-7272181df847/licenses/e2303a78-87d4-45a6-9145-deef6503fd9a/products/4c89b338-5b47-4ec7-aae0-1f8b5fe37499"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}/products/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Unassigns all the data products from a specified license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.license.products.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}/activationKeys": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of all the existing activation keys for a specified license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          },
+          {
+            "$ref": "#/components/parameters/Params_State"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.licenses.keys+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "used",
+                          "unused"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Generates activation keys for a specified license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.licenses.generate-keys+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "amount"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.licenses.keys+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/licenses/{licenseUUID}/activationKeys/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_licenseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Deletes all the activation keys from a specified license.",
+        "tags": [
+          "Licenses (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.licenses.keys.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of all the releases of a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OData_Filter"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Skip"
+          },
+          {
+            "$ref": "#/components/parameters/OData_Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.releases.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "releaseUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "dataContained": {
+                        "type": "string"
+                      },
+                      "comment": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.releases.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "releaseUUID": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      },
+                      {
+                        "$ref": "#/components/schemas/Release"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new release for a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "content": {
+            "application/vnd.sap.marketplace.release+json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Release"
+                  },
+                  {
+                    "required": [
+                      "dataContained",
+                      "comment"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "example": "/api/v1/datasphere/marketplace/dsc/products/e2303a78-87d4-45a6-9145-deef6503fd9a/releases/7e60a6e1-5a2f-4242-aaa2-d38f548f8746"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/{releaseUUID}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ReleaseUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a release.",
+        "description": "Lists all the properties of a specified release. To do so, you must specify the release UUID.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.release+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Release"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites all the properties of a release.",
+        "description": "Overwrites all the properties of a specified release with the provided data in the data product definition file.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "content": {
+            "application/vnd.sap.marketplace.release+json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Release"
+                  },
+                  {
+                    "required": [
+                      "productUUID",
+                      "dataContained",
+                      "comment"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates the properties of a release.",
+        "description": "Updates some properties of a specified release. To do so, you must specify the release UUID.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "content": {
+            "application/vnd.sap.marketplace.release+json": {
+              "schema": {
+                "$ref": "#/components/schemas/Release"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deletes a release for a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/{releaseUUID}/publish": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ReleaseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Publishes a release to make data product updates available to the consumers.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/{releaseUUID}/lock": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ReleaseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Locks a certain release of a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/{releaseUUID}/unlock": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ReleaseUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Unlocks a certain release of a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/lockAll": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Locks all the releases of a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/products/{productUUID}/releases/unlockAll": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Product_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Unlocks all the releases of a specified data product.",
+        "tags": [
+          "Releases (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of contexts for a specified data provider.",
+        "description": "Returns a list of all the contexts of a data provider that the user has access to.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.contexts.list+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Contexts_Tuple_GET_200"
+                  }
+                }
+              },
+              "application/vnd.sap.marketplace.contexts.details+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResponseBody_Contexts_Details_GET_200"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new context for a data provider.",
+        "description": "Creates a new context for a specified data provider based on a configuration following the context definition file format and stored as a .json file.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.context+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Contexts_Base"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/{contextUUID}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ContextUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Lists the properties of a context of a specified data provider.",
+        "description": "Lists all the properties of a context. To do so, you must specify the context UUID and data provider UUID.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.context+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseBody_Contexts_Details_GET_200"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "put": {
+        "summary": "Overwrites all the properties of a context of a specified data provider.",
+        "description": "Overwrites all the properties of a specified context with the provided data in the context definition json.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.context+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Contexts_Base"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates properties of a context of a specified data provider.",
+        "description": "Updates only selected properties of a specified context which are defined in the provided context definition file.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.context+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Contexts_PATCH"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deletes an existing context from a specified data provider.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/{contextUUID}/changeLifecycleStatus": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ContextUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Changes the lifecycle status of a context of a specified data provider.",
+        "description": "Changes the lifecycle status of a context. To do so, you must specify the context UUID.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/leave": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Ends membership of a context.",
+        "description": "Leaves a context of a specified data provider\":\" only applicable if you don't own the data provider.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.uuids+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Contexts_Join_POST"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "Successfully left the Context xyz (f2c39c3e-08f9-4416-af9d-b02ed7cd182c)",
+                      "Failed to leave the Context: d064fd58-10d0-46dc-916d-3efbeaeb9882 because: invalidProviderMembership"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/join": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Creates membership of a context.",
+        "description": "Joins a context of a specified data provider\":\" only applicable if you don't own the data provider.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.accesskeys+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody_Contexts_Join_POST"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "successfully joined context xyz, using key 18cf16de-5dcc-4734-b25a-f493b2ad752f.",
+                      "Failed to activate 074b610d-9652-4d79-b760-2a778a1f1c60 because: invalidKey."
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Deletes all the contexts from a specified data provider.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.contexts.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "Successfully deleted context: 0w1baf63-5b15-4577-82b7-d985cc39af0c",
+                      "Failed to delete context :b3bfc8e3-5790-4b12-970e-238ae51e9783 because invalid ID"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/{contextUUID}/activationKeys": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ContextUUID_Path"
+        }
+      ],
+      "get": {
+        "summary": "Returns a list of all the existing activation keys for a specified context.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Params_State"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Contains the member type. Either provider or consumer",
+            "schema": {
+              "description": "Comma-separated list of member types.",
+              "type": "string",
+              "example": "provider,consumer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.contexts.keys+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "provider",
+                          "consumer"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "used",
+                          "unused"
+                        ]
+                      },
+                      "usedBy": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      },
+      "post": {
+        "summary": "Generates activation keys for a specified context.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.contexts.generate-keys+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "provider",
+                      "consumer"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number",
+                    "example": 1
+                  }
+                },
+                "required": [
+                  "type",
+                  "amount"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/vnd.sap.marketplace.contexts.keys+json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "keyUUID": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "provider",
+                          "consumer"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "404": {
+            "$ref": "#/components/responses/all404"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    },
+    "/v1/datasphere/marketplace/dsc/providers/{providerUUID}/contexts/{contextUUID}/activationKeys/massDelete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Params_Provider_UUID_Path"
+        },
+        {
+          "$ref": "#/components/parameters/Params_ContextUUID_Path"
+        }
+      ],
+      "post": {
+        "summary": "Deletes all the activation keys from a specified context.",
+        "tags": [
+          "Contexts by Provider (Data Sharing Cockpit)"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.sap.marketplace.contexts.keys.mass-delete+json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "example": [
+                      "Successfully deleted Context key: 0a1baf63-5b15-4577-82b7-d985cc39af0c",
+                      "Failed to delete Context key:d4bfc8e3-5790-4b12-970e-238ae51e9783 because invalid key"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PutPostPatch400"
+          },
+          "401": {
+            "$ref": "#/components/responses/all401"
+          },
+          "403": {
+            "$ref": "#/components/responses/all403"
+          },
+          "500": {
+            "$ref": "#/components/responses/all500"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "To use this API, you must have an access token.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    },
+    "responses": {
+      "PutPostPatch400": {
+        "description": "Bad Request",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Responses_All_POST_PUT_PATCH_STATUS_400"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "all401": {
+        "description": "Unauthorized"
+      },
+      "all403": {
+        "description": "Forbidden"
+      },
+      "all404": {
+        "description": "Not Found"
+      },
+      "all500": {
+        "description": "Internal Server Error"
+      },
+      "ErrorResponse": {
+        "description": "Error response object",
+        "headers": {
+          "x-sap-boc-correlation-id": {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "Location": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/vnd.sap.error+json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Responses_All_POST_PUT_PATCH_STATUS_400": {
+        "type": "string",
+        "enum": [
+          "Property 'xyz' is not known"
+        ]
+      },
+      "RequestBodyProvider_Base": {
+        "title": "RequestBodyProvider_Base",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Sample Provider"
+          },
+          "contentAggregatorID": {
+            "description": "UUID of the content aggregator for managed provider.",
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcdef"
+          },
+          "contentAggregatorProviderID": {
+            "description": "ID of the data provider in the system of the content aggregator. Only relevant for managed providers (contentAggregatorID is given).",
+            "type": "string"
+          },
+          "logo": {
+            "$ref": "#/components/schemas/LogoObject"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000,
+            "example": "Lorem Ipsum description of my Provider"
+          },
+          "homepageUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "example": "www.mycompany.de"
+          },
+          "linkedinUrl": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "regionalCoverages": {
+            "$ref": "#/components/schemas/RegionalCoverages"
+          },
+          "dataCategories": {
+            "$ref": "#/components/schemas/DataCategories"
+          },
+          "industries": {
+            "$ref": "#/components/schemas/Industries"
+          },
+          "sapApplications": {
+            "$ref": "#/components/schemas/SAPApplications"
+          },
+          "contactEmail": {
+            "description": "eMail address that is used if a customer contacts the data provider",
+            "type": "string",
+            "example": "max.mustermann@companymail.com"
+          },
+          "sapEmail": {
+            "type": "string",
+            "description": "email address that is used by SAP to contact the data provider",
+            "example": "dietmar.hopp@sap.com"
+          },
+          "country_code": {
+            "type": "string",
+            "maxLength": 3,
+            "title": "CountryCode.Description"
+          },
+          "zipCode": {
+            "type": "string",
+            "maxLength": 10,
+            "example": 12345
+          },
+          "city": {
+            "type": "string",
+            "example": "Walldorf"
+          },
+          "address1": {
+            "type": "string",
+            "example": "Dietmar-Hopp Allee 16"
+          },
+          "address2": {
+            "type": "string",
+            "example": "Auf der Lei 1"
+          },
+          "phoneNumber": {
+            "type": "string",
+            "maxLength": 32,
+            "example": "+40(0) 151 12131479"
+          },
+          "shipments": {
+            "description": "Can be used to specify the shipment types that a Data Provider is offering. These shipment types are used if a customer filters offerings for a distinct shipment type. It is particularly important it the DataProvider has not products listed yet as only the shipment types given here are used for the search.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "OpenSQL",
+                "ExternalDelivery",
+                "Direct"
+              ]
+            }
+          },
+          "marketplaceVisibilities": {
+            "description": "Marketplace Visibilities of a Provider can be public, private or both",
+            "example": [
+              "Public"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "Public",
+                "Private",
+                "Internal"
+              ]
+            }
+          }
+        }
+      },
+      "RequestBody_Providers_POST_PUT": {
+        "title": "RequestBody_Providers_POST_PUT",
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "contactEmail",
+          "country_code",
+          "zipCode",
+          "city",
+          "address1",
+          "dataCategories",
+          "marketplaceVisibilities"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBodyProvider_Base"
+          }
+        ]
+      },
+      "RequestBody_Providers_PATCH": {
+        "title": "RequestBody_Providers_PATCH",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBodyProvider_Base"
+          }
+        ]
+      },
+      "ResponseBody_Providers_Tuple_GET_200": {
+        "title": "ResponseBody_Providers_Tuple_GET_200",
+        "type": "object",
+        "properties": {
+          "providerUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcdef"
+          },
+          "name": {
+            "type": "string",
+            "example": "My Provider Name"
+          }
+        }
+      },
+      "ResponseBody_Providers_Details_GET_200": {
+        "title": "ResponseBody_Providers_Details_GET_200",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBodyProvider_Base"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "providerUUID": {
+                "type": "string",
+                "format": "uuid",
+                "example": "01234567-89ab-cdef-0123-456789abcdef"
+              },
+              "contentAggregatorID": {
+                "description": "UUID of the content aggregator for managed providers",
+                "type": "string",
+                "format": "uuid",
+                "example": "01234567-89ab-cdef-0123-456789abcdef"
+              },
+              "publishedProductCount": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "productViewCount": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "isContentAggregator": {
+                "type": "boolean",
+                "default": false
+              },
+              "contexts": {
+                "description": "Contexts of this provider",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Context"
+                }
+              },
+              "changedAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2023-02-16T16:20:20.698Z"
+              },
+              "changedBy": {
+                "type": "string",
+                "example": "user@company.com"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2023-02-16T16:20:20.698Z"
+              },
+              "createdBy": {
+                "type": "string",
+                "example": "user2@company.com"
+              }
+            }
+          }
+        ]
+      },
+      "RequestBody_Products_Base": {
+        "title": "RequestBody_Products_Base",
+        "type": "object",
+        "properties": {
+          "dataProviderProductID": {
+            "description": "The unique ID of the given product in the system of the data provider",
+            "type": "string",
+            "example": "My_Weather_Product"
+          },
+          "contentAggregatorProductID": {
+            "description": "The unique ID of the given product in the system of the content aggregator (if the corresponding data provider is managed by a content aggregator).",
+            "type": "string",
+            "example": "CW_4711"
+          },
+          "name": {
+            "description": "Must be unique within a data provider",
+            "type": "string",
+            "example": "Sample Data Provider ThreeAs"
+          },
+          "providerUUID": {
+            "description": "The UUID of the data provider",
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcdef"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000,
+            "example": "Lorem Ipsum description of my Provider"
+          },
+          "space": {
+            "type": "string",
+            "description": "Technical name of the space that contains the referenced data artifacts of the product. If Shipment Type is \"Direct\", this is a mandatory property. For all other Shipment Types the Source Space is optional. The user who calls the API has to have access to the space (has to be a space member).",
+            "example": "SAMPLE_SPACE"
+          },
+          "pricingModel": {
+            "type": "string",
+            "description": "Only relevant for contract type “LicenseKey”.",
+            "enum": [
+              "OneTime",
+              "Monthly"
+            ]
+          },
+          "pricingDescription": {
+            "type": "string",
+            "description": "Mandatory for contract type “LicenseKey”, otherwise optional. Verbal description of the pricing model and/or metric and potentially also the price."
+          },
+          "price": {
+            "type": "number",
+            "example": 599.99,
+            "description": "Mandatory for pricing model “OneTime”, otherwise optional. Gives the product price. The associated currency also has to be provided (priceCurrencyCode)"
+          },
+          "pricePerMonth": {
+            "type": "number",
+            "example": 9.99,
+            "description": "Mandatory for pricing model “Monthly”, otherwise optional. Gives the monthly product subscription price. The associated currency also has to be provided (priceCurrencyCode)"
+          },
+          "priceCurrencyCode": {
+            "type": "string",
+            "description": "Mandatory for pricing model “Monthly” or “OneTime”, otherwise optional. Gives currency associated with the price/monthly price. For valid currency codes see application drop down."
+          },
+          "regionalCoverages": {
+            "$ref": "#/components/schemas/RegionalCoverages"
+          },
+          "dataCategories": {
+            "$ref": "#/components/schemas/DataCategories"
+          },
+          "industries": {
+            "$ref": "#/components/schemas/Industries"
+          },
+          "sapApplications": {
+            "$ref": "#/components/schemas/SAPApplications"
+          },
+          "shipments": {
+            "description": "Can be used to specify the shipment types that a Data Provider is offering. These shipment types are used if a customer filters offerings for a distinct shipment type. It is particularly important it the DataProvider has not products listed yet as only the shipment types given here are used for the search.",
+            "type": "string",
+            "enum": [
+              "OpenSQL",
+              "ExternalDelivery",
+              "Direct"
+            ]
+          },
+          "productArtifacts": {
+            "type": "array",
+            "description": "Contains one or multiple views that should be contained in the data product\n(only views can be selected, selection of tables is not possible).\nIf Shipment Type is “Direct” in combination with Lifecycle Status “Listed”,\nthis is a mandatory property. For all other Shipment Types the product artifacts have to be left out.\nProvides a list of all artifacts that the given DataProduct relates to.\nCurrently only views can be used as source artifacts for a DataProduct.\nThe artifacts have to exist in the given source space.",
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            }
+          },
+          "dataDocumentation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentationObject"
+            }
+          },
+          "additionalDataDocumentation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentationObject"
+            }
+          },
+          "sampleBlobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SampleDataObject"
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageObject"
+            }
+          },
+          "legalDocuments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentationObject"
+            }
+          },
+          "termsOfUse": {
+            "type": "string",
+            "description": "Written, unformatted description of the product's terms of use. Terms of use are shown and confirmed by the customer during product activation"
+          },
+          "sizeCategory": {
+            "type": "string",
+            "description": "This parameter is an information on how many records can be approximately expected in the data set. It should give a rough size estimation also in terms of consumed data volume in the target space. S =  Less than 1.000 records, M =  Between 1.000 and 1.00.000 records, L =   Between 1.00.000 and 1.000.000, XL =  between 1.000.000 and 10.000.000 records, XXL =  between 10.000.000 records and 100.000.000 records, XXXL =  more than 100.000.000 records",
+            "enum": [
+              "S",
+              "M",
+              "L",
+              "XL",
+              "XXL",
+              "XXXL"
+            ]
+          },
+          "contractType": {
+            "description": "Defines how access to the product is managed/granted. „OnRequest“ is the mandatory contract type for all products that have shipment type = “OpenSQL” or “ExternalDelivery”.          „Free“ - Customer can activate the product without any further authorization by the DataProvider. „LicenseKey“ - The customer will need a valid license to key to authorize the product activation. The DataProvider can create a license through the Data Sharing Cockpit and give a customer access through activation keys which he can generate for this license.",
+            "type": "string",
+            "enum": [
+              "Free",
+              "LicenseKey",
+              "OnRequest"
+            ]
+          },
+          "deliveryMode": {
+            "description": "Controls if processes are activated that allow pushing regular data updates to customers of the given product. “OneTime” The data set is static and the customer should not expect updates on the data. Still the customer can trigger a refresh of the data if this should be necessary for any reason. “Full” The data set is periodically refreshed. The refresh pattern is described by the <DeliveryPattern> and <DeliveryPatternDescription>.The <DeliveryMode> is only relevant if <ShipmentType> is “Direct”.",
+            "type": "string",
+            "enum": [
+              "OneTime",
+              "Full",
+              "LiveAccess"
+            ]
+          },
+          "deliveryPattern": {
+            "description": "Provides information on the update pattern of the data. Additionally, more precise information (e.g. on the time of update or on the weekday etc.) can be given in the <DeliveryPatternDescription>.Mandatory for <DeliveryMode> = “Full”.",
+            "type": "string",
+            "example": "Weekly",
+            "enum": [
+              "Daily",
+              "Weekly",
+              "Biweekly",
+              "Monthly",
+              "Quarterly",
+              "Yearly",
+              "Other"
+            ]
+          },
+          "deliveryPatternDescription": {
+            "type": "string",
+            "description": "Free text that provides additional information when exactly a customer can expect an update of the product data",
+            "example": "Data is delivery on the 2nd workday of a week at 7pm CET"
+          },
+          "assignedContexts": {
+            "description": "Contexts to which the given data product is assigned",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RequestBody_Products_POST_PUT_Deepsea": {
+        "title": "RequestBody_Products_POST_PUT_Deepsea",
+        "type": "object",
+        "properties": {
+          "dataMarketplaceProducts": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1,
+            "additionalProperties": {
+              "allOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "template": {
+                      "type": "boolean"
+                    },
+                    "sourceProductTemplateID": {
+                      "type": "string"
+                    },
+                    "productSpace": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "sap.dwc.dataProduct"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "$ref": "#/components/schemas/RequestBody_Products_POST_PUT"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "dataMarketplaceProducts"
+        ]
+      },
+      "RequestBody_ProductsByProvider_POST_PUT": {
+        "title": "RequestBody_ProductsByProvider_POST_PUT",
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "dataCategories"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBody_Products_Base"
+          }
+        ]
+      },
+      "RequestBody_Products_POST_PUT": {
+        "title": "RequestBody_Products_POST_PUT",
+        "type": "object",
+        "required": [
+          "providerUUID",
+          "name",
+          "description",
+          "dataCategories"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBody_Products_Base"
+          }
+        ]
+      },
+      "RequestBody_Products_PATCH": {
+        "title": "ResponseBodyProduct_PATCH",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBody_Products_Base"
+          }
+        ]
+      },
+      "ResponseBody_Products_Tuple_GET_200": {
+        "title": "ResponseBody_Products_Tuple_GET_200",
+        "type": "object",
+        "properties": {
+          "providerUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcdef"
+          },
+          "productUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "5bb2131d-a685-4d3b-8e30-0c53ee54a72f"
+          },
+          "productName": {
+            "type": "string",
+            "example": "My Product Name"
+          }
+        }
+      },
+      "ResponseBody_Products_Details_GET_200_Deepsea": {
+        "title": "ResponseBody_Products_Details_GET_200_Deepsea",
+        "type": "object",
+        "properties": {
+          "dataMarketplaceProducts": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1,
+            "additionalProperties": {
+              "allOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "template": {
+                      "type": "boolean"
+                    },
+                    "sourceProductTemplateID": {
+                      "type": "string"
+                    },
+                    "productSpace": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "sap.dwc.dataProduct"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "$ref": "#/components/schemas/ResponseBody_Products_Details_GET_200"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "dataMarketplaceProducts"
+        ]
+      },
+      "ResponseBody_Products_Details_GET_200": {
+        "title": "ResponseBody_Products_Details_GET_200",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBody_Products_Base"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "productUUID": {
+                "type": "string",
+                "format": "uuid",
+                "example": "01234567-89ab-cdef-0123-456789abcdef"
+              },
+              "tenant": {
+                "description": "ID of the tenant from which the product has been created. Usually this field should be left empty. It is intended to be used if a product should move from one tenant to another.",
+                "type": "string",
+                "format": "uuid",
+                "maxLength": 2048,
+                "example": "0b0dfe8e-f974-407d-8987-6d863b2c5e83"
+              },
+              "lifecycleStatus": {
+                "description": "Is used to define if a product is visible in the Data Marketplace and sets the status of what a customer can do with the product. \"Draft\" Can be used to create a product without being visible in the Data Marketplace yet. \"Listed\" Makes a product being visible in the Data Marketplace. \"Delisted\" Temporarily remove a product from the Data Marketplace (make it invisible). Customer it is still possible to publish data releases and customers with existing installations can still work with the product and update data. \"Deactivated\" Completely removes the product from the Data Marketplace. Customers can't update data or re-install the product. Alternatively use the \"changeLifecyceStatus\" API to change the status. To finally delete a product use the \"delete\" method",
+                "type": "string",
+                "example": "Draft",
+                "enum": [
+                  "Draft",
+                  "Listed",
+                  "Delisted",
+                  "Deactivated"
+                ]
+              },
+              "changedAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2023-02-16T16:20:20.698Z"
+              },
+              "changedBy": {
+                "type": "string",
+                "example": "user@company.com"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2023-02-16T16:20:20.698Z"
+              },
+              "createdBy": {
+                "type": "string",
+                "example": "user2@company.com"
+              }
+            }
+          }
+        ]
+      },
+      "Responses_Products_POST_PUT_PATCH_400": {
+        "type": "string",
+        "enum": [
+          "dataProviderProductID 'xyz' not unique",
+          "contentAggregatorProductID 'xyz' not unique",
+          "space 'xyz' does not exist",
+          "context 'xyz' does not exist",
+          "regionalCoverage 'xyz' does not exist in enumeration of allowed values",
+          "regionalCoverage 'xyz' is duplicated in specification",
+          "dataCategories: value 'xyz' does not exist in enumeration of allowed values",
+          "dataCategories 'xyz' is duplicated in specification",
+          "industries: value 'xyz' does not exist in enumeration of allowed values",
+          "industries 'xyz' is duplicated in specification",
+          "sapApplications: value 'xyz' does not exist in enumeration of allowed values",
+          "sapApplications 'xyz' is duplicated in specification",
+          "shipments: value 'xyz' does not exist in enumeration of allowed values",
+          "sizeCategory 'xyz' does not exist in enumeration of allowed values",
+          "contractType 'xyz' does not exist in enumeration of allowed values",
+          "deliveryMode 'xyz' does not exist in enumeration of allowed values",
+          "view'xyz' does not exist in space 'abc'",
+          "column 'xyz' does not exist in view 'abc'",
+          "additionalDataDocumentation 'xyz' is of mimeType 'abc' which does not conform with accepted blobData 'def-array'",
+          "additionalDataDocumentation 'xyz' was rejected by the malware scanner.",
+          "sampleBlob 'xyz' is of mimeType 'abc' which does not conform with accepted blobData 'def-array'",
+          "sampleBlob 'xyz' was rejected by the malware scanner.",
+          "image 'xyz' is of mimeType 'abc' which does not conform with accepted blobData 'def-array'",
+          "image 'xyz' was rejected by the malware scanner.",
+          "legalDocument 'xyz' is of mimeType 'abc' which does not conform with accepted blobData 'def-array'",
+          "legalDocument 'xyz' was rejected by the malware scanner.",
+          "mandatory property 'xyz' is not specified in request body"
+        ]
+      },
+      "Responses_Products_PUT_PATCH_400": {
+        "type": "string",
+        "enum": [
+          "space 'xyz' not changeable because product is listed",
+          "space 'xyz' not changeable because product contains artifacts",
+          "view 'xyz' not changeable because product is listed",
+          "view 'xyz' not changeable because customer installations of the product exist",
+          "columns selection for view 'xyz' not changeable because product is listed",
+          "columns selection for view 'xyz' not changeable because customer installations of the product exist",
+          "dataFilter 'xyz' for view 'xyz' not changeable because product is listed",
+          "dataFilter 'xyz' for view 'xyz' not changeable because customer installations of the product exist"
+        ]
+      },
+      "Responses_Products_DELETE_400": {
+        "type": "string",
+        "enum": [
+          "product with name 'xyz' can not be deleted because of its status 'abc'"
+        ]
+      },
+      "Responses_Products_STATUS_400": {
+        "type": "string",
+        "enum": [
+          "products with shipment type 'Direct' and delivery mode 'Full' can not be set to status 'Listed' without data release",
+          "products need to be assigned to at least one context to be 'Listed'",
+          "mandatory property 'xyz' is not specified in request body"
+        ]
+      },
+      "Responses_Products_PUT_PATCH_GET_DELETE_STATUS_400": {
+        "type": "string",
+        "enum": [
+          "Product with name 'xyz' not found"
+        ]
+      },
+      "Responses_ProdByProvider_POST_PUT_PATCH_GET_DELETE_STATUS_400": {
+        "type": "string",
+        "enum": [
+          "Provider with uuid 'xyz' not found"
+        ]
+      },
+      "RequestBody_Contexts_Base": {
+        "title": "RequestBody_Contexts_Base",
+        "type": "object",
+        "properties": {
+          "contextOwnerUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcded"
+          },
+          "contextUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "5bb2131d-a685-4d3b-8e30-0c53ee54a72e"
+          },
+          "contextType": {
+            "$ref": "#/components/schemas/ContextType_POST_PUT_PATCH_DELETE"
+          },
+          "contextName": {
+            "type": "string",
+            "example": "My Context Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000,
+            "example": "Lorem Ipsum description of my Context"
+          },
+          "logo": {
+            "$ref": "#/components/schemas/LogoObject"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ContextRole"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContextStatus"
+          },
+          "domains": {
+            "description": "List of URLs/domains.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2022-07-28T00:00:00.000Z"
+          },
+          "changedBy": {
+            "type": "string",
+            "example": "user@company.com"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2022-06-17T00:00:00.000Z"
+          },
+          "createdBy": {
+            "type": "string",
+            "example": "user2@company.com"
+          }
+        }
+      },
+      "RequestBody_Contexts_PATCH": {
+        "title": "RequestBody_Contexts_PATCH",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RequestBody_Contexts_Base"
+          }
+        ]
+      },
+      "RequestBody_Contexts_Leave_POST": {
+        "title": "RequestBody_Contexts_Leave",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "RequestBody_Contexts_Join_POST": {
+        "title": "RequestBody_Contexts_Join",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ResponseBody_Contexts_Base": {
+        "title": "ResponseBody_Contexts_Base",
+        "type": "object",
+        "properties": {
+          "contextOwnerUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "01234567-89ab-cdef-0123-456789abcded"
+          },
+          "contextUUID": {
+            "type": "string",
+            "format": "uuid",
+            "example": "5bb2131d-a685-4d3b-8e30-0c53ee54a72e"
+          },
+          "contextName": {
+            "type": "string",
+            "example": "My Context Name"
+          },
+          "role": {
+            "description": "The role the provider has in that context.",
+            "type": "string",
+            "enum": [
+              "Owner",
+              "Member"
+            ],
+            "example": "Member"
+          }
+        }
+      },
+      "ResponseBody_Contexts_Tuple_GET_200": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ResponseBody_Contexts_Base"
+          }
+        ]
+      },
+      "ResponseBody_Contexts_Details_GET_200": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ResponseBody_Contexts_Base"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "logo": {
+                "$ref": "#/components/schemas/LogoObject"
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 5000,
+                "example": "Lorem Ipsum description of my Context"
+              },
+              "contextType": {
+                "$ref": "#/components/schemas/ContextType_GET"
+              },
+              "status": {
+                "$ref": "#/components/schemas/ContextStatus"
+              },
+              "domains": {
+                "description": "List of URLs/domains.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "changedAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2022-07-28T00:00:00.000Z"
+              },
+              "changedBy": {
+                "type": "string",
+                "example": "user@company.com"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2022-06-17T00:00:00.000Z"
+              },
+              "createdBy": {
+                "type": "string",
+                "example": "user2@company.com"
+              }
+            }
+          }
+        ]
+      },
+      "SAPApplications": {
+        "description": "String values for each SAP Application the data is applicable to. Multiple values can be chosen",
+        "example": [
+          "HR & People Engagement",
+          "ERP & Finance"
+        ],
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "HR & People Engagement",
+            "HR & People Engagement:Employee in HR and People Engagements",
+            "HR & People Engagement:Employee Experience Management",
+            "HR & People Engagement:Core HR and Payroll",
+            "HR & People Engagement:Talent Management",
+            "HR & People Engagement:HR Analytics and Workforce Planning",
+            "CRM and Customer Experience",
+            "CRM and Customer Experience:Customer Data",
+            "CRM and Customer Experience:Marketing",
+            "CRM and Customer Experience:Commerce",
+            "CRM and Customer Experience:Sales",
+            "CRM and Customer Experience:Service",
+            "ERP & Finance",
+            "ERP & Finance:SAP S/4HANA",
+            "ERP & Finance:ERP for Small and Midsize Enterprises",
+            "ERP & Finance:Financial Planning and Analysis",
+            "ERP & Finance:Accounting and Financial Close",
+            "ERP & Finance:Treasury Management",
+            "ERP & Finance:Accounts Receivable",
+            "Billing & Revenue Management",
+            "ERP & Finance:Cybersecurity",
+            "Governance",
+            "Risk & Compliance",
+            "Network & Spend Management",
+            "Network & Spend Management:Supplier Management",
+            "Network & Spend Management:Strategic Sourcing",
+            "Network & Spend Management:Procurement",
+            "Network & Spend Management:Services Procurement and Contingent Workforce",
+            "Network & Spend Management:Selling and Fulfillment",
+            "Network & Spend Management:Travel and Expense",
+            "Business Technology Plattform",
+            "Business Technology Plattform:Database and Data Management",
+            "Business Technology Plattform:Application Development and Integration",
+            "Business Technology Plattform:Analytics",
+            "Business Technology Plattform:Intelligent Technologies",
+            "Digital Supply Chain",
+            "Digital Supply Chain:Supply Chain Planning",
+            "Digital Supply Chain:Supply Chain Logistics",
+            "Digital Supply Chain:Manufacturing",
+            "Digital Supply Chain:R&D / Engineering",
+            "Digital Supply Chain:Asset Management",
+            "Experience Management",
+            "Experience Management:Brand Experience",
+            "Experience Management:Customer Experience",
+            "Experience Management:Product Experience",
+            "Experience Management:Employee Experience"
+          ]
+        }
+      },
+      "DataCategories": {
+        "description": "Coded values for each category. Multiple values can be chosen.\n\n     - C001 Benchmarking Data\n     - C011 - Company Data\n     - C021 - Countries, Regions & Cities Data\n     - C031 - Culture & Sports Data\n     - C041 - Environmental & Weather Data\n     - C051 - Finance & Economy Data\n     - C061 - Geospatial Data\n     - C071 - Health Data\n     - C081 - Hospitality, Travel & Tourism Data\n     - C091 - Industry-Specific Data\n     - C101 - Innovation & Trend Data\n     - C111 - Legal & Justice Data\n     - C121 - Market & Consumer Data\n     - C131 - Media & Entertainment Data\n     - C141 - Mobility Data\n     - C151 - Natural Resources & Energy Data\n     - C161 - Political Data\n     - C171 - Product & Services Data\n     - C181 - Public Sector & Society Data\n     - C191 - Science & Technology Data\n     - C201 - Social Media, News & Communication Data\n     - C206 - Sustainability Data\n     - C211 - Transport & Logistics Data\n     - C221 - Web, IoT & Device Data\n     - C231 - Other Data Categories\n",
+        "maxLength": 255,
+        "nullable": false,
+        "example": [
+          "C001",
+          "C031"
+        ],
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "C001",
+            "C011",
+            "C021",
+            "C031",
+            "C041",
+            "C051",
+            "C061",
+            "C071",
+            "C081",
+            "C091",
+            "C101",
+            "C111",
+            "C121",
+            "C131",
+            "C141",
+            "C151",
+            "C161",
+            "C171",
+            "C181",
+            "C191",
+            "C201",
+            "C206",
+            "C211",
+            "C221",
+            "C231"
+          ]
+        }
+      },
+      "Industries": {
+        "description": "String values for each industry the data is applicable to. Multiple values can be chosen",
+        "example": [
+          "Financial Services",
+          "Energy and Natural Ressources"
+        ],
+        "type": "array",
+        "nullable": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "All Industries",
+            "Energy and Natural Ressources",
+            "Energy and Natural Ressources:Building Products",
+            "Energy and Natural Ressources:Chemicals",
+            "Energy and Natural Ressources:Mill Products",
+            "Energy and Natural Ressources:Mining",
+            "Energy and Natural Ressources:Oil and Gas",
+            "Energy and Natural Ressources:Utilities",
+            "Financial Services",
+            "Financial Services:Banking",
+            "Financial Services:Insurance",
+            "Consumer Industries",
+            "Consumer Industries:Agribusiness",
+            "Consumer Industries:Consumer Products",
+            "Consumer Industries:Fashion",
+            "Consumer Industries:Life Sciences",
+            "Consumer Industries:Retail",
+            "Consumer Industries:Wholesale Distribution",
+            "Discrete Industries",
+            "Discrete Industries:Aerospace and Defense",
+            "Discrete Industries:Automotive",
+            "Discrete Industries:High Tech",
+            "Discrete Industries:Industrial Machinery and Components",
+            "Service Industries",
+            "Service Industries:Airlines",
+            "Service Industries:Engineering, Construction, and Operations",
+            "Service Industries:Media",
+            "Service Industries:Professional Services",
+            "Service Industries:Railways",
+            "Service Industries:Sports & Entertainment",
+            "Service Industries:Telecommunications",
+            "Service Industries:Travel and Transportation",
+            "Public Services",
+            "Public Services:Defense and Security",
+            "Public Services:Future Cities",
+            "Public Services:Healthcare",
+            "Public Services:Higher Education and Research",
+            "Public Services:Public Sector"
+          ]
+        }
+      },
+      "RegionalCoverages": {
+        "description": "String values for each region the data is applicable to. Multiple values can be chosen",
+        "type": "array",
+        "example": [
+          "Germany",
+          "France"
+        ],
+        "items": {
+          "type": "string",
+          "enum": [
+            "Global",
+            "Europe",
+            "North America",
+            "South America",
+            "Central America",
+            "Asia",
+            "Africa",
+            "Afghanistan",
+            "Aland Islands",
+            "Albania",
+            "Algeria",
+            "American Samoa",
+            "Andorra",
+            "Angola",
+            "Anguilla",
+            "Antarctica",
+            "Antigua and Barbuda",
+            "Argentina",
+            "Armenia",
+            "Aruba",
+            "Australia",
+            "Austria",
+            "Azerbaijan",
+            "Bahamas",
+            "Bahrain",
+            "Bangladesh",
+            "Barbados",
+            "Belarus",
+            "Belgium",
+            "Belize",
+            "Benin",
+            "Bermuda",
+            "Bhutan",
+            "Bolivia",
+            "Bonaire, Sint Eustatius and Saba",
+            "Bosnia and Herzegovina",
+            "Botswana",
+            "Bouvet Island",
+            "Brazil",
+            "British Indian Ocean Territory",
+            "Brunei Darussalam",
+            "Bulgaria",
+            "Burkina Faso",
+            "Burundi",
+            "Cambodia",
+            "Cameroon",
+            "Canada",
+            "Cape Verde",
+            "Cayman Islands",
+            "Central African Republic",
+            "Chad",
+            "Chile",
+            "China",
+            "Christmas Island",
+            "Cocos (Keeling) Islands",
+            "Colombia",
+            "Comoros",
+            "Congo",
+            "Congo, The Democratic Republic of",
+            "Cook Islands",
+            "Costa Rica",
+            "Cote d'Ivoire",
+            "Croatia",
+            "Cuba",
+            "CuraÃ§ao",
+            "Cyprus",
+            "Czechia",
+            "Denmark",
+            "Djibouti",
+            "Dominica",
+            "Dominican Republic",
+            "Egypt",
+            "El Salvador",
+            "Equatorial Guinea",
+            "Eritrea",
+            "Estonia",
+            "Ethiopia",
+            "Falkland Islands (Malvinas)",
+            "Faroe Islands",
+            "Fiji",
+            "Finland",
+            "France",
+            "French Guiana",
+            "French Polynesia",
+            "French Southern Territories",
+            "Gabon",
+            "Gambia",
+            "Georgia",
+            "Germany",
+            "Ghana",
+            "Gibraltar",
+            "Greece",
+            "Greenland",
+            "Grenada",
+            "Guadeloupe",
+            "Guam",
+            "Guatemala",
+            "Guernsey",
+            "Guinea",
+            "Guinea-Bissau",
+            "Guyana",
+            "Haiti",
+            "Heard and Mc Donald Islands",
+            "Holy See (Vatican City State)",
+            "Honduras",
+            "Hong Kong",
+            "Hungary",
+            "Iceland",
+            "India",
+            "Indonesia",
+            "Iran, Islamic Republic of",
+            "Iraq",
+            "Ireland",
+            "Isle of Man",
+            "Israel",
+            "Italy",
+            "Jamaica",
+            "Japan",
+            "Jersey",
+            "Jordan",
+            "Kazakstan",
+            "Kenya",
+            "Kiribati",
+            "Korea, Democratic People's Republic of",
+            "Korea, Republic of",
+            "Kosovo (temporary code)",
+            "Kuwait",
+            "Kyrgyzstan",
+            "Lao, People's Democratic Republic",
+            "Latvia",
+            "Lebanon",
+            "Lesotho",
+            "Liberia",
+            "Libyan Arab Jamahiriya",
+            "Liechtenstein",
+            "Lithuania",
+            "Luxembourg",
+            "Macao",
+            "Macedonia",
+            "Madagascar",
+            "Malawi",
+            "Malaysia",
+            "Maldives",
+            "Mali",
+            "Malta",
+            "Marshall Islands",
+            "Martinique",
+            "Mauritania",
+            "Mauritius",
+            "Mayotte",
+            "Mexico",
+            "Micronesia, Federated States of",
+            "Moldova, Republic of",
+            "Monaco",
+            "Mongolia",
+            "Montenegro",
+            "Montserrat",
+            "Morocco",
+            "Mozambique",
+            "Myanmar",
+            "Namibia",
+            "Nauru",
+            "Nepal",
+            "Netherlands",
+            "Netherlands Antilles",
+            "New Caledonia",
+            "New Zealand",
+            "Nicaragua",
+            "Niger",
+            "Nigeria",
+            "Niue",
+            "Norfolk Island",
+            "Northern Mariana Islands",
+            "Norway",
+            "Oman",
+            "Pakistan",
+            "Palau",
+            "Palestinian Territory, Occupied",
+            "Panama",
+            "Papua New Guinea",
+            "Paraguay",
+            "Peru",
+            "Philippines",
+            "Pitcairn",
+            "Poland",
+            "Portugal",
+            "Puerto Rico",
+            "Qatar",
+            "Republic of Serbia",
+            "Reunion",
+            "Romania",
+            "Russia Federation",
+            "Rwanda",
+            "Saint BarthŽlemy",
+            "Saint Helena",
+            "Saint Kitts & Nevis",
+            "Saint Lucia",
+            "Saint Martin",
+            "Saint Pierre and Miquelon",
+            "Saint Vincent and the Grenadines",
+            "Samoa",
+            "San Marino",
+            "Sao Tome and Principe",
+            "Saudi Arabia",
+            "Senegal",
+            "Serbia and Montenegro",
+            "Seychelles",
+            "Sierra Leone",
+            "Singapore",
+            "Sint Maarten",
+            "Slovakia",
+            "Slovenia",
+            "Solomon Islands",
+            "Somalia",
+            "South Africa",
+            "South Georgia & The South Sandwich Islands",
+            "South Sudan",
+            "Spain",
+            "Sri Lanka",
+            "Sudan",
+            "Suriname",
+            "Svalbard and Jan Mayen",
+            "Swaziland",
+            "Sweden",
+            "Switzerland",
+            "Syrian Arab Republic",
+            "Taiwan, Province of China",
+            "Tajikistan",
+            "Tanzania, United Republic of",
+            "Thailand",
+            "Timor-Leste",
+            "Togo",
+            "Tokelau",
+            "Tonga",
+            "Trinidad and Tobago",
+            "Tunisia",
+            "Turkey",
+            "Turkish Rep N Cyprus",
+            "Turkmenistan",
+            "Turks and Caicos Islands",
+            "Tuvalu",
+            "Uganda",
+            "Ukraine",
+            "United Arab Emirates",
+            "United Kingdom",
+            "United States",
+            "United States Minor Outlying Islands",
+            "Uruguay",
+            "Uzbekistan",
+            "Vanuatu",
+            "Venezuela",
+            "Vietnam",
+            "Virgin Islands, British",
+            "Virgin Islands, U.S.",
+            "Wallis and Futuna",
+            "Western Sahara",
+            "Yemen",
+            "Zambia",
+            "Zimbabwe"
+          ]
+        }
+      },
+      "Artifact": {
+        "title": "Artifact",
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The technical name of a DWC view",
+            "type": "string",
+            "example": "My_View"
+          },
+          "dataFilter": {
+            "description": "A filter that selects the row that should be shipped with the product (valid HANA where-clause).",
+            "type": "string",
+            "example": "country = 'france' and year = '2019'"
+          },
+          "columns": {
+            "description": "Selects artifact columns which should be contained in the data product.\nIf none are specified, all columns are included.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Column"
+            }
+          }
+        }
+      },
+      "Column": {
+        "title": "Column",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Technical column name",
+            "type": "string"
+          }
+        }
+      },
+      "DocumentationObject": {
+        "title": "DocumentationObject",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "File name of the document (including extension)",
+            "type": "string",
+            "example": "My_File.pdf"
+          },
+          "description": {
+            "description": "Descriptive name of the document",
+            "type": "string",
+            "example": "My Document Name"
+          },
+          "blobData": {
+            "description": "BlobData Base64 encoded.\nMust match the acceptable mime types.",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "Acceptable Mimetypes",
+            "type": "string",
+            "example": "application/pdf",
+            "enum": [
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "application/msword",
+              "text/html",
+              "application/pdf",
+              "application/powerpoint",
+              "application/x-excel"
+            ]
+          }
+        }
+      },
+      "ImageObject": {
+        "title": "ImageObject",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "File name of the image (including extension)",
+            "type": "string",
+            "example": "My_File.jpg"
+          },
+          "description": {
+            "description": "Descriptive subtitle of the image. Is shown with the image in the product page",
+            "type": "string",
+            "example": "My Image Name"
+          },
+          "blobData": {
+            "description": "BlobData Base64 encoded.\nMust match the acceptable mime types.",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "Acceptable Mimetypes",
+            "type": "string",
+            "example": "image/jpeg",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/bmp",
+              "image/gif",
+              "image/svg+xml",
+              "image/tiff"
+            ]
+          }
+        }
+      },
+      "LogoObject": {
+        "title": "LogoObject",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "File name of the image (including extension)",
+            "type": "string",
+            "example": "My_File.jpg"
+          },
+          "blobData": {
+            "description": "BlobData Base64 encoded.\nMust match the acceptable mime types.",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "Acceptable Mimetypes",
+            "type": "string",
+            "example": "image/jpeg",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/bmp",
+              "image/gif",
+              "image/svg+xml",
+              "image/tiff"
+            ]
+          }
+        }
+      },
+      "SampleDataObject": {
+        "description": "Sample Data has to be provided in JSON format. The format of the data file is { \\\"data\\\":[{}, {}] }. In order to include sample data into the JSON-structure of the upload API make sure that <br><br> - All quotes are preceded by a backslash as escape character <br> - You don’t include any CR/LF; CR, LF in the sample data. It has to be one continuous line. <br><br> Example for a working JSON file (use word functionality to show (not) included CR’s): <br><br> {\\\"data\\\": [{\\\"Entity\\\": \\\"Afghanistan\\\",\\\"Code\\\": \\\"AFG\\\",\\\"Year\\\": \\\"1961\\\",\\\"Crops - Barley - 44 - Production - 5510 - tonnes\\\": \\\"378000\\\"},{\\\"Entity\\\": \\\"Afghanistan\\\",\\\"Code\\\": \\\"AFG\\\",\\\"Year\\\": \\\"1962\\\",\\\"Crops - Barley - 44 - Production - 5510 - tonnes\\\": \\\"378000\\\"},{\\\"Entity\\\": \\\"Zimbabwe\\\",\\\"Code\\\": \\\"ZWE\\\",\\\"Year\\\": \\\"2018\\\",\\\"Crops - Barley - 44 - Production - 5510 - tonnes\\\": \\\"55854\\\"}]}\n",
+        "title": "SampleDataObject",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "My_File.json"
+          },
+          "description": {
+            "description": "Descriptive name of the document",
+            "type": "string",
+            "example": "My Document Name"
+          },
+          "blobData": {
+            "description": "BlobData Base64 encoded.\nMust match the acceptable mime types.",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "Acceptable Mimetypes",
+            "type": "string",
+            "example": "application/json",
+            "enum": [
+              "application/json"
+            ]
+          }
+        }
+      },
+      "Context": {
+        "title": "Artifact",
+        "required": [
+          "role",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The name of a context",
+            "type": "string",
+            "example": "My Context"
+          },
+          "role": {
+            "description": "The role the provider has in that context.",
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ],
+            "example": "Member"
+          },
+          "status": {
+            "description": "The current status of the context.",
+            "type": "string",
+            "enum": [
+              "Draft",
+              "Active",
+              "Expired"
+            ],
+            "example": "Expired"
+          }
+        }
+      },
+      "License": {
+        "title": "license",
+        "type": "object",
+        "properties": {
+          "providerUUID": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "company": {
+            "type": "string"
+          },
+          "domains": {
+            "description": "List of URLs/domains.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "scope": {
+            "description": "List of product UUIDs to be included in the license scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "ContextType_POST_PUT_PATCH_DELETE": {
+        "description": "String values for the type of the corresponding context that can be managed by a provider using API.",
+        "type": "string",
+        "enum": [
+          "PrivateDataExchange",
+          "PrivateDataProducts",
+          "DataShop"
+        ]
+      },
+      "ContextType_GET": {
+        "description": "String values for the type of the corresponding context that can be accessed by a provider.",
+        "type": "string",
+        "enum": [
+          "PublicDataMarketplace",
+          "PrivateDataExchange",
+          "PrivateDataProducts",
+          "DataShop",
+          "InternalDataMarketPlace"
+        ]
+      },
+      "ContextRole": {
+        "description": "The role the provider has in that context.",
+        "type": "string",
+        "enum": [
+          "Owner",
+          "Member"
+        ],
+        "example": "Member"
+      },
+      "ContextStatus": {
+        "description": "The current status of the context.",
+        "type": "string",
+        "enum": [
+          "Draft",
+          "Active",
+          "Expired"
+        ],
+        "example": "Draft"
+      },
+      "Release": {
+        "title": "Release",
+        "type": "object",
+        "properties": {
+          "dataContained": {
+            "type": "string"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "isPublished": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "OData_Filter": {
+        "name": "$filter",
+        "description": "OData $filter query",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "OData_Skip": {
+        "name": "$skip",
+        "description": "OData $skip query",
+        "in": "query",
+        "schema": {
+          "type": "number"
+        }
+      },
+      "OData_Top": {
+        "name": "$top",
+        "description": "OData $top query",
+        "in": "query",
+        "schema": {
+          "type": "number"
+        }
+      },
+      "Params_Provider_Identifier_Path": {
+        "name": "identifier",
+        "description": "The {identifier} can be used in two ways\":\" provide the UUID of the data provider or the content aggregator (a content aggregator is a data provider as well); or, provide the UUID of a content aggregator and a contentAggregatorProviderID separated by a colon.",
+        "in": "path",
+        "schema": {
+          "type": "string"
+        },
+        "required": true,
+        "example": [
+          "0b0dfe8e-f974-407d-8987-6d863b2c5e83",
+          "f97dfe8e-f9a4-4d2d-8187-ed863bdc5e88:rubix-b2b-risk-assessment-amp-monitoring-solutions-all-cou-rubix-data-sciences"
+        ]
+      },
+      "Params_Provider_UUID_Query": {
+        "name": "providerUUID",
+        "in": "query",
+        "description": "The (hexadecimal) productUUID identifies a product.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Params_Provider_UUID_Path": {
+        "name": "providerUUID",
+        "description": "The (hexadecimal) providerUUID identifies a provider.",
+        "in": "path",
+        "schema": {
+          "type": "string"
+        },
+        "required": true,
+        "example": [
+          "22a55d02-936c-4b89-aa40-06b7764975b9"
+        ]
+      },
+      "Params_Product_Identifier_Path": {
+        "name": "productIdentifier",
+        "description": "The productIdentifier identifies a data product. If the parameter providerUUID represents a data provider a dataProviderProductID (technical name) is required here. If the providerUUID represents a content aggregator, a contentAggregatorProductID (technical name)  is required.",
+        "example": [
+          "Sample Product Name of a Provider",
+          "sample-product-name-of-an-aggregator"
+        ],
+        "in": "path",
+        "schema": {
+          "type": "string"
+        },
+        "required": true
+      },
+      "Params_Product_UUID_Path": {
+        "name": "productUUID",
+        "description": "The (hexadecimal) productUUID identifies a product.",
+        "in": "path",
+        "schema": {
+          "type": "string"
+        },
+        "required": true,
+        "example": [
+          "0b0dfe8e-f974-407d-8987-6d863b2c5e83"
+        ]
+      },
+      "Params_Provider_ContentAggregatorUUID_Query": {
+        "name": "contentAggregatorUUID",
+        "in": "query",
+        "description": "The (hexadecimal) productUUID identifies a product.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Params_licenseUUID_Path": {
+        "name": "licenseUUID",
+        "in": "path",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "required": true
+      },
+      "Params_ReleaseUUID_Path": {
+        "name": "releaseUUID",
+        "in": "path",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "required": true
+      },
+      "Params_ContextUUID_Path": {
+        "name": "contextUUID",
+        "description": "The (hexadecimal) contextUUID identifies a context.",
+        "in": "path",
+        "schema": {
+          "type": "string"
+        },
+        "required": true,
+        "example": [
+          "0b0dfe8e-f974-407d-8987-6d863b2c5e87"
+        ]
+      },
+      "Params_State": {
+        "name": "state",
+        "in": "query",
+        "description": "Holds the state. Either used or unused.",
+        "schema": {
+          "description": "Comma-separated list of states.",
+          "type": "string",
+          "example": "used,unused"
+        }
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "For more information, see the documentation of the CLI, which is based on those API's and provides example json's for some requests.",
+    "url": "https://help.sap.com/docs/SAP_DATASPHERE/d0ecd6f297ac40249072a44df0549c1a/5a815f6c21e9468eb96d0be95b9d2def.html"
+  }
+}

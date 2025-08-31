@@ -1,0 +1,85 @@
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <script type="text/javascript" id="in-page-script-id" data-name="in_page_channel_o8Z7oQ"/>
+  <edmx:Reference Uri="https://oasis-tcs.github.io/odata-vocabularies/vocabularies/Org.OData.Capabilities.V1.xml">
+    <edmx:Include Alias="Capabilities" Namespace="Org.OData.Capabilities.V1"/>
+  </edmx:Reference>
+  <edmx:Reference Uri="https://sap.github.io/odata-vocabularies/vocabularies/Common.xml">
+    <edmx:Include Alias="Common" Namespace="com.sap.vocabularies.Common.v1"/>
+  </edmx:Reference>
+  <edmx:Reference Uri="https://oasis-tcs.github.io/odata-vocabularies/vocabularies/Org.OData.Core.V1.xml">
+    <edmx:Include Alias="Core" Namespace="Org.OData.Core.V1"/>
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="CatalogService">
+      <EntityContainer Name="EntityContainer">
+        <EntitySet Name="spaces" EntityType="CatalogService.spaces">
+          <NavigationPropertyBinding Path="assets" Target="assets"/>
+        </EntitySet>
+        <EntitySet Name="assets" EntityType="CatalogService.assets">
+          <NavigationPropertyBinding Path="space" Target="spaces"/>
+        </EntitySet>
+      </EntityContainer>
+      <EntityType Name="spaces">
+        <Key>
+          <PropertyRef Name="name"/>
+        </Key>
+        <Property Name="name" Type="Edm.String" Nullable="false"/>
+        <Property Name="label" Type="Edm.String"/>
+        <NavigationProperty Name="assets" Type="Collection(CatalogService.assets)" Partner="space">
+          <OnDelete Action="Cascade"/>
+        </NavigationProperty>
+      </EntityType>
+      <EntityType Name="assets">
+        <Key>
+          <PropertyRef Name="spaceName"/>
+          <PropertyRef Name="name"/>
+        </Key>
+        <NavigationProperty Name="space" Type="CatalogService.spaces" Partner="assets">
+          <ReferentialConstraint Property="spaceName" ReferencedProperty="name"/>
+        </NavigationProperty>
+        <Property Name="spaceName" Type="Edm.String" Nullable="false"/>
+        <Property Name="name" Type="Edm.String" Nullable="false"/>
+        <Property Name="label" Type="Edm.String"/>
+        <Property Name="assetRelationalMetadataUrl" Type="Edm.String"/>
+        <Property Name="assetRelationalDataUrl" Type="Edm.String"/>
+        <Property Name="assetAnalyticalMetadataUrl" Type="Edm.String"/>
+        <Property Name="assetAnalyticalDataUrl" Type="Edm.String"/>
+        <Property Name="supportsAnalyticalQueries" Type="Edm.Boolean"/>
+      </EntityType>
+      <Annotations Target="CatalogService.EntityContainer/spaces">
+        <Annotation Term="Capabilities.DeleteRestrictions">
+          <Record Type="Capabilities.DeleteRestrictionsType">
+            <PropertyValue Property="Deletable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="Capabilities.InsertRestrictions">
+          <Record Type="Capabilities.InsertRestrictionsType">
+            <PropertyValue Property="Insertable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="Capabilities.UpdateRestrictions">
+          <Record Type="Capabilities.UpdateRestrictionsType">
+            <PropertyValue Property="Updatable" Bool="false"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="CatalogService.EntityContainer/assets">
+        <Annotation Term="Capabilities.DeleteRestrictions">
+          <Record Type="Capabilities.DeleteRestrictionsType">
+            <PropertyValue Property="Deletable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="Capabilities.InsertRestrictions">
+          <Record Type="Capabilities.InsertRestrictionsType">
+            <PropertyValue Property="Insertable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="Capabilities.UpdateRestrictions">
+          <Record Type="Capabilities.UpdateRestrictionsType">
+            <PropertyValue Property="Updatable" Bool="false"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@sap/datasphere-cli": "^2025.16.0"
+  }
+}

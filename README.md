@@ -143,7 +143,66 @@ Functions return rows with consistent columns: `method`, `status`, `url`, `heade
 - `http_patch(url, body, [content_type], [headers], [accept], [auth], [auth_type], [timeout])`
 - `http_delete(url, [headers], [accept], [auth], [auth_type], [timeout])`
 
-Examples:
+### Authentication Precedence
+
+HTTP functions support two authentication methods with clear precedence:
+
+1. **Function Parameters (Highest Priority)**: Use the `auth` and `auth_type` named parameters
+2. **DuckDB Secrets (Fallback)**: Use registered secrets scoped to the URL
+
+**Important**: When the `auth` parameter is provided, it **always takes precedence** over registered secrets, regardless of whether a secret exists for the URL.
+
+#### Using Function Parameters
+
+```sql
+-- Basic authentication (default auth_type)
+SELECT * FROM http_get('https://api.example.com/data', 
+                      auth := 'username:password');
+
+-- Bearer token authentication
+SELECT * FROM http_get('https://api.example.com/data', 
+                      auth := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+                      auth_type := 'BEARER');
+
+-- Username only (password will be empty, defaults to BASIC auth)
+SELECT * FROM http_get('https://api.example.com/data', 
+                      auth := 'username_only');
+
+-- Explicit BASIC authentication
+SELECT * FROM http_get('https://api.example.com/data', 
+                      auth := 'user:pass',
+                      auth_type := 'BASIC');
+```
+
+#### Using DuckDB Secrets (Fallback)
+
+When no `auth` parameter is provided, the functions automatically use registered secrets:
+
+```sql
+-- Create a secret for basic authentication
+CREATE SECRET api_auth (
+  TYPE http_basic,
+  USERNAME 'secret_user',
+  PASSWORD 'secret_pass',
+  SCOPE 'https://api.example.com/'
+);
+
+-- This will use the secret (no auth parameter)
+SELECT * FROM http_get('https://api.example.com/data');
+
+-- This will use the auth parameter and ignore the secret
+SELECT * FROM http_get('https://api.example.com/data', 
+                      auth := 'override_user:override_pass');
+```
+
+#### Authentication Type Support
+
+- **BASIC**: Username and password (format: `username:password`)
+- **BEARER**: Token-based authentication (the entire `auth` value is used as the token)
+
+**Note**: The `auth_type` parameter defaults to `BASIC` when not specified.
+
+### Examples
 
 ```sql
 -- JSON body
@@ -160,22 +219,19 @@ SELECT * FROM http_post('https://httpbin.org/anything','Hello','text/plain');
 SELECT * FROM http_post('https://httpbin.org/anything','a=1&b=2','application/x-www-form-urlencoded');
 ```
 
-Authentication and secrets:
+### Debugging Authentication
+
+Enable tracing to see which authentication source is being used:
 
 ```sql
--- Basic auth
-SELECT * FROM http_get('https://api.example.com/secure', auth:='user:pass', auth_type:='BASIC');
+SET erpl_trace_enabled = TRUE;
+SET erpl_trace_level = 'DEBUG';
 
--- Bearer token
-SELECT * FROM http_get('https://api.example.com/secure', auth:='token', auth_type:='BEARER');
+-- This will show "Using auth parameter" in the trace
+SELECT * FROM http_get('https://api.example.com/data', auth := 'user:pass');
 
--- DuckDB HTTP secrets are picked up automatically by scope
-CREATE SECRET (
-  TYPE http_bearer,
-  TOKEN 'your-token',
-  SCOPE 'https://api.example.com/'
-);
-SELECT * FROM http_get('https://api.example.com/secure');
+-- This will show "No auth parameter provided, using registered secrets" in the trace
+SELECT * FROM http_get('https://api.example.com/data');
 ```
 
 Character sets and binary:
