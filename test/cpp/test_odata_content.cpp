@@ -1,7 +1,7 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
-#include "erpl_odata_content.hpp"
+#include "odata_content.hpp"
 
 using namespace erpl_web;
 using namespace std;

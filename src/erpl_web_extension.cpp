@@ -7,17 +7,17 @@
 #include "duckdb/function/pragma_function.hpp"
 
 #include "erpl_web_extension.hpp"
-#include "erpl_web_functions.hpp"
-#include "erpl_secret_functions.hpp"
-#include "erpl_odata_attach_functions.hpp"
-#include "erpl_odata_read_functions.hpp"
-#include "erpl_odata_storage.hpp"
-#include "erpl_datasphere_catalog.hpp"
-#include "erpl_datasphere_read.hpp"
-#include "erpl_datasphere_secret.hpp"
-#include "erpl_odata_odp_functions.hpp"
+#include "web_functions.hpp"
+#include "secret_functions.hpp"
+#include "odata_attach_functions.hpp"
+#include "odata_read_functions.hpp"
+#include "odata_storage.hpp"
+#include "datasphere_catalog.hpp"
+#include "datasphere_read.hpp"
+#include "datasphere_secret.hpp"
+#include "odata_odp_functions.hpp"
 #include "telemetry.hpp"
-#include "erpl_tracing.hpp"
+#include "tracing.hpp"
 
 namespace duckdb {
 

@@ -56,37 +56,39 @@ include_directories(
 )
 
 set(EXTENSION_SOURCES
-    src/erpl_tracing.cpp
+    src/tracing.cpp
     src/duckdb_argument_helper.cpp
     src/charset_converter.cpp
-    src/erpl_http_client.cpp
-    src/erpl_odata_attach_functions.cpp
-    src/erpl_odata_catalog.cpp
-    src/erpl_odata_client.cpp
-    src/erpl_odata_content.cpp
-    src/erpl_odata_edm.cpp
-    src/erpl_odata_predicate_pushdown_helper.cpp
-    src/erpl_odata_expand_parser.cpp
-    src/erpl_odata_read_functions.cpp
-    src/erpl_odata_storage.cpp
-    src/erpl_odata_transaction_manager.cpp
-    src/erpl_secret_functions.cpp
-    src/erpl_web_functions.cpp
+    src/http_client.cpp
+    src/odata_attach_functions.cpp
+    src/odata_catalog.cpp
+    src/odata_client.cpp
+    src/odata_content.cpp
+    src/odata_edm.cpp
+    src/odata_predicate_pushdown_helper.cpp
+    src/odata_expand_parser.cpp
+    src/odata_read_functions.cpp
+    src/odata_storage.cpp
+    src/odata_transaction_manager.cpp
+    src/secret_functions.cpp
+    src/web_functions.cpp
     src/erpl_web_extension.cpp
     src/telemetry.cpp
-    src/erpl_datasphere_client.cpp
-    src/erpl_datasphere_catalog.cpp
-    src/erpl_datasphere_read.cpp
-    src/erpl_datasphere_types.cpp
-    src/erpl_oauth2_types.cpp
-    src/erpl_datasphere_browser.cpp
-    src/erpl_datasphere_local_server.cpp
-    src/erpl_odata_odp_functions.cpp
-    src/erpl_datasphere_secret.cpp
-    src/erpl_oauth2_callback_handler.cpp
-    src/erpl_oauth2_flow_v2.cpp
-    src/erpl_oauth2_server.cpp
-    src/erpl_timeout_http_client.cpp
+    src/datasphere_client.cpp
+    src/datasphere_catalog.cpp
+    src/datasphere_read.cpp
+    src/datasphere_types.cpp
+    src/oauth2_types.cpp
+    src/oauth2_browser.cpp
+    src/datasphere_local_server.cpp
+    src/odata_odp_functions.cpp
+    src/datasphere_secret.cpp
+    src/oauth2_callback_handler.cpp
+    src/oauth2_flow_v2.cpp
+    src/oauth2_server.cpp
+    src/timeout_http_client.cpp
+    src/odata_behavior.cpp
+    src/odata_url_helpers.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

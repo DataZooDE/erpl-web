@@ -4,7 +4,7 @@
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
 
-#include "erpl_odata_edm.hpp"
+#include "odata_edm.hpp"
 
 using namespace erpl_web;
 using namespace std;

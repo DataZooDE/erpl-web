@@ -1,9 +1,9 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
-#include "erpl_oauth2_types.hpp"
-#include "erpl_datasphere_browser.hpp"
-#include "erpl_datasphere_local_server.hpp"
+#include "oauth2_types.hpp"
+#include "oauth2_browser.hpp"
+#include "datasphere_local_server.hpp"
 #include <iostream>
 #include <memory>
 
@@ -237,18 +237,18 @@ TEST_CASE("Test Browser Integration (Mock)", "[datasphere][oauth2][mock]")
     std::cout << std::endl;
     
     // Test browser integration without actually opening browser
-    // Note: DatasphereBrowserHelper is a static class, so we test its static methods
+    // Note: OAuth2Browser is a static class, so we test its static methods
     
     // Test URL opening (mock - static method)
     std::string test_url = "https://example.com";
-    // DatasphereBrowserHelper::OpenUrl(test_url); // This would actually open browser
+    // OAuth2Browser::OpenUrl(test_url); // This would actually open browser
     
     // Test port availability checking
-    bool port_available = DatasphereBrowserHelper::IsPortAvailable(8080);
+    bool port_available = OAuth2Browser::IsPortAvailable(8080);
     REQUIRE((port_available == true || port_available == false)); // Either result is valid
     
     // Test default browser detection
-    std::string default_browser = DatasphereBrowserHelper::GetDefaultBrowser();
+    std::string default_browser = OAuth2Browser::GetDefaultBrowser();
     REQUIRE(!default_browser.empty());
     
     std::cout << "✅ Browser integration test completed" << std::endl;

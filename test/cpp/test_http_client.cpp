@@ -6,7 +6,7 @@
 #include "duckdb.hpp"
 
 #include "charset_converter.hpp"
-#include "erpl_http_client.hpp"
+#include "http_client.hpp"
 #include "duckdb_argument_helper.hpp"
 
 using namespace erpl_web;

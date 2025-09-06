@@ -1,8 +1,8 @@
 #include "catch.hpp"
-#include "erpl_odata_read_functions.hpp"
-#include "erpl_odata_client.hpp"
-#include "erpl_http_client.hpp"
-#include "erpl_http_auth.hpp"
+#include "odata_read_functions.hpp"
+#include "odata_client.hpp"
+#include "http_client.hpp"
+#include "http_auth.hpp"
 
 using namespace erpl_web;
 
