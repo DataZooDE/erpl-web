@@ -63,18 +63,33 @@ void ODataClient<TResponse>::DetectODataVersion()
 
     ERPL_TRACE_INFO("ODATA_CLIENT", "Fetching metadata to detect OData version from: " + metadata_url);
     
-    // Fetch metadata to detect version
-    auto metadata_response = DoMetadataHttpGet(metadata_url);
-    auto content = metadata_response->Content();
-    
-    // Parse metadata to detect version
-    auto edmx = Edmx::FromXml(content);
-    odata_version = edmx.GetVersion();
-    
-    ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
-    
-    // Cache the metadata with detected version
-    EdmCache::GetInstance().Set(metadata_url, edmx);
+    try {
+        // Fetch metadata to detect version
+        auto metadata_response = DoMetadataHttpGet(metadata_url);
+        if (!metadata_response) {
+            ERPL_TRACE_WARN("ODATA_CLIENT", "Failed to get metadata response, will try to detect from data response");
+            return;
+        }
+        
+        auto content = metadata_response->Content();
+        if (content.empty()) {
+            ERPL_TRACE_WARN("ODATA_CLIENT", "Empty metadata content, will try to detect from data response");
+            return;
+        }
+        
+        // Parse metadata to detect version
+        auto edmx = Edmx::FromXml(content);
+        odata_version = edmx.GetVersion();
+        
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
+        
+        // Cache the metadata with detected version
+        EdmCache::GetInstance().Set(metadata_url, edmx);
+        
+    } catch (const std::exception& e) {
+        ERPL_TRACE_WARN("ODATA_CLIENT", "Failed to fetch or parse metadata: " + std::string(e.what()) + ", will try to detect from data response");
+        // Don't throw here - we'll try to detect version from the actual data response
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -315,6 +330,11 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
     ERPL_TRACE_DEBUG("ODATA_CLIENT", "Executing HTTP GET request");
     auto http_response = DoHttpGet(request_url);
     
+    if (!http_response) {
+        ERPL_TRACE_ERROR("ODATA_CLIENT", "Failed to get HTTP response");
+        return nullptr;
+    }
+    
     // Detect OData version from raw HTTP response content if not already known
     if (odata_version == ODataVersion::UNKNOWN) {
         auto content_str = http_response->Content();
@@ -322,7 +342,9 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
             auto detected_version = ODataJsonContentMixin::DetectODataVersion(content_str);
             odata_version = detected_version;
             std::string version_str = (odata_version == ODataVersion::V2 ? "V2" : "V4");
-            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Detected OData version from response: " + version_str);
+            ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version from response: " + version_str);
+        } else {
+            ERPL_TRACE_WARN("ODATA_CLIENT", "Non-JSON content type, cannot detect OData version from response");
         }
     }
     
@@ -401,44 +423,11 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
                     }
                 }
             }
-            
-            // Also try to construct a proper metadata context URL with the fragment
-            // This might help with metadata lookup
-            if (!current_entity_name_from_fragment.empty()) {
-                // Construct the fragment like "flights_view('AA')/Set"
-                std::string fragment = current_entity_name_from_fragment + "(";
-                bool first = true;
-                for (const auto& [key, value] : input_parameters) {
-                    if (!first) {
-                        fragment += ",";
-                    }
-                    first = false;
-                    
-                    // Handle different value types according to SAP Datasphere documentation
-                    if (value.find_first_not_of("0123456789.-") == std::string::npos && value.find('.') != std::string::npos) {
-                        // Numeric value (no quotes needed)
-                        fragment += key + "=" + value;
-                    } else if (value.find_first_not_of("0123456789-") == std::string::npos && value.find('-') != std::string::npos && value.length() == 10) {
-                        // Date value (no quotes needed)
-                        fragment += key + "=" + value;
-                    } else {
-                        // Text value (enclosed in single quotes)
-                        fragment += key + "='" + value + "'";
-                    }
-                }
-                fragment += ")/Set";
-                
-                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Constructed metadata context fragment: " + fragment);
-            }
         }
     }
-
+    
     return current_response;
 }
-
-
-
-// (duplicate definition removed)
 
 void ODataEntitySetClient::SetEntitySetNameFromContextFragment(const std::string &context_or_fragment)
 {

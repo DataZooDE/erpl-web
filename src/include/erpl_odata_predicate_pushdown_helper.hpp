@@ -23,72 +23,72 @@ public:
     // Function type for resolving column names from activated indices
     using ColumnNameResolver = std::function<std::string(duckdb::column_t)>;
     
-    ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names);
+    explicit ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names);
     
-    // Set the column name resolver function
+    // Set OData version for proper syntax generation
+    void SetODataVersion(ODataVersion version);
+    ODataVersion GetODataVersion() const;
+    
+    // Column name resolution
     void SetColumnNameResolver(ColumnNameResolver resolver);
-
+    
+    // Consume DuckDB operations and convert to OData clauses
     void ConsumeColumnSelection(const std::vector<duckdb::column_t> &column_ids);
     void ConsumeFilters(duckdb::optional_ptr<duckdb::TableFilterSet> filters);
-    
-    // New methods for LIMIT and OFFSET support
     void ConsumeLimit(duckdb::idx_t limit);
     void ConsumeOffset(duckdb::idx_t offset);
-    
-    // Method to consume result modifiers (for LIMIT/OFFSET)
+    void ConsumeExpand(const std::string& expand_clause);
     void ConsumeResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers);
     
-    // Method to consume expand clause
-    void ConsumeExpand(const std::string& expand_clause);
-
-    HttpUrl ApplyFiltersToUrl(const HttpUrl &base_url);
-
+    // Get generated OData clauses
     std::string SelectClause() const;
     std::string FilterClause() const;
     std::string TopClause() const;
     std::string SkipClause() const;
     std::string ExpandClause() const;
     
-    // OData v2-specific query options
-    void SetInlineCount(bool enabled) { inline_count_enabled = enabled; }
-    void SetSkipToken(const std::string& token) { skip_token = token; }
-    void SetODataVersion(ODataVersion version) { odata_version = version; }
+    // Apply all clauses to a URL
+    HttpUrl ApplyFiltersToUrl(const HttpUrl &base_url);
     
+    // Inline count and skip token support
+    void EnableInlineCount(bool enable);
+    void SetSkipToken(const std::string& token);
     std::string InlineCountClause() const;
     std::string SkipTokenClause() const;
 
 private:
+    // OData version for proper syntax generation
+    ODataVersion odata_version = ODataVersion::V4; // Default to V4
+    
+    // Column information
     std::vector<std::string> all_column_names;
-    std::vector<duckdb::column_t> column_selection;
+    ColumnNameResolver column_name_resolver;
+    
+    // Generated OData clauses
     std::string select_clause;
     std::string filter_clause;
-    
-    // New clauses for LIMIT and OFFSET
     std::string top_clause;
     std::string skip_clause;
-    
-    // Expand clause
     std::string expand_clause;
     
-    // OData v2-specific options
+    // Additional features
     bool inline_count_enabled = false;
     std::optional<std::string> skip_token;
-    ODataVersion odata_version = ODataVersion::V4;
     
-    // Column name resolver function
-    ColumnNameResolver column_name_resolver;
-
+    // Helper methods for building clauses
     std::string BuildSelectClause(const std::vector<duckdb::column_t> &column_ids) const;
     std::string BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) const;
     std::string BuildTopClause(duckdb::idx_t limit) const;
     std::string BuildSkipClause(duckdb::idx_t offset) const;
     
-    // Helper method to process result modifiers
-    void ProcessResultModifier(const duckdb::BoundResultModifier &modifier);
+    // Filter translation methods
     std::string TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const;
     std::string TranslateConstantComparison(const duckdb::ConstantFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const;
+    
+    // Result modifier processing
+    void ProcessResultModifier(const duckdb::BoundResultModifier &modifier);
 };
 
 } // namespace erpl_web

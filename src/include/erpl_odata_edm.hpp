@@ -1,17 +1,15 @@
 #pragma once
 
-#include <algorithm>
-#include <any>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <regex>
-#include <stdexcept>
+#include "duckdb.hpp"
+#include "erpl_tracing.hpp"
+#include "tinyxml2.h"
 #include <string>
-#include <unordered_map>
-#include <variant>
 #include <vector>
+#include <map>
+#include <regex>
+#include <variant>
 #include <iostream>
+#include <memory>
 
 // Cross-platform string comparison
 #ifdef _WIN32
@@ -20,9 +18,6 @@
 #else
 #include <strings.h>
 #endif
-
-#include "duckdb.hpp"
-#include "tinyxml2.h"
 
 namespace erpl_web 
 {
@@ -1947,8 +1942,37 @@ public:
         auto [ns, local_type_name] = SplitNamespace(type_name);
         if (! ns.empty()) {
             for (const auto& schema : data_services.schemas) {
-                if (schema.ns == ns) {
+                // Match either full namespace or alias
+                if (schema.ns == ns || (!schema.alias.empty() && schema.alias == ns)) {
                     return schema.FindType(local_type_name);
+                }
+            }
+        }
+
+        // No namespace provided or not matched: try resolving by local name across all schemas (V2 often omits namespaces)
+        for (const auto& schema : data_services.schemas) {
+            // Attempt entity types
+            for (const auto &entity_type : schema.entity_types) {
+                if (entity_type.name == local_type_name) {
+                    return entity_type;
+                }
+            }
+            // Attempt complex types
+            for (const auto &complex_type : schema.complex_types) {
+                if (complex_type.name == local_type_name) {
+                    return complex_type;
+                }
+            }
+            // Attempt enum types
+            for (const auto &enum_type : schema.enum_types) {
+                if (enum_type.name == local_type_name) {
+                    return enum_type;
+                }
+            }
+            // Attempt type definitions
+            for (const auto &type_def : schema.type_definitions) {
+                if (type_def.name == local_type_name) {
+                    return type_def;
                 }
             }
         }
@@ -2046,7 +2070,7 @@ class DuckTypeConverter
             } else if (edm_type == "Edm.Duration") {
                 return "INTERVAL";
             } else if (edm_type == "Edm.Guid") {
-                return "UUID";
+                return "VARCHAR";
             } else if (edm_type == "Edm.Int16") {
                 return "SMALLINT";
             } else if (edm_type == "Edm.Int32") {
@@ -2079,6 +2103,8 @@ class DuckTypeConverter
                 return duckdb::LogicalTypeId::TINYINT;
             } else if (type == erpl_web::Date) {
                 return duckdb::LogicalTypeId::DATE;
+            } else if (type == erpl_web::DateTime) {
+                return duckdb::LogicalTypeId::TIMESTAMP;
             } else if (type == erpl_web::DateTimeOffset) {
                 return duckdb::LogicalTypeId::TIMESTAMP;
             } else if (type == erpl_web::Decimal) {
@@ -2088,7 +2114,7 @@ class DuckTypeConverter
             } else if (type == erpl_web::Duration) {
                 return duckdb::LogicalTypeId::INTERVAL;
             } else if (type == erpl_web::Guid) {
-                return duckdb::LogicalTypeId::UUID;
+                return duckdb::LogicalTypeId::VARCHAR;
             } else if (type == erpl_web::Int16) {
                 return duckdb::LogicalTypeId::SMALLINT;
             } else if (type == erpl_web::Int32) {
@@ -2157,9 +2183,10 @@ class DuckTypeConverter
             }
             AddPropertiesAsFields(fields, type.properties);
             
-            // TODO: Add navigation properties as fields once we resolve the circular reference issue
-            // For now, navigation properties are excluded to prevent crashes
-            // AddNavigationPropertiesAsFields(fields, type.navigation_properties);
+            // IMPORTANT: Do NOT add navigation properties into entity struct fields used for column types
+            // Navigation properties are surfaced as separate expanded columns via $expand.
+            // Including them here creates nested structs/lists for nav props and causes parsing/type issues.
+            // If needed for other scenarios, add behind a controlled flag.
 
             return duckdb::LogicalType::STRUCT(fields);
         }
@@ -2182,8 +2209,21 @@ class DuckTypeConverter
             for (const auto &property : properties) 
             {
                 auto [is_collection, type_name] = ExtractCollectionType(property.type_name);
-                auto field_type = edmx.FindType(type_name);
-                auto duck_type = std::visit(*this, field_type);
+                duckdb::LogicalType duck_type;
+
+                // Special-case Edm.Decimal to honor precision/scale metadata
+                if (type_name == "Edm.Decimal") {
+                    int precision = property.precision > 0 ? property.precision : 18;
+                    int scale = property.scale >= 0 ? property.scale : 0;
+                    if (precision < 1) precision = 18;
+                    if (precision > 38) precision = 38;
+                    if (scale < 0) scale = 0;
+                    if (scale > precision) scale = precision;
+                    duck_type = duckdb::LogicalType::DECIMAL(precision, scale);
+                } else {
+                    auto field_type = edmx.FindType(type_name);
+                    duck_type = std::visit(*this, field_type);
+                }
 
                 if (is_collection) {
                     duck_type = duckdb::LogicalType::LIST(duck_type);
@@ -2214,6 +2254,93 @@ class DuckTypeConverter
             auto base_child_list = duckdb::StructType::GetChildTypes(duck_type);
             for (size_t i = 0; i < base_child_list.size(); i++) {
                 fields.push_back(base_child_list[i]);
+            }
+        }
+
+        void AddNavigationPropertiesAsFields(duckdb::child_list_t<duckdb::LogicalType> &fields, const std::vector<NavigationProperty> &navigation_properties) const
+        {
+            for (const auto &nav_prop : navigation_properties) 
+            {
+                try {
+                    auto [is_collection, type_name] = ExtractCollectionType(nav_prop.type);
+                    
+                    // Try to find the target type in EDM metadata
+                    duckdb::LogicalType field_type;
+                    
+                    if (type_name.find("Edm.") == 0) {
+                        // Primitive type - convert directly
+                        field_type = ConvertPrimitiveTypeString(type_name);
+                    } else {
+                        // Entity or complex type - avoid infinite recursion by using a simple approach
+                        // For navigation properties, we'll use a basic STRUCT type to avoid circular references
+                        try {
+                            // Check if it's a collection type
+                            if (is_collection) {
+                                // For collections, use LIST of STRUCT with basic fields
+                                field_type = duckdb::LogicalType::LIST(duckdb::LogicalTypeId::VARCHAR);
+                            } else {
+                                // For single entities, use STRUCT with basic fields
+                                field_type = duckdb::LogicalTypeId::VARCHAR;
+                            }
+                        } catch (const std::exception& e) {
+                            // If anything goes wrong, fall back to VARCHAR
+                            ERPL_TRACE_DEBUG("EDM_TYPE_CONVERSION", "Error processing navigation property type '" + type_name + "', using VARCHAR fallback: " + e.what());
+                            field_type = duckdb::LogicalTypeId::VARCHAR;
+                        }
+                    }
+
+                    if (is_collection) {
+                        field_type = duckdb::LogicalType::LIST(field_type);
+                    }
+
+                    fields.push_back(std::make_pair(nav_prop.name, field_type));
+                } catch (const std::exception& e) {
+                    // If anything goes wrong, fall back to VARCHAR
+                    ERPL_TRACE_DEBUG("EDM_TYPE_CONVERSION", "Error processing navigation property '" + nav_prop.name + "', using VARCHAR fallback: " + e.what());
+                    fields.push_back(std::make_pair(nav_prop.name, duckdb::LogicalTypeId::VARCHAR));
+                }
+            }
+        }
+
+        duckdb::LogicalType ConvertPrimitiveTypeString(const std::string& type_name) const
+        {
+            if (type_name == "Edm.Binary") {
+                return duckdb::LogicalTypeId::BLOB;
+            } else if (type_name == "Edm.Boolean") {
+                return duckdb::LogicalTypeId::BOOLEAN;
+            } else if (type_name == "Edm.Byte" || type_name == "Edm.SByte") {
+                return duckdb::LogicalTypeId::TINYINT;
+            } else if (type_name == "Edm.Date") {
+                return duckdb::LogicalTypeId::DATE;
+            } else if (type_name == "Edm.DateTime" || type_name == "Edm.DateTimeOffset") {
+                return duckdb::LogicalTypeId::TIMESTAMP;
+            } else if (type_name == "Edm.Decimal") {
+                return duckdb::LogicalTypeId::DECIMAL;
+            } else if (type_name == "Edm.Double") {
+                return duckdb::LogicalTypeId::DOUBLE;
+            } else if (type_name == "Edm.Duration") {
+                return duckdb::LogicalTypeId::INTERVAL;
+            } else if (type_name == "Edm.Guid") {
+                return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type_name == "Edm.Int16") {
+                return duckdb::LogicalTypeId::SMALLINT;
+            } else if (type_name == "Edm.Int32") {
+                return duckdb::LogicalTypeId::INTEGER;
+            } else if (type_name == "Edm.Int64") {
+                return duckdb::LogicalTypeId::BIGINT;
+            } else if (type_name == "Edm.Single") {
+                return duckdb::LogicalTypeId::FLOAT;
+            } else if (type_name == "Edm.Stream") {
+                return duckdb::LogicalTypeId::BLOB;
+            } else if (type_name == "Edm.String") {
+                return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type_name == "Edm.TimeOfDay") {
+                return duckdb::LogicalTypeId::TIME;
+            } else if (type_name.find("Edm.Geography") == 0 || type_name.find("Edm.Geometry") == 0) {
+                return duckdb::LogicalTypeId::VARCHAR; // Geography/Geometry types as VARCHAR for now
+            } else {
+                // Fallback for unknown types - treat as VARCHAR
+                return duckdb::LogicalTypeId::VARCHAR;
             }
         }
 

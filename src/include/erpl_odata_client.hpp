@@ -61,6 +61,9 @@ public:
     std::vector<std::vector<duckdb::Value>> ToRows(std::vector<std::string> &column_names, 
                                                    std::vector<duckdb::LogicalType> &column_types);
     
+    // Expose raw response content for downstream processing (e.g., expand extraction)
+    std::string RawContent() const { return http_response->Content(); }
+    
     ODataVersion GetODataVersion() const { return odata_version; }
 private:
     std::shared_ptr<ODataEntitySetContent> CreateODataContent(const std::string& content, ODataVersion odata_version) override;

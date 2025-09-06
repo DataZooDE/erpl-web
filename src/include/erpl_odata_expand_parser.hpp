@@ -15,8 +15,17 @@ public:
         std::string top_clause;
         std::string skip_clause;
         
+        // Enhanced fields for data extraction
+        std::string full_expand_path;  // Full path including options
+        std::string column_name;       // Clean column name for result set
+        bool has_options;              // Whether this expand has query options
+        
         ExpandPath() = default;
         ExpandPath(const std::string& prop) : navigation_property(prop) {}
+        
+        // Helper methods
+        bool IsSimpleExpand() const { return !has_options && sub_expands.empty(); }
+        std::string GetCleanColumnName() const { return column_name.empty() ? navigation_property : column_name; }
     };
     
     // Parse an OData expand clause into structured paths

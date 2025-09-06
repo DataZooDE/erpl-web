@@ -24,8 +24,8 @@ public:
     std::string space_id; // for assets only
     
     // Override column names and types for Datasphere-specific schema
-    std::vector<std::string> GetResultNames(bool all_columns = false) override;
-    std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false) override;
+    std::vector<std::string> GetResultNames(bool all_columns = false);
+    std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
 };
 
 // Simple bind data for listing spaces via DWAAS core API
