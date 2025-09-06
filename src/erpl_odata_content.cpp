@@ -131,6 +131,26 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val* json_value
     
     try {
         switch (duck_type.id()) {
+            case duckdb::LogicalTypeId::DECIMAL: {
+                // Handle JSON null values by returning SQL NULL
+                if (yyjson_is_null(json_value)) {
+                    return duckdb::Value();
+                }
+
+                // Accept numeric or string, then cast into requested DECIMAL type
+                if (yyjson_is_str(json_value)) {
+                    std::string s = yyjson_get_str(json_value);
+                    return duckdb::Value(s).DefaultCastAs(duck_type);
+                } else if (yyjson_is_int(json_value)) {
+                    int64_t v = yyjson_get_int(json_value);
+                    return duckdb::Value::BIGINT(v).DefaultCastAs(duck_type);
+                } else if (yyjson_is_real(json_value)) {
+                    double v = yyjson_get_real(json_value);
+                    return duckdb::Value::DOUBLE(v).DefaultCastAs(duck_type);
+                }
+                ThrowTypeError(json_value, "decimal (string or number)");
+                return duckdb::Value();
+            }
             case duckdb::LogicalTypeId::DATE: {
                 // Handle JSON null values by returning SQL NULL
                 if (yyjson_is_null(json_value)) {
@@ -164,17 +184,31 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val* json_value
                 // Expect ISO-8601 datetime string or epoch seconds as int
                 if (yyjson_is_str(json_value)) {
                     std::string s = yyjson_get_str(json_value);
+                    // Handle OData V2 legacy format: /Date(ms[+/-HHMM])/
+                    if (s.size() >= 8 && s.rfind("/Date(", 0) == 0 && s.substr(s.size() - 2) == ")/") {
+                        // Extract milliseconds part before optional timezone offset
+                        std::string inner = s.substr(6, s.size() - 8);
+                        size_t pos = inner.find_first_of("+-", 1);
+                        std::string ms_str = (pos == std::string::npos) ? inner : inner.substr(0, pos);
+                        try {
+                            long long ms = std::stoll(ms_str);
+                            long long sec = ms / 1000;
+                            return duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(sec));
+                        } catch (...) {
+                            // fall back to ISO handling below
+                        }
+                    }
                     // Use DuckDB's string cast
                     return duckdb::Value(s).DefaultCastAs(duckdb::LogicalType(duckdb::LogicalTypeId::TIMESTAMP));
                 } else if (yyjson_is_int(json_value)) {
                     // Interpret as seconds since epoch
                     int64_t seconds = yyjson_get_int(json_value);
-                    return duckdb::Value::TIMESTAMP(duckdb::timestamp_t(seconds));
+                    return duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(seconds));
                 } else if (yyjson_is_real(json_value)) {
                     // Interpret as seconds since epoch (with fractional seconds)
                     double seconds = yyjson_get_real(json_value);
                     int64_t whole_seconds = static_cast<int64_t>(seconds);
-                    return duckdb::Value::TIMESTAMP(duckdb::timestamp_t(whole_seconds));
+                    return duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(whole_seconds));
                 }
                 ThrowTypeError(json_value, "timestamp (string ISO-8601 or integer/real seconds)");
                 return duckdb::Value::TIMESTAMP(duckdb::timestamp_t(0));
@@ -260,6 +294,11 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt8(yyjson_val* json_
         if (val >= INT8_MIN && val <= INT8_MAX) {
             return duckdb::Value::TINYINT(static_cast<int8_t>(val));
         }
+    } else if (yyjson_is_uint(json_value)) {
+        uint64_t val = yyjson_get_uint(json_value);
+        if (val <= static_cast<uint64_t>(INT8_MAX)) {
+            return duckdb::Value::TINYINT(static_cast<int8_t>(val));
+        }
     } else if (yyjson_is_str(json_value)) {
         try {
             int8_t val = static_cast<int8_t>(std::stoi(yyjson_get_str(json_value)));
@@ -316,6 +355,11 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt16(yyjson_val* json
     if (yyjson_is_int(json_value)) {
         int64_t val = yyjson_get_int(json_value);
         if (val >= INT16_MIN && val <= INT16_MAX) {
+            return duckdb::Value::SMALLINT(static_cast<int16_t>(val));
+        }
+    } else if (yyjson_is_uint(json_value)) {
+        uint64_t val = yyjson_get_uint(json_value);
+        if (val <= static_cast<uint64_t>(INT16_MAX)) {
             return duckdb::Value::SMALLINT(static_cast<int16_t>(val));
         }
     } else if (yyjson_is_str(json_value)) {
@@ -376,6 +420,11 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt32(yyjson_val* json
         if (val >= INT32_MIN && val <= INT32_MAX) {
             return duckdb::Value::INTEGER(static_cast<int32_t>(val));
         }
+    } else if (yyjson_is_uint(json_value)) {
+        uint64_t val = yyjson_get_uint(json_value);
+        if (val <= static_cast<uint64_t>(INT32_MAX)) {
+            return duckdb::Value::INTEGER(static_cast<int32_t>(val));
+        }
     } else if (yyjson_is_str(json_value)) {
         try {
             int32_t val = static_cast<int32_t>(std::stoi(yyjson_get_str(json_value)));
@@ -431,6 +480,11 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonSignedInt64(yyjson_val* json
     
     if (yyjson_is_int(json_value)) {
         return duckdb::Value::BIGINT(yyjson_get_int(json_value));
+    } else if (yyjson_is_uint(json_value)) {
+        uint64_t val = yyjson_get_uint(json_value);
+        if (val <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+            return duckdb::Value::BIGINT(static_cast<int64_t>(val));
+        }
     } else if (yyjson_is_str(json_value)) {
         try {
             int64_t val = std::stoll(yyjson_get_str(json_value));
@@ -488,6 +542,8 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonFloat(yyjson_val* json_value
         return duckdb::Value::FLOAT(static_cast<float>(yyjson_get_real(json_value)));
     } else if (yyjson_is_int(json_value)) {
         return duckdb::Value::FLOAT(static_cast<float>(yyjson_get_int(json_value)));
+    } else if (yyjson_is_uint(json_value)) {
+        return duckdb::Value::FLOAT(static_cast<float>(yyjson_get_uint(json_value)));
     } else if (yyjson_is_str(json_value)) {
         try {
             float val = std::stof(yyjson_get_str(json_value));
@@ -516,6 +572,8 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonDouble(yyjson_val* json_valu
         return duckdb::Value::DOUBLE(yyjson_get_real(json_value));
     } else if (yyjson_is_int(json_value)) {
         return duckdb::Value::DOUBLE(static_cast<double>(yyjson_get_int(json_value)));
+    } else if (yyjson_is_uint(json_value)) {
+        return duckdb::Value::DOUBLE(static_cast<double>(yyjson_get_uint(json_value)));
     } else if (yyjson_is_str(json_value)) {
         try {
             double val = std::stod(yyjson_get_str(json_value));
@@ -546,6 +604,21 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonString(yyjson_val* json_valu
         
         // Create a safe copy of the string
         std::string safe_string(str_ptr, str_len);
+        
+        // Normalize OData V2 legacy date format /Date(ms[+/-HHMM])/: convert to ISO string
+        if (safe_string.size() >= 8 && safe_string.rfind("/Date(", 0) == 0 && safe_string.substr(safe_string.size() - 2) == ")/") {
+            std::string inner = safe_string.substr(6, safe_string.size() - 8);
+            size_t pos = inner.find_first_of("+-", 1);
+            std::string ms_str = (pos == std::string::npos) ? inner : inner.substr(0, pos);
+            try {
+                long long ms = std::stoll(ms_str);
+                long long sec = ms / 1000;
+                auto ts_val = duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(sec));
+                return ts_val.DefaultCastAs(duckdb::LogicalType::VARCHAR);
+            } catch (...) {
+                // ignore and fall back to raw string
+            }
+        }
         
         try {
             return duckdb::Value(safe_string);
@@ -611,6 +684,17 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val* json_value
         return duckdb::Value(); // Return SQL NULL value
     }
     
+    // OData V2 expanded collections are often wrapped as { "results": [ ... ] }
+    // If we expect a LIST but see an object with a 'results' array, unwrap it.
+    if (!yyjson_is_arr(json_value)) {
+        if (yyjson_is_obj(json_value)) {
+            auto results_field = yyjson_obj_get(json_value, "results");
+            if (results_field && yyjson_is_arr(results_field)) {
+                json_value = results_field; // unwrap to the actual array
+            }
+        }
+    }
+
     if (!yyjson_is_arr(json_value)) {
         ThrowTypeError(json_value, "array");
         // Use the proper constructor for empty lists with explicit type
@@ -659,32 +743,56 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonObject(yyjson_val* json_valu
     
     auto child_types = duckdb::StructType::GetChildTypes(duck_type);
     duckdb::child_list_t<duckdb::Value> struct_values;
-    
-    size_t idx, max;
-    yyjson_val* json_key, *json_val;
-    yyjson_obj_foreach(json_value, idx, max, json_key, json_val) {
-        if (yyjson_is_str(json_key)) {
-            std::string key = yyjson_get_str(json_key);
-            
-            // Find matching child type
-            duckdb::LogicalType child_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR); // Default
-            for (const auto& child_type_pair : child_types) {
-                if (child_type_pair.first == key) {
-                    child_type = child_type_pair.second;
-                    break;
+
+    // Helper: case-insensitive search for a key in the JSON object when exact match is missing
+    auto find_case_insensitive = [&](const std::string &target) -> yyjson_val* {
+        size_t it_idx, it_max;
+        yyjson_val *it_key, *it_val;
+        yyjson_obj_foreach(json_value, it_idx, it_max, it_key, it_val) {
+            if (yyjson_is_str(it_key)) {
+                std::string current = yyjson_get_str(it_key);
+                if (current.size() == target.size()) {
+                    bool equal = true;
+                    for (size_t i = 0; i < current.size(); i++) {
+                        if (std::tolower(current[i]) != std::tolower(target[i])) {
+                            equal = false;
+                            break;
+                        }
+                    }
+                    if (equal) {
+                        return it_val;
+                    }
                 }
             }
-            
-            try {
-                auto value = DeserializeJsonValue(json_val, child_type);
-                struct_values.emplace_back(key, value);
-            } catch (const std::exception& e) {
-                ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize object field '" + key + "': " + std::string(e.what()));
-                // Continue with other fields
+        }
+        return nullptr;
+    };
+
+    // Only materialize schema-declared fields; ignore unknown properties like '__metadata' or nested nav objects
+    for (const auto &child_type_pair : child_types) {
+        const std::string &field_name = child_type_pair.first;
+        const duckdb::LogicalType &field_type = child_type_pair.second;
+
+        yyjson_val *field_json = yyjson_obj_get(json_value, field_name.c_str());
+        if (!field_json) {
+            // Try case-insensitive match if exact key is absent
+            field_json = find_case_insensitive(field_name);
+        }
+
+        try {
+            if (field_json) {
+                auto value = DeserializeJsonValue(field_json, field_type);
+                struct_values.emplace_back(field_name, value);
+            } else {
+                // Missing field in JSON: set NULL of the appropriate type
+                struct_values.emplace_back(field_name, duckdb::Value());
             }
+        } catch (const std::exception &e) {
+            ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize object field '" + field_name + "': " + std::string(e.what()));
+            struct_values.emplace_back(field_name, duckdb::Value());
         }
     }
-    
+
     return duckdb::Value::STRUCT(struct_values);
 }
 

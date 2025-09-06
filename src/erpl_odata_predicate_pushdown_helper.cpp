@@ -92,6 +92,25 @@ void ODataPredicatePushdownHelper::ConsumeResultModifiers(const std::vector<duck
     }
 }
 
+void ODataPredicatePushdownHelper::SetODataVersion(ODataVersion version) {
+    odata_version = version;
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Set OData version to: " + std::string(version == ODataVersion::V2 ? "V2" : "V4"));
+}
+
+ODataVersion ODataPredicatePushdownHelper::GetODataVersion() const {
+    return odata_version;
+}
+
+void ODataPredicatePushdownHelper::EnableInlineCount(bool enable) {
+    inline_count_enabled = enable;
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Inline count " + std::string(enable ? "enabled" : "disabled"));
+}
+
+void ODataPredicatePushdownHelper::SetSkipToken(const std::string& token) {
+    skip_token = token;
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Set skip token to: " + token);
+}
+
 
 
 HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url) {
@@ -127,74 +146,135 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
         }
     }
     
-    // Build the new query string
-    std::string new_query = "";
-    
-    // Collect all query clauses
-    std::vector<std::string> clauses;
-    
-    // Handle $select - only add if not already present in URL (support both "$select" and "select")
-    if (!select_clause.empty() && existing_params.find("$select") == existing_params.end() && existing_params.find("select") == existing_params.end()) {
-        clauses.push_back(select_clause);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding select clause: " + select_clause);
-    }
-    
-    if (!filter_clause.empty()) {
-        clauses.push_back(filter_clause);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding filter clause: " + filter_clause);
-    }
-    
-    // Add new OData clauses
-    if (!top_clause.empty()) {
-        clauses.push_back(top_clause);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding top clause: " + top_clause);
-    }
-    
-    if (!skip_clause.empty()) {
-        clauses.push_back(skip_clause);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding skip clause: " + skip_clause);
-    }
-    
-    // Add expand clause
-    if (!expand_clause.empty()) {
-        clauses.push_back(expand_clause);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding expand clause: " + expand_clause);
-    }
-    
-
-    
-    // Add OData v2-specific options
-    std::string inline_count = InlineCountClause();
-    if (!inline_count.empty()) {
-        clauses.push_back(inline_count);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding inline count clause: " + inline_count);
-    }
-    
-    std::string skip_token = SkipTokenClause();
-    if (!skip_token.empty()) {
-        clauses.push_back(skip_token);
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Adding skip token clause: " + skip_token);
-    }
-    
-    // Build the final query string
-    if (!clauses.empty()) {
-        // Start with existing query parameters
-        if (!existing_query.empty() && existing_query != "?") {
-            new_query = existing_query;
-        } else {
-            new_query = "?";
-        }
-        
-        // Add new clauses
-        for (size_t i = 0; i < clauses.size(); ++i) {
-            if (new_query != "?" && !new_query.empty()) {
-                new_query += "&";
+    // For OData V2: if a $select is present and we have an $expand, we must also include
+    // the expanded navigation properties in $select or many services omit them from the payload.
+    // This differs from V4 where $expand is sufficient.
+    if (odata_version == ODataVersion::V2 && !select_clause.empty()) {
+        // Determine effective expand list (from our stored clause or existing URL)
+        std::string expand_list;
+        if (!expand_clause.empty()) {
+            // expand_clause is of the form "$expand=..."
+            auto pos = expand_clause.find('=');
+            if (pos != std::string::npos && pos + 1 < expand_clause.size()) {
+                expand_list = expand_clause.substr(pos + 1);
             }
-            new_query += clauses[i];
+        } else {
+            auto it = existing_params.find("$expand");
+            if (it != existing_params.end()) {
+                expand_list = it->second;
+            }
         }
+
+        if (!expand_list.empty()) {
+            // Parse currently selected fields: select_clause is "$select=a,b,..."
+            std::string select_fields;
+            {
+                auto pos = select_clause.find('=');
+                if (pos != std::string::npos && pos + 1 < select_clause.size()) {
+                    select_fields = select_clause.substr(pos + 1);
+                }
+            }
+
+            // Build a set of selected field names for quick lookup
+            std::set<std::string> selected;
+            if (!select_fields.empty()) {
+                std::istringstream ss(select_fields);
+                std::string item;
+                while (std::getline(ss, item, ',')) {
+                    // trim spaces
+                    size_t start = item.find_first_not_of(' ');
+                    size_t end = item.find_last_not_of(' ');
+                    if (start == std::string::npos) continue;
+                    selected.insert(item.substr(start, end - start + 1));
+                }
+            }
+
+            // For each expanded item, add its top-level nav prop to $select if missing
+            std::vector<std::string> to_append;
+            {
+                std::istringstream ss(expand_list);
+                std::string exp;
+                while (std::getline(ss, exp, ',')) {
+                    // trim
+                    size_t start = exp.find_first_not_of(' ');
+                    size_t end = exp.find_last_not_of(' ');
+                    if (start == std::string::npos) continue;
+                    std::string nav = exp.substr(start, end - start + 1);
+                    // Stop at '(' (options) and '/' (nested path)
+                    size_t paren = nav.find('(');
+                    if (paren != std::string::npos) nav = nav.substr(0, paren);
+                    size_t slash = nav.find('/');
+                    if (slash != std::string::npos) nav = nav.substr(0, slash);
+                    if (!nav.empty() && selected.find(nav) == selected.end()) {
+                        to_append.push_back(nav);
+                    }
+                }
+            }
+
+            if (!to_append.empty()) {
+                std::ostringstream rebuilt;
+                rebuilt << "$select=" << select_fields;
+                for (auto &nav : to_append) {
+                    if (!select_fields.empty()) {
+                        rebuilt << "," << nav;
+                    } else {
+                        // In case select_fields was empty after parsing, still handle correctly
+                        rebuilt << nav;
+                    }
+                }
+                select_clause = rebuilt.str();
+                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Augmented V2 $select with expanded nav props: " + select_clause);
+            }
+        }
+    }
+
+    // Merge/overwrite parameters from our generated clauses into existing_params,
+    // then rebuild the query string. This avoids duplicates (e.g., $top twice).
+    auto upsert_param = [&](const std::string &clause, bool overwrite_always) {
+        if (clause.empty()) return;
+        auto pos = clause.find('=');
+        if (pos == std::string::npos || pos + 1 >= clause.size()) return;
+        std::string key = clause.substr(0, pos);
+        std::string value = clause.substr(pos + 1);
+        if (overwrite_always || existing_params.find(key) == existing_params.end()) {
+            existing_params[key] = value;
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", std::string("Set param '") + key + "' = '" + value + "'");
+        } else {
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", std::string("Keeping existing param '") + key + "' = '" + existing_params[key] + "'");
+        }
+    };
+
+    // $select: overwrite to latest selection
+    upsert_param(select_clause, true);
+    // $filter: overwrite to latest
+    upsert_param(filter_clause, true);
+    // $top/$skip: overwrite to latest
+    upsert_param(top_clause, true);
+    upsert_param(skip_clause, true);
+    // $expand: only set if not already present (respect explicit URL expand)
+    upsert_param(expand_clause, false);
+    // v2-specific inline count and skip token: overwrite
+    {
+        auto inline_count = InlineCountClause();
+        upsert_param(inline_count, true);
+        auto skip_token = SkipTokenClause();
+        upsert_param(skip_token, true);
+    }
+
+    // Rebuild final query from existing_params
+    std::string new_query = existing_query;
+    if (existing_params.empty()) {
+        // Keep as-is
     } else {
-        // No new clauses, keep existing query
-        new_query = existing_query;
+        std::ostringstream oss;
+        oss << "?";
+        bool first = true;
+        for (const auto &kv : existing_params) {
+            if (!first) oss << "&";
+            first = false;
+            oss << kv.first << "=" << kv.second;
+        }
+        new_query = oss.str();
     }
 
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Final query: '" + new_query + "'");
@@ -564,12 +644,26 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
     result << comparison_operator;
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Using comparison operator: " + comparison_operator);
 
-    // Handle different data types properly for OData
+    // Handle different data types properly for OData V2 vs V4
     if (filter.constant.type().id() == duckdb::LogicalTypeId::VARCHAR || 
         filter.constant.type().id() == duckdb::LogicalTypeId::CHAR) {
-        // String values need single quotes
-        result << " '" << constant_value << "'";
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added string value with quotes: '" + constant_value + "'");
+        // String values need proper quoting based on OData version
+        if (odata_version == ODataVersion::V2) {
+            // OData V2: Use single quotes and escape internal single quotes
+            std::string escaped_value = constant_value;
+            // Replace single quotes with double single quotes for OData V2
+            size_t pos = 0;
+            while ((pos = escaped_value.find("'", pos)) != std::string::npos) {
+                escaped_value.replace(pos, 1, "''");
+                pos += 2;
+            }
+            result << " '" << escaped_value << "'";
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V2 string value with escaped quotes: '" + escaped_value + "'");
+        } else {
+            // OData V4: Use single quotes (standard)
+            result << " '" << constant_value << "'";
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V4 string value with quotes: '" + constant_value + "'");
+        }
     } else if (filter.constant.type().id() == duckdb::LogicalTypeId::INTEGER ||
                filter.constant.type().id() == duckdb::LogicalTypeId::BIGINT ||
                filter.constant.type().id() == duckdb::LogicalTypeId::DOUBLE ||
@@ -584,8 +678,20 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added boolean value: " + bool_value);
     } else {
         // For other types, try to convert to string but be cautious
-        result << " '" << constant_value << "'";
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added other type value with quotes: '" + constant_value + "'");
+        if (odata_version == ODataVersion::V2) {
+            // OData V2: Use single quotes and escape internal single quotes
+            std::string escaped_value = constant_value;
+            size_t pos = 0;
+            while ((pos = escaped_value.find("'", pos)) != std::string::npos) {
+                escaped_value.replace(pos, 1, "''");
+                pos += 2;
+            }
+            result << " '" << escaped_value << "'";
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V2 other type value with escaped quotes: '" + escaped_value + "'");
+        } else {
+            result << " '" << constant_value << "'";
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V4 other type value with quotes: '" + constant_value + "'");
+        }
     }
     
     std::string final_result = result.str();

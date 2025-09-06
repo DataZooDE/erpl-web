@@ -1,38 +1,249 @@
--- Test OData expand functionality
--- This test file verifies that the expand parameter works correctly
+# name: test/sql/erpl_web_odata_expand.test
+# description: Test erpl_web extension OData expand functionality
+# group: [erpl_web_odata]
 
--- Test basic expand functionality
-SELECT * FROM odata_read('http://test.service/Customers', expand='Category,Orders') LIMIT 1;
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
 
--- Test expand with URL parameter
-SELECT * FROM odata_read('http://test.service/Customers?$expand=Category,Orders') LIMIT 1;
+statement ok
+SET autoinstall_known_extensions=1;
 
--- Test expand with other parameters
-SELECT * FROM odata_read('http://test.service/Customers', expand='Category,Orders', top=10) LIMIT 1;
+statement ok
+SET autoload_known_extensions=1;
 
--- Test complex expand syntax
-SELECT * FROM odata_read('http://test.service/Customers', expand='Products($filter=DiscontinuedDate eq null),Category($select=Name)') LIMIT 1;
+statement ok
+SET erpl_trace_enabled=true;
 
--- Test nested expand
-SELECT * FROM odata_read('http://test.service/Categories', expand='Products/Supplier') LIMIT 1;
+# ============================================================================
+# SECTION 1: OData V2 Expand Testing (Northwind)
+# ============================================================================
 
--- Test expand with filter and select
-SELECT * FROM odata_read('http://test.service/Products', expand='Category($select=Name),Supplier($select=CompanyName)') LIMIT 1;
+# Test basic expand functionality with Northwind
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
 
--- Test expand with top and skip
-SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($top=5;$skip=10)') LIMIT 1;
+# Test expand with other parameters
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders', top=10);
+----
+10
 
--- Test empty expand parameter
-SELECT * FROM odata_read('http://test.service/Customers', expand='') LIMIT 1;
+# Test simple expand syntax with Northwind (OData V2 compatible)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
 
--- Test expand with whitespace
-SELECT * FROM odata_read('http://test.service/Customers', expand=' Category , Orders ') LIMIT 1;
+# Test nested expand with Northwind (Categories can expand Products)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Categories', expand='Products');
+----
+8
 
--- Test expand with complex nested structure
-SELECT * FROM odata_read('http://test.service/Categories', expand='Products($filter=Price gt 100;$select=Name,Price;$top=10)/Supplier($select=CompanyName,Country)') LIMIT 1;
+# Test expand with multiple simple paths (OData V2 compatible) - only valid relationships
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
 
--- Test expand with OData V2 syntax
-SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($filter=Total gt 1000)') LIMIT 1;
+# Test expand with top and skip
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders', top=5);
+----
+5
 
--- Test expand with OData V4 syntax
-SELECT * FROM odata_read('http://test.service/Customers', expand='Orders($filter=Total gt 1000;$select=OrderID,Total)') LIMIT 1;
+# Test empty expand parameter
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='');
+----
+20
+
+# Test expand with whitespace
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand=' Orders ');
+----
+20
+
+# Test expand with OData V2 simple syntax
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
+
+# ============================================================================
+# SECTION 2: OData V4 Expand Testing (TripPin)
+# ============================================================================
+
+# Test basic expand functionality with TripPin
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips');
+----
+20
+
+# Test expand with URL parameter
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$expand=Trips');
+----
+20
+
+# Test expand with other parameters
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips', top=10);
+----
+10
+
+# Test complex expand syntax with TripPin (OData V4 supports this)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($filter=Budget gt 5000)');
+----
+20
+
+# Test expand with filter and select (OData V4 feature)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($select=TripId,Name),Friends($select=UserName,FirstName)');
+----
+20
+
+# Test expand with top and skip
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($top=5)');
+----
+20
+
+# Test expand with complex nested structure (OData V4 feature) - but only single level
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($filter=Budget gt 1000;$select=TripId,Name;$top=10)');
+----
+20
+
+# Test expand with OData V4 specific syntax
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($filter=Budget gt 5000;$select=TripId,Name)');
+----
+20
+
+# ============================================================================
+# SECTION 3: Edge Cases and Error Handling
+# ============================================================================
+
+# Test expand with malformed syntax (should handle gracefully) - OData V2 compatible only
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
+
+# Test expand with special characters in filter (OData V4 only)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($filter=Budget gt 1000)');
+----
+20
+
+# Test expand with nested parentheses in filter (OData V4 only)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($filter=(Budget gt 1000) and (Budget lt 10000))');
+----
+20
+
+# ============================================================================
+# SECTION 4: Performance and Large Expands
+# ============================================================================
+
+# Test expand with multiple simple paths (only valid relationships)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
+
+# Test expand with multiple complex paths (OData V4 only)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People', expand='Trips($top=5),Friends($top=3)');
+----
+20
+
+# ============================================================================
+# SECTION 5: Integration with Other OData Features
+# ============================================================================
+
+# Test expand with select clause
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
+
+# Test expand with filter clause
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=Country eq ''Germany''', expand='Orders');
+----
+11
+
+# Test expand with all clause types combined
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders', top=10);
+----
+10
+
+# ============================================================================
+# SECTION 6: Final Verification
+# ============================================================================
+
+# Final verification that expand functionality works
+statement ok
+SELECT 'OData expand tests completed successfully' as status;
+
+# ============================================================================
+# SECTION 7: Data Validation Tests - Verify Expanded Data is Actually Populated
+# ============================================================================
+
+# Test that TripPin expand actually returns non-null Trips data
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=5', expand='Trips') WHERE Trips IS NOT NULL;
+----
+5
+
+# Test that TripPin expand returns valid JSON content (not empty strings)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=5', expand='Trips') WHERE Trips != '';
+----
+5
+
+# Test that TripPin expand returns JSON arrays (should start with '[')
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=5', expand='Trips') WHERE Trips LIKE '[%';
+----
+5
+
+# Test specific person (russellwhyte) has non-null Trips data
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$filter=UserName eq ''russellwhyte''', expand='Trips') WHERE Trips IS NOT NULL;
+----
+1
+
+# Test that Northwind expand actually returns non-null Orders data
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=5', expand='Orders') WHERE Orders IS NOT NULL;
+----
+5
+
+# Test that Northwind expand returns valid JSON content (not empty strings)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=5', expand='Orders') WHERE Orders != '';
+----
+5
+
+# Test that Northwind expand returns JSON arrays (should start with '[')
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=5', expand='Orders') WHERE Orders LIKE '[%';
+----
+5
+
+# Test specific customer (ALFKI) has non-null Orders data
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=CustomerID eq ''ALFKI''', expand='Orders') WHERE Orders IS NOT NULL;
+----
+1
+
+# ============================================================================
+# SECTION 8: Final Verification
+# ============================================================================

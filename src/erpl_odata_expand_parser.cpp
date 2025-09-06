@@ -7,32 +7,31 @@ namespace erpl_web {
 
 std::vector<ODataExpandParser::ExpandPath> ODataExpandParser::ParseExpandClause(const std::string& expand_clause) {
     std::vector<ExpandPath> paths;
+    if (expand_clause.empty()) { return paths; }
     
-    if (expand_clause.empty()) {
-        return paths;
-    }
-    
-    // Split by comma to handle multiple expand paths
     auto path_strings = SplitByComma(expand_clause);
-    
     for (const auto& path_str : path_strings) {
         ExpandPath path;
-        
-        // Extract navigation property (before any parentheses or slashes)
+        path.full_expand_path = path_str;
         path.navigation_property = ExtractNavigationProperty(path_str);
-        
-        // Extract sub-expands (after slashes)
         path.sub_expands = ExtractSubExpands(path_str);
-        
-        // Extract OData query options (in parentheses)
         path.filter_clause = ExtractFilterClause(path_str);
         path.select_clause = ExtractSelectClause(path_str);
         path.top_clause = ExtractTopClause(path_str);
         path.skip_clause = ExtractSkipClause(path_str);
         
+        // Determine if this expand has options
+        path.has_options = !path.filter_clause.empty() || 
+                          !path.select_clause.empty() || 
+                          !path.top_clause.empty() || 
+                          !path.skip_clause.empty() ||
+                          !path.sub_expands.empty();
+        
+        // Set clean column name (navigation property without options)
+        path.column_name = path.navigation_property;
+        
         paths.push_back(path);
     }
-    
     return paths;
 }
 
