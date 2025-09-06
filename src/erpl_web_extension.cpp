@@ -19,10 +19,34 @@
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
-// Windows headers may redefine DEBUG macro after our tracing.hpp include
+// Windows headers may redefine macros after our tracing.hpp include
 #ifdef _WIN32
 #ifdef DEBUG
-#undef DEBUG
+    #undef DEBUG
+#endif
+#ifdef INFO
+    #undef INFO
+#endif
+#ifdef WARN
+    #undef WARN
+#endif
+#ifdef ERROR
+    #undef ERROR
+#endif
+#ifdef TRACE
+    #undef TRACE
+#endif
+#ifdef NONE
+    #undef NONE
+#endif
+#ifdef CONSOLE
+    #undef CONSOLE
+#endif
+#ifdef FILE
+    #undef FILE
+#endif
+#ifdef BOTH
+    #undef BOTH
 #endif
 #endif
 
