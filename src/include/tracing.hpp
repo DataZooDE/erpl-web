@@ -17,6 +17,9 @@
 #ifdef TRACE
 #undef TRACE
 #endif
+#ifdef DEBUG
+#undef DEBUG
+#endif
 #ifdef min
 #undef min
 #endif
