@@ -215,7 +215,7 @@ static void SapODataShowScan(duckdb::ClientContext &context,
     
     // Get the next batch of services
     idx_t start_idx = bind_data.next_index;
-    idx_t end_idx = std::min(start_idx + output.size(), bind_data.service_data.size());
+    idx_t end_idx = std::min(start_idx + output.size(), static_cast<idx_t>(bind_data.service_data.size()));
     idx_t count = end_idx - start_idx;
     
     if (count == 0) {
@@ -298,7 +298,7 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
     
     // Get the next batch of services
     idx_t start_idx = bind_data.next_index;
-    idx_t end_idx = std::min(start_idx + output.size(), bind_data.odp_service_data.size());
+    idx_t end_idx = std::min(start_idx + output.size(), static_cast<idx_t>(bind_data.odp_service_data.size()));
     idx_t count = end_idx - start_idx;
     
     if (count == 0) {
