@@ -20,6 +20,24 @@
 #ifdef DEBUG
 #undef DEBUG
 #endif
+#ifdef INFO
+#undef INFO
+#endif
+#ifdef WARN
+#undef WARN
+#endif
+#ifdef NONE
+#undef NONE
+#endif
+#ifdef CONSOLE
+#undef CONSOLE
+#endif
+#ifdef FILE
+#undef FILE
+#endif
+#ifdef BOTH
+#undef BOTH
+#endif
 #ifdef min
 #undef min
 #endif
