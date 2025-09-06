@@ -1,8 +1,8 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
-#include "erpl_datasphere_catalog.hpp"
-#include "erpl_datasphere_read.hpp"
+#include "datasphere_catalog.hpp"
+#include "datasphere_read.hpp"
 
 using namespace erpl_web;
 using namespace std;

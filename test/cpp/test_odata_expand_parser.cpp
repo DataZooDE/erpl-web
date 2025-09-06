@@ -1,5 +1,5 @@
 #include "catch.hpp"
-#include "erpl_odata_expand_parser.hpp"
+#include "odata_expand_parser.hpp"
 
 using namespace erpl_web;
 
