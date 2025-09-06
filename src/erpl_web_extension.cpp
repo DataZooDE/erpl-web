@@ -19,6 +19,13 @@
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
+// Windows headers may redefine DEBUG macro after our tracing.hpp include
+#ifdef _WIN32
+#ifdef DEBUG
+#undef DEBUG
+#endif
+#endif
+
 namespace duckdb {
 
 static void OnTelemetryEnabled(ClientContext &context, SetScope scope, Value &parameter)
