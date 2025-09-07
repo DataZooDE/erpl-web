@@ -9,3 +9,5 @@ test/python/__pycache__/
 .Rhistory
 vcpkg_installed/
 erpl_web_trace.log
+.ai
+test/wasm
