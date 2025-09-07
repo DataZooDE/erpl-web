@@ -1,0 +1,45 @@
+# name: test/sql/erpl_web_sap_odata_show.test
+# description: Test erpl_web extension SAP OData service discovery functionality
+# group: [erpl_web_sap_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+statement ok
+SET erpl_trace_level='INFO';
+
+# ============================================================================
+# SECTION 1: SAP OData to discovery
+# ============================================================================
+
+# Verify that SAP OData show function is registered
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'erpl_sap_odata_show';
+----
+1
+
+# Final verification that both functions are properly registered
+query I
+SELECT COUNT(*) FROM erpl_sap_odata_show('http://localhost:50000');
+----
+59
+
+# ============================================================================
+# SECTION 2: SAP ODP Enpoint discovery
+# ============================================================================
+
+# Verify that ODP OData show function is also registered
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'erpl_odp_odata_show';
+----
+1
+

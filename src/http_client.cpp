@@ -231,7 +231,8 @@ HttpParams::HttpParams()
       retry_wait_ms(DEFAULT_RETRY_WAIT_MS),
       retry_backoff(DEFAULT_RETRY_BACKOFF),
       force_download(DEFAULT_FORCE_DOWNLOAD),
-      keep_alive(DEFAULT_KEEP_ALIVE)
+      keep_alive(DEFAULT_KEEP_ALIVE),
+      url_encode(DEFAULT_URL_ENCODE)
 {
 }
 
@@ -518,10 +519,63 @@ duckdb_httplib_openssl::Headers HttpRequest::HttplibHeaders()
     return ret;
 }
 
-duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Client &client)
+duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Client &client, bool url_encode)
 {
     auto path_str = url.ToPathQuery();
+    
+    // When url_encode=false, the caller is responsible for fully prepared query encoding.
+    // We pass the path and query through unchanged to avoid double-encoding or protocol-specific logic here.
+    
     auto headers = HttplibHeaders();
+
+    // Emit a reproducible DuckDB SQL command for this request (helps isolate issues)
+    // Build absolute URL
+    std::string absolute_url = url.ToSchemeHostAndPort() + path_str;
+    auto escape_sql = [](const std::string &s) {
+        std::string out;
+        out.reserve(s.size() + 8);
+        for (char c : s) {
+            if (c == '\'') out += "''"; else out += c;
+        }
+        return out;
+    };
+    // Build headers MAP literal
+    std::string headers_map = "MAP{";
+    bool first_hdr = true;
+    for (const auto &h : headers) {
+        if (!first_hdr) headers_map += ", ";
+        first_hdr = false;
+        headers_map += "'" + escape_sql(h.first) + "': '" + escape_sql(h.second) + "'";
+    }
+    headers_map += "}";
+    // Choose function name and positional args
+    std::string func_name;
+    std::string positional_args;
+    if (method == HttpMethod::GET) {
+        func_name = "http_get";
+        positional_args = "'" + escape_sql(absolute_url) + "'";
+    } else if (method == HttpMethod::HEAD) {
+        func_name = "http_head";
+        positional_args = "'" + escape_sql(absolute_url) + "'";
+    } else if (method == HttpMethod::POST) {
+        func_name = "http_post";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+    } else if (method == HttpMethod::PUT) {
+        func_name = "http_put";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+    } else if (method == HttpMethod::PATCH) {
+        func_name = "http_patch";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+    } else if (method == HttpMethod::_DELETE) {
+        func_name = "http_delete";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+    } else {
+        func_name = method.ToString();
+        positional_args = "'" + escape_sql(absolute_url) + "'";
+    }
+    std::string sql_repro = "SELECT * FROM " + func_name + "(" + positional_args + ", headers := " + headers_map + 
+                            ", url_encode := " + std::string(url_encode ? "true" : "false") + ");";
+    ERPL_TRACE_INFO("HTTP_REQUEST_REPRO", "Reproduce with: " + sql_repro);
 
     // Log HTTP request details
     ERPL_TRACE_INFO("HTTP_REQUEST", "Executing " + method.ToString() + " request to: " + path_str);
@@ -752,7 +806,7 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
             // Use the configured HTTP parameters rather than default-constructing new ones
             auto params = this->http_params;
             auto client = CreateHttplibClient(params, request.url.ToSchemeHostAndPort());
-            auto res = request.Execute(*client);
+            auto res = request.Execute(*client, params.url_encode);
             err = res.error();
             if (err == duckdb_httplib_openssl::Error::Success) {
                     status = res->status;
@@ -827,10 +881,17 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
     c->set_follow_location(true);
 	c->set_keep_alive(http_params.keep_alive);
 	c->enable_server_certificate_verification(false);
-	c->set_write_timeout(http_params.timeout);
-	c->set_read_timeout(http_params.timeout);
-	c->set_connection_timeout(http_params.timeout);
+	// Interpret timeout as a single max-time budget in milliseconds and
+	// apply consistently to all per-operation timeouts.
+	{
+		auto timeout_ms = std::chrono::milliseconds(http_params.timeout);
+		c->set_write_timeout(timeout_ms);
+		c->set_read_timeout(timeout_ms);
+		c->set_connection_timeout(timeout_ms);
+	}
 	c->set_decompress(true);
+    // Control URL encoding behavior
+    c->set_url_encode(http_params.url_encode);
 	return c;
 }
 

@@ -89,6 +89,22 @@ private:
     
     // Result modifier processing
     void ProcessResultModifier(const duckdb::BoundResultModifier &modifier);
+    
+    // Refactored helper methods for ApplyFiltersToUrl
+    void LogCurrentClauses() const;
+    std::map<std::string, std::string> ParseExistingQueryParameters(const std::string& existing_query) const;
+    void ApplyV2SpecificLogic(std::map<std::string, std::string>& existing_params);
+    std::string GetEffectiveExpandList(const std::map<std::string, std::string>& existing_params) const;
+    std::string ExtractSelectFields() const;
+    std::set<std::string> ParseSelectedFields(const std::string& select_fields) const;
+    std::vector<std::string> FindMissingNavigationProperties(
+        const std::string& expand_list, 
+        const std::set<std::string>& selected) const;
+    void AugmentSelectClauseWithNavigationProperties(
+        const std::string& select_fields, 
+        const std::vector<std::string>& missing_nav_props);
+    void MergeParametersIntoQuery(std::map<std::string, std::string>& existing_params);
+    std::string RebuildQueryString(const std::map<std::string, std::string>& existing_params) const;
 };
 
 } // namespace erpl_web

@@ -12,7 +12,7 @@ statement ok
 SET autoload_known_extensions=1;
 
 statement ok
-SET erpl_trace_enabled=true;
+SET erpl_trace_enabled=false;
 
 # ============================================================================
 # OData v4 Service Testing (TripPin)
@@ -36,7 +36,6 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierServic
 ----
 10
 
-# Test OData v4 with $filter
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$filter=Gender eq ''Female''&$top=5');
 ----

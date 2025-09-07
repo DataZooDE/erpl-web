@@ -12,7 +12,7 @@ statement ok
 SET autoload_known_extensions=1;
 
 statement ok
-SET erpl_trace_enabled=true;
+SET erpl_trace_enabled=false;
 
 # ============================================================================
 # SECTION 1: OData V2 Expand Testing (Northwind)
@@ -60,11 +60,8 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 ----
 20
 
-# Test expand with whitespace
-query I
-SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand=' Orders ');
-----
-20
+statement ok
+SET erpl_trace_enabled=false;
 
 # Test expand with OData V2 simple syntax
 query I

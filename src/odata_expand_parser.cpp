@@ -36,6 +36,47 @@ namespace {
 		}
 		return std::string(key) + options.substr(value_start, value_end - value_start);
 	}
+
+	// Extract sub-expands from options substring, e.g., for "($expand=Services(),Other)" → ["Services", "Other"]
+	static inline std::vector<std::string> ExtractSubExpandsFromOptions(const std::string &path) {
+		std::vector<std::string> result;
+		const std::string options = ExtractOptionsSubstring(path);
+		if (options.empty()) {
+			return result;
+		}
+		std::string expand_clause = ExtractOptionClause(options, "$expand=");
+		if (expand_clause.empty()) {
+			return result;
+		}
+		// Strip the "$expand=" prefix
+		const std::string prefix = "$expand=";
+		if (expand_clause.rfind(prefix, 0) == 0) {
+			expand_clause = expand_clause.substr(prefix.size());
+		}
+		// Split by comma at top-level (simple parser; nested options are ignored here)
+		std::stringstream ss(expand_clause);
+		std::string item;
+		while (std::getline(ss, item, ',')) {
+			// Trim
+			size_t start = item.find_first_not_of(" \t\r\n");
+			size_t end = item.find_last_not_of(" \t\r\n");
+			std::string trimmed = (start == std::string::npos) ? std::string() : item.substr(start, end - start + 1);
+			if (trimmed.empty()) continue;
+			// Take the token before '(' if present, e.g., "Services()" → "Services"
+			size_t paren = trimmed.find('(');
+			if (paren != std::string::npos && paren > 0) {
+				trimmed = trimmed.substr(0, paren);
+				// Trim again
+				size_t s2 = trimmed.find_first_not_of(" \t\r\n");
+				size_t e2 = trimmed.find_last_not_of(" \t\r\n");
+				trimmed = (s2 == std::string::npos) ? std::string() : trimmed.substr(s2, e2 - s2 + 1);
+			}
+			if (!trimmed.empty()) {
+				result.push_back(trimmed);
+			}
+		}
+		return result;
+	}
 }
 
 std::vector<ODataExpandParser::ExpandPath> ODataExpandParser::ParseExpandClause(const std::string& expand_clause) {
@@ -48,6 +89,11 @@ std::vector<ODataExpandParser::ExpandPath> ODataExpandParser::ParseExpandClause(
         path.full_expand_path = path_str;
         path.navigation_property = ExtractNavigationProperty(path_str);
         path.sub_expands = ExtractSubExpands(path_str);
+        // Also include sub-expands defined inside options via $expand=
+        {
+            auto option_subs = ExtractSubExpandsFromOptions(path_str);
+            path.sub_expands.insert(path.sub_expands.end(), option_subs.begin(), option_subs.end());
+        }
         path.filter_clause = ExtractFilterClause(path_str);
         path.select_clause = ExtractSelectClause(path_str);
         path.top_clause = ExtractTopClause(path_str);

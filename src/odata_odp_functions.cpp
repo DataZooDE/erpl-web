@@ -2,7 +2,10 @@
 #include "tracing.hpp"
 #include "http_client.hpp"
 #include "odata_edm.hpp"
+#include "odata_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "duckdb_argument_helper.hpp"
+#include "yyjson.hpp"
 #include <sstream>
 
 namespace erpl_web {
@@ -29,59 +32,32 @@ void SapODataShowBindData::LoadServiceData() {
     ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Loading SAP OData services from: " + base_url);
     
     try {
-        // Discover OData V2 services (use exact same URL as HTTPie)
-        // Note: We need to avoid URL encoding of the semicolon in the path
-        std::string v2_catalog_url = base_url + "/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection?$top=3";
+        // Use the exact same approach as odata_read to ensure consistency
+        std::string v2_catalog_url = base_url + "/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection";
         
-        // Create request with base URL and manually set the path to avoid URL encoding
-        HttpRequest v2_request(HttpMethod::GET, HttpUrl(base_url));
-        // Override the path to avoid httplib URL encoding the semicolon
-        v2_request.url.Path("/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection");
-        v2_request.url.Query("?$top=3");
-        v2_request.SetODataVersion(ODataVersion::V2);
-        v2_request.AuthHeadersFromParams(*auth_params);
-        // Use exact same headers as HTTPie for compatibility
-        v2_request.headers["Accept"] = "*/*";
-        v2_request.headers["Accept-Encoding"] = "gzip, deflate";
-        v2_request.headers["Connection"] = "keep-alive";
-        v2_request.headers["Host"] = "localhost:50000";
-        v2_request.headers["User-Agent"] = "HTTPie/3.2.4";
+        // Create OData V2 client using the same approach as odata_read
+        HttpParams http_params;
+        http_params.url_encode = false;  // Disable URL encoding for OData V2
+        auto odata_http_client = std::make_shared<HttpClient>(http_params);
         
-        auto v2_response = http_client->SendRequest(v2_request);
-        if (!v2_response) {
+        // Ensure $format=json just like odata_read
+        HttpUrl v2_url(v2_catalog_url);
+        ODataUrlCodec::ensureJsonFormat(v2_url);
+
+        // Create OData client for the catalog service
+        auto odata_client = std::make_shared<ODataEntitySetClient>(odata_http_client, v2_url, auth_params);
+        odata_client->SetODataVersionDirectly(ODataVersion::V2);
+        
+        // Get the service data using the existing OData infrastructure
+        auto response = odata_client->Get();
+        if (!response) {
             throw std::runtime_error("Failed to get response from SAP OData V2 catalog endpoint");
         }
         
-        if (v2_response->Code() != 200) {
-            std::string error_msg = "SAP OData V2 catalog request failed with HTTP " + 
-                                   std::to_string(v2_response->Code()) + ": " + v2_response->Content();
-            ERPL_TRACE_ERROR("SAP_ODATA_SHOW", error_msg);
-            throw std::runtime_error(error_msg);
-        }
+        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Successfully retrieved V2 catalog using OData client");
         
-        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Successfully retrieved V2 catalog");
-        ParseODataV2Catalog(v2_response->Content());
-        
-        // Discover OData V4 services
-        std::string v4_catalog_url = base_url + "/sap/opu/odata4/iwfnd/config/default/iwfnd/catalog/0002/ServiceGroups?$expand=DefaultSystem($expand=Services())&$format=json";
-        HttpRequest v4_request(HttpMethod::GET, HttpUrl(v4_catalog_url));
-        v4_request.SetODataVersion(ODataVersion::V4);
-        v4_request.AuthHeadersFromParams(*auth_params);
-        
-        auto v4_response = http_client->SendRequest(v4_request);
-        if (!v4_response) {
-            throw std::runtime_error("Failed to get response from SAP OData V4 catalog endpoint");
-        }
-        
-        if (v4_response->Code() != 200) {
-            std::string error_msg = "SAP OData V4 catalog request failed with HTTP " + 
-                                   std::to_string(v4_response->Code()) + ": " + v4_response->Content();
-            ERPL_TRACE_ERROR("SAP_ODATA_SHOW", error_msg);
-            throw std::runtime_error(error_msg);
-        }
-        
-        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Successfully retrieved V4 catalog");
-        ParseODataV4Catalog(v4_response->Content());
+        // Use the same parsing logic as odata_read to extract service information
+        ParseODataV2CatalogFromResponse(response);
         
         data_loaded = true;
         ERPL_TRACE_INFO("SAP_ODATA_SHOW", "Service discovery completed, found " + std::to_string(service_data.size()) + " services");
@@ -179,7 +155,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SapODataShowBind(duckdb::ClientC
         auth_params->basic_credentials = std::make_tuple("DEVELOPER", "ABAPtr2023#00");
     }
     
-    auto http_client = std::make_shared<HttpClient>();
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
     
     auto bind_data = duckdb::make_uniq<SapODataShowBindData>(http_client, auth_params, base_url);
     
@@ -208,14 +186,17 @@ static void SapODataShowScan(duckdb::ClientContext &context,
         }
         
         // Return the discovered services
+        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Scan: service_data.size() = " + std::to_string(bind_data.service_data.size()) + ", next_index = " + std::to_string(bind_data.next_index));
         if (bind_data.service_data.empty()) {
+            ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Scan: service_data is empty, returning 0 rows");
             output.SetCardinality(0);
             return;
         }
     
-    // Get the next batch of services
+    // Get the next batch of services (align with STANDARD_VECTOR_SIZE semantics)
+    const idx_t target = STANDARD_VECTOR_SIZE;
     idx_t start_idx = bind_data.next_index;
-    idx_t end_idx = std::min(start_idx + output.size(), static_cast<idx_t>(bind_data.service_data.size()));
+    idx_t end_idx = std::min(start_idx + target, static_cast<idx_t>(bind_data.service_data.size()));
     idx_t count = end_idx - start_idx;
     
     if (count == 0) {
@@ -384,6 +365,20 @@ std::string ExtractXmlValue(const std::string& xml, const std::string& start_tag
     return xml.substr(start_pos, end_pos - start_pos);
 }
 
+// Helper function to extract string values from JSON objects
+std::string ExtractJsonString(duckdb_yyjson::yyjson_val* obj, const std::string& key) {
+    if (!obj || !duckdb_yyjson::yyjson_is_obj(obj)) {
+        return "";
+    }
+    
+    auto val = duckdb_yyjson::yyjson_obj_get(obj, key.c_str());
+    if (val && duckdb_yyjson::yyjson_is_str(val)) {
+        return std::string(duckdb_yyjson::yyjson_get_str(val));
+    }
+    
+    return "";
+}
+
 // Helper function to extract ODP entity sets from XML
 std::string ExtractOdpEntitySets(const std::string& entry_xml) {
     std::vector<std::string> odp_entity_sets;
@@ -432,57 +427,80 @@ std::string ExtractOdpEntitySets(const std::string& entry_xml) {
     return result;
 }
 
-void SapODataShowBindData::ParseODataV2Catalog(const std::string& content) {
-    // Parse Atom XML feed to extract OData services
-    // The content is an Atom XML feed with service entries
+void SapODataShowBindData::ParseODataV2CatalogFromResponse(std::shared_ptr<ODataEntitySetResponse> response) {
+    // Use the same JSON parsing logic as odata_read to extract service information
+    // This ensures consistency with the working OData V2 functionality
     
-    ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Parsing OData V2 catalog XML, content length: " + std::to_string(content.length()));
+    ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Parsing OData V2 catalog JSON response");
     
-    // Simple XML parsing using string operations (for now)
-    // In a production implementation, we'd use a proper XML parser
-    
-    size_t pos = 0;
-    while ((pos = content.find("<entry>", pos)) != std::string::npos) {
-        size_t entry_start = pos;
-        size_t entry_end = content.find("</entry>", entry_start);
-        if (entry_end == std::string::npos) break;
+    try {
+        // Get the raw JSON content from the response
+        auto content = response->RawContent();
+        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Response content length: " + std::to_string(content.length()));
         
-        std::string entry = content.substr(entry_start, entry_end - entry_start + 8);
-        
-        // Extract service ID
-        std::string service_id = ExtractXmlValue(entry, "<d:ID>", "</d:ID>");
-        if (service_id.empty()) {
-            pos = entry_end + 8;
-            continue;
+        // Parse JSON using the same approach as odata_read
+        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+        if (!doc) {
+            throw std::runtime_error("Failed to parse JSON response");
         }
         
-        // Extract description
-        std::string description = ExtractXmlValue(entry, "<d:Description>", "</d:Description>");
-        if (description.empty()) {
-            description = ExtractXmlValue(entry, "<d:Title>", "</d:Title>");
+        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        if (!root) {
+            duckdb_yyjson::yyjson_doc_free(doc);
+            throw std::runtime_error("Failed to get JSON root");
         }
         
-        // Extract service URL
-        std::string service_url = ExtractXmlValue(entry, "<d:ServiceUrl>", "</d:ServiceUrl>");
+        // Parse OData V2 format: {"d": {"results": [...]}}
+        auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+        if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
+            auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
+            if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
+                ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Found results array in OData V2 response");
+                
+                // Iterate through each service entry
+                duckdb_yyjson::yyjson_arr_iter arr_it;
+                duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
+                
+                duckdb_yyjson::yyjson_val* service_entry;
+                while ((service_entry = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
+                    if (duckdb_yyjson::yyjson_is_obj(service_entry)) {
+                        // Extract service information from JSON object
+                        std::string service_id = ExtractJsonString(service_entry, "ID");
+                        std::string description = ExtractJsonString(service_entry, "Description");
+                        if (description.empty()) {
+                            description = ExtractJsonString(service_entry, "Title");
+                        }
+                        std::string service_url = ExtractJsonString(service_entry, "ServiceUrl");
+                        std::string metadata_url = ExtractJsonString(service_entry, "MetadataUrl");
+                        
+                        if (!service_id.empty()) {
+                            // Create service row
+                            std::vector<duckdb::Value> service_row;
+                            service_row.push_back(duckdb::Value(service_id));
+                            service_row.push_back(duckdb::Value(description));
+                            service_row.push_back(duckdb::Value(service_url));
+                            service_row.push_back(duckdb::Value("V2"));
+                            service_row.push_back(duckdb::Value(metadata_url));
+                            
+                            service_data.push_back(service_row);
+                            ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Added V2 service: " + service_id + " (total services: " + std::to_string(service_data.size()) + ")");
+                        }
+                    }
+                }
+            } else {
+                ERPL_TRACE_WARN("SAP_ODATA_SHOW", "Could not find 'results' array in OData V2 response");
+            }
+        } else {
+            ERPL_TRACE_WARN("SAP_ODATA_SHOW", "Could not find 'd' object in OData V2 response");
+        }
         
-        // Extract metadata URL
-        std::string metadata_url = ExtractXmlValue(entry, "<d:MetadataUrl>", "</d:MetadataUrl>");
+        duckdb_yyjson::yyjson_doc_free(doc);
+        ERPL_TRACE_INFO("SAP_ODATA_SHOW", "Parsed " + std::to_string(service_data.size()) + " V2 services from JSON");
         
-        // Create service row
-        std::vector<duckdb::Value> service_row;
-        service_row.push_back(duckdb::Value(service_id));
-        service_row.push_back(duckdb::Value(description));
-        service_row.push_back(duckdb::Value(service_url));
-        service_row.push_back(duckdb::Value("V2"));
-        service_row.push_back(duckdb::Value(metadata_url));
-        
-        service_data.push_back(service_row);
-        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Added V2 service: " + service_id);
-        
-        pos = entry_end + 8;
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("SAP_ODATA_SHOW", "Error parsing OData V2 catalog response: " + std::string(e.what()));
+        throw;
     }
-    
-    ERPL_TRACE_INFO("SAP_ODATA_SHOW", "Parsed " + std::to_string(service_data.size()) + " V2 services from XML");
 }
 
 void SapODataShowBindData::ParseODataV4Catalog(const std::string& content) {

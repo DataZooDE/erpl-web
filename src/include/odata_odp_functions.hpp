@@ -7,6 +7,7 @@
 namespace erpl_web {
     class HttpClient;
     class HttpAuthParams;
+    class ODataEntitySetResponse;
 }
 #include <memory>
 #include <string>
@@ -33,7 +34,7 @@ public:
     void LoadServiceData();
     
 private:
-    void ParseODataV2Catalog(const std::string& content);
+    void ParseODataV2CatalogFromResponse(std::shared_ptr<ODataEntitySetResponse> response);
     void ParseODataV4Catalog(const std::string& content);
 };
 

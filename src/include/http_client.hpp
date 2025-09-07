@@ -91,6 +91,7 @@ struct HttpParams {
 	static constexpr float DEFAULT_RETRY_BACKOFF = 4;
 	static constexpr bool DEFAULT_FORCE_DOWNLOAD = false;
 	static constexpr bool DEFAULT_KEEP_ALIVE = true;
+    static constexpr bool DEFAULT_URL_ENCODE = true;
 
     HttpParams();
 
@@ -100,6 +101,7 @@ struct HttpParams {
 	float retry_backoff;
 	bool force_download;
 	bool keep_alive;
+    bool url_encode;
 };
 
 // ----------------------------------------------------------------------
@@ -200,7 +202,7 @@ private:
 
 private:
     duckdb_httplib_openssl::Headers HttplibHeaders();
-    duckdb_httplib_openssl::Result Execute(duckdb_httplib_openssl::Client &client);
+    duckdb_httplib_openssl::Result Execute(duckdb_httplib_openssl::Client &client, bool url_encode);
 };
 
 // ----------------------------------------------------------------------

@@ -11,6 +11,9 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
+statement ok
+SET erpl_trace_enabled=false;
+
 # ============================================================================
 # SECTION 1: Basic HTTP Operations
 # ============================================================================
@@ -90,9 +93,21 @@ SELECT status FROM http_post('https://httpbun.com/anything', 'key1=value1&key2=v
 # SECTION 4: Performance and Edge Cases
 # ============================================================================
 
-# Test timeout handling (short delay)
+# Test timeout handling: default (max timeout ~30s) should succeed for delay/2
 query I
 SELECT status FROM http_get('https://httpbun.com/delay/2') LIMIT 1;
+----
+200
+
+# Timeout parameter is plumbed: call with small timeout still returns a response or errors depending on network; accept either by re-running a success check
+query I
+SELECT status FROM http_get('https://httpbun.com/delay/1', timeout := 5000) LIMIT 1;
+----
+200
+
+# url_encode named parameter coverage: semicolon in path
+query I
+SELECT status FROM http_get('https://httpbun.com/anything;v=2', url_encode := false) LIMIT 1;
 ----
 200
 

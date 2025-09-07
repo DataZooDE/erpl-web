@@ -7,8 +7,8 @@
 namespace erpl_web {
 
 
-HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params) 
-    : TableFunctionData(), request(std::move(request)), auth_params(std::move(auth_params)), done(std::make_shared<bool>(false))
+HttpBindData::HttpBindData(std::shared_ptr<HttpRequest> request, std::shared_ptr<HttpAuthParams> auth_params, const HttpParams &http_params) 
+    : TableFunctionData(), request(std::move(request)), auth_params(std::move(auth_params)), done(std::make_shared<bool>(false)), http_params(http_params)
 { }
 
 std::vector<std::string> HttpBindData::GetResultNames() 
@@ -36,7 +36,7 @@ bool HttpBindData::HasMoreResults() const
 
 unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
 {
-    HttpClient client;
+    HttpClient client(http_params);
     auto response = client.SendRequest(*request);
     auto row = response->ToRow();
 
@@ -253,7 +253,14 @@ static unique_ptr<FunctionData> HttpGetBind(ClientContext &context,
 {
     PostHogTelemetry::Instance().CaptureFunctionExecution("http_get");
     auto auth_params = AuthParamsFromInput(context, input);
-    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::GET), auth_params);
+    HttpParams http_params;
+    if (HasParam(input.named_parameters, "timeout")) {
+        http_params.timeout = input.named_parameters["timeout"].GetValue<int64_t>();
+    }
+    if (HasParam(input.named_parameters, "url_encode")) {
+        http_params.url_encode = input.named_parameters["url_encode"].GetValue<bool>();
+    }
+    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::GET), auth_params, http_params);
     
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
@@ -268,7 +275,14 @@ static unique_ptr<FunctionData> HttpHeadBind(ClientContext &context,
 {
     PostHogTelemetry::Instance().CaptureFunctionExecution("http_head");
     auto auth_params = AuthParamsFromInput(context, input);
-    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::HEAD), auth_params);
+    HttpParams http_params;
+    if (HasParam(input.named_parameters, "timeout")) {
+        http_params.timeout = input.named_parameters["timeout"].GetValue<int64_t>();
+    }
+    if (HasParam(input.named_parameters, "url_encode")) {
+        http_params.url_encode = input.named_parameters["url_encode"].GetValue<bool>();
+    }
+    auto bind_data = make_uniq<HttpBindData>(RequestFromInput(*auth_params, input, HttpMethod::HEAD), auth_params, http_params);
     
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
@@ -283,7 +297,14 @@ static unique_ptr<FunctionData> HttpMutatingBind(ClientContext &context,
                                                  HttpMethod method) 
 {
     auto auth_params = AuthParamsFromInput(context, input);
-    auto bind_data = make_uniq<HttpBindData>(MutatingRequestFromInput(*auth_params, input, method), auth_params); 
+    HttpParams http_params;
+    if (HasParam(input.named_parameters, "timeout")) {
+        http_params.timeout = input.named_parameters["timeout"].GetValue<int64_t>();
+    }
+    if (HasParam(input.named_parameters, "url_encode")) {
+        http_params.url_encode = input.named_parameters["url_encode"].GetValue<bool>();
+    }
+    auto bind_data = make_uniq<HttpBindData>(MutatingRequestFromInput(*auth_params, input, method), auth_params, http_params); 
 
     names = bind_data->GetResultNames();
     return_types = bind_data->GetResultTypes();
@@ -384,6 +405,7 @@ static void AddDefaultHttpNamedParams(TableFunction &func)
     func.named_parameters["auth"] = LogicalType::VARCHAR;
     func.named_parameters["auth_type"] = CreateHttpAuthTypeType();
     func.named_parameters["timeout"] = LogicalType::INTEGER;
+    func.named_parameters["url_encode"] = LogicalType::BOOLEAN;
 }
 
 TableFunctionSet CreatHttpFunction(const std::string &http_verb, const duckdb::table_function_bind_t bind_func)

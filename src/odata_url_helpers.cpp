@@ -1,4 +1,5 @@
 #include "odata_url_helpers.hpp"
+#include <sstream>
 
 namespace erpl_web {
 
@@ -126,6 +127,229 @@ HttpUrl InputParametersFormatter::addParams(const HttpUrl &url,
     }
     modified_url.Path(new_path);
     return modified_url;
+}
+
+// ----------------------- ODataUrlCodec -----------------------
+
+static inline bool has_format_param(const std::string &query) {
+    if (query.empty() || query == "?") return false;
+    std::string q = query;
+    if (!q.empty() && q[0] == '?') q = q.substr(1);
+    std::istringstream iss(q);
+    std::string kv;
+    while (std::getline(iss, kv, '&')) {
+        auto pos = kv.find('=');
+        std::string key = pos == std::string::npos ? kv : kv.substr(0, pos);
+        if (key == "$format") return true;
+    }
+    return false;
+}
+
+std::string ODataUrlCodec::encodeQueryValue(const std::string &value) {
+    // Use httplib encode_query_param to encode query values
+    return duckdb_httplib_openssl::detail::encode_query_param(value);
+}
+
+std::string ODataUrlCodec::decodeQueryValue(const std::string &value) {
+    // Use httplib decode_url; do not convert '+' into spaces for safety
+    static const std::set<char> exclude{};
+    return duckdb_httplib_openssl::detail::decode_url(value, false, exclude);
+}
+
+void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
+    auto q = url.Query();
+    if (!has_format_param(q)) {
+        if (q.empty()) {
+            url.Query("?$format=json");
+        } else {
+            if (q == "?") {
+                url.Query("?$format=json");
+            } else if (q[0] == '?') {
+                url.Query(q + "&$format=json");
+            } else {
+                url.Query("?" + q + "&$format=json");
+            }
+        }
+    }
+}
+
+std::string ODataUrlCodec::encodeFilterExpression(const std::string &filter_expr) {
+    // Encode the entire filter expression as a query value so that spaces and quotes are percent-encoded
+    // This avoids 400s on services that require strict URL encoding of the $filter value
+    return encodeQueryValue(filter_expr);
+}
+
+// Normalize $expand syntax:
+// - Ensure nested option keys are prefixed with '$' (expand, select, filter, orderby, top, skip, levels, count, search, apply)
+// - Preserve nested structure and commas/parentheses
+// This is a best-effort normalizer; it does not fully parse OData grammar but fixes common cases.
+std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
+    if (expand_value.empty()) return expand_value;
+
+    // Known option keys that require a '$' prefix
+    static const std::set<std::string> option_keys = {
+        "expand", "select", "filter", "orderby", "top", "skip", "levels", "count", "search", "apply"
+    };
+
+    std::string out;
+    out.reserve(expand_value.size() + 8);
+
+    size_t i = 0;
+    while (i < expand_value.size()) {
+        // Copy navigation/property path until options or separator
+        while (i < expand_value.size()) {
+            char c = expand_value[i];
+            if (c == '(' || c == ',') break;
+            out += c;
+            i++;
+        }
+
+        if (i >= expand_value.size()) break;
+
+        if (expand_value[i] == ',') {
+            out += ',';
+            i++;
+            continue;
+        }
+
+        if (expand_value[i] == '(') {
+            // Parse options segment until matching ')'
+            out += '(';
+            i++; // after '('
+            size_t depth = 1;
+            std::string opt;
+            while (i < expand_value.size() && depth > 0) {
+                char c = expand_value[i];
+                if (c == '(') { depth++; opt += c; i++; continue; }
+                if (c == ')') {
+                    depth--;
+                    if (depth == 0) { i++; break; }
+                    opt += c; i++; continue;
+                }
+                opt += c; i++;
+            }
+
+            // Now normalize options list like "expand=Services();select=Id" (semicolon or comma separated)
+            // Split on ';' and ',' but not inside nested parentheses
+            std::vector<std::string> parts;
+            {
+                size_t j = 0, start = 0; int d = 0;
+                while (j <= opt.size()) {
+                    if (j == opt.size() || ((opt[j] == ';' || opt[j] == ',') && d == 0)) {
+                        if (j > start) parts.emplace_back(opt.substr(start, j - start));
+                        if (j < opt.size()) parts.emplace_back(std::string(1, opt[j]));
+                        j++; start = j; continue;
+                    }
+                    if (opt[j] == '(') d++;
+                    else if (opt[j] == ')') d--;
+                    j++;
+                }
+            }
+
+            // Rebuild with $-prefixed keys (default to $expand when key is missing)
+            for (auto &p : parts) {
+                if (p == ";" || p == ",") { out += p; continue; }
+                auto trimmed = p;
+                // trim spaces
+                size_t s = trimmed.find_first_not_of(' ');
+                size_t e = trimmed.find_last_not_of(' ');
+                if (s == std::string::npos) { out += p; continue; }
+                std::string core = trimmed.substr(s, e - s + 1);
+                auto eq = core.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = core.substr(0, eq);
+                    std::string val = core.substr(eq + 1);
+                    // If key is missing (e.g., "=Services()"), assume $expand
+                    if (key.empty()) {
+                        out += "$expand=" + val;
+                    } else {
+                        // strip leading '$' from key for lookup
+                        std::string key_stripped = key;
+                        if (!key_stripped.empty() && key_stripped[0] == '$') key_stripped = key_stripped.substr(1);
+                        std::string key_lower;
+                        key_lower.reserve(key_stripped.size());
+                        for (char ch : key_stripped) key_lower.push_back(std::tolower(ch));
+                        if (option_keys.count(key_lower)) {
+                            out += "$" + key_lower + "=" + val;
+                        } else {
+                            // not a known option key, keep as-is
+                            out += core;
+                        }
+                    }
+                } else {
+                    out += core; // no '=' -> keep
+                }
+            }
+
+            out += ')';
+        }
+    }
+    return out.empty() ? expand_value : out;
+}
+
+// Normalize expand and percent-encode ONLY nested $filter values inside option sections
+std::string ODataUrlCodec::normalizeAndSanitizeExpand(const std::string &expand_value) {
+    if (expand_value.empty()) return expand_value;
+    // First normalize structure
+    std::string normalized = normalizeExpand(expand_value);
+
+    // Walk through normalized string and encode values of $filter=... inside parentheses
+    std::string out;
+    out.reserve(normalized.size() + 16);
+    size_t i = 0;
+    while (i < normalized.size()) {
+        char c = normalized[i];
+        if (c == '(') {
+            // Inside options segment until matching ')'
+            out.push_back(c);
+            i++;
+            // Process options: key=value;key2=value2
+            while (i < normalized.size() && normalized[i] != ')') {
+                // Extract key
+                size_t key_start = i;
+                while (i < normalized.size() && normalized[i] != '=' && normalized[i] != ';' && normalized[i] != ')') i++;
+                std::string key = normalized.substr(key_start, i - key_start);
+                // Trim spaces
+                while (!key.empty() && key.front() == ' ') key.erase(key.begin());
+                while (!key.empty() && key.back() == ' ') key.pop_back();
+                if (i < normalized.size() && normalized[i] == '=') {
+                    // Read value until ';' or ')'
+                    i++; // skip '='
+                    size_t val_start = i;
+                    int depth = 0;
+                    while (i < normalized.size()) {
+                        if (normalized[i] == '(') depth++;
+                        if (normalized[i] == ')') { if (depth == 0) break; depth--; }
+                        if (depth == 0 && normalized[i] == ';') break;
+                        i++;
+                    }
+                    std::string value = normalized.substr(val_start, i - val_start);
+                    if (key == "$filter") {
+                        // Encode filter expression only
+                        value = encodeFilterExpression(value);
+                    }
+                    out += key;
+                    out.push_back('=');
+                    out += value;
+                } else {
+                    // No value (malformed), just copy key
+                    out += key;
+                }
+                if (i < normalized.size() && normalized[i] == ';') {
+                    out.push_back(';');
+                    i++;
+                }
+            }
+            if (i < normalized.size() && normalized[i] == ')') {
+                out.push_back(')');
+                i++;
+            }
+        } else {
+            out.push_back(c);
+            i++;
+        }
+    }
+    return out;
 }
 
 } // namespace erpl_web

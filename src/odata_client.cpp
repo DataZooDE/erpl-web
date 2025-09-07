@@ -255,7 +255,30 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
                 ctx = ctx.substr(0, hash_pos);
             }
             
+            // Strip any query from @odata.context-derived metadata URLs
+            if (!ctx.empty()) {
+                auto qpos = ctx.find('?');
+                if (qpos != std::string::npos) {
+                    ctx = ctx.substr(0, qpos);
+                }
+            }
             HttpUrl meta_url = HttpUrl::MergeWithBaseUrlIfRelative(url, ctx);
+            // If @odata.context pointed to an entity-set-local $metadata like .../ServiceGroups/$metadata,
+            // normalize to the service-root $metadata one level above the entity set: .../0002/$metadata
+            {
+                auto path_ctx = meta_url.Path();
+                auto mpos = path_ctx.rfind("/$metadata");
+                if (mpos != std::string::npos) {
+                    // Compute service root from the current request URL path
+                    auto req_path = url.Path();
+                    auto last_slash = req_path.find_last_of('/');
+                    if (last_slash != std::string::npos && last_slash > 0) {
+                        std::string service_root = req_path.substr(0, last_slash);
+                        meta_url.Path(service_root + "/$metadata");
+                        meta_url.Query("");
+                    }
+                }
+            }
             auto final_url = meta_url.ToString();
             if (metadata_context_url != final_url) {
                 ERPL_TRACE_INFO("ODATA_CLIENT", "Updated metadata context URL from response: " + final_url);

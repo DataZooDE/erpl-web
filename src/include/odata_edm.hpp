@@ -2349,6 +2349,29 @@ class DuckTypeConverter
         Edmx &edmx;
 };
 
+// Centralized OData EDM-based type builder utilities (for expand schema)
+class ODataEdmTypeBuilder {
+public:
+    explicit ODataEdmTypeBuilder(Edmx &edmx) : edmx(edmx), converter(edmx) {}
+
+    // Resolve (is_collection, target_type_name) for a navigation property on an entity type
+    std::pair<bool, std::string> ResolveNavTargetOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const;
+
+    // Build STRUCT type for an entity type (properties only; nav props excluded)
+    duckdb::LogicalType BuildEntityStruct(const std::string &entity_type_name) const;
+
+    // Build expanded column type for top navigation with nested children
+    // Example: topNavProp = "DefaultSystem", nestedChildren = {"Services"}
+    // Returns STRUCT(SystemAlias VARCHAR, Description VARCHAR, Services LIST(STRUCT(...)))
+    duckdb::LogicalType BuildExpandedColumnType(const std::string &root_entity_type_name,
+                                                const std::string &top_nav_prop,
+                                                const std::vector<std::string> &nested_children) const;
+
+private:
+    Edmx &edmx;
+    DuckTypeConverter converter;
+};
+
 class EdmCache
 {
 public:

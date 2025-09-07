@@ -70,6 +70,8 @@ public:
     void SetExpandClause(const std::string& expand_clause);
     std::string GetExpandClause() const;
     void SetExpandedDataSchema(const std::vector<std::string>& expand_paths);
+    // Forward nested expand paths into the extractor for recursive processing
+    void SetNestedExpandPaths(const std::vector<std::string>& nested_paths);
     bool HasExpandedData() const;
     void UpdateExpandedColumnType(const std::string& expand_path, const duckdb::LogicalType& new_type);
 
@@ -141,8 +143,11 @@ public:
     
     // Schema management
     void SetExpandedDataSchema(const std::vector<std::string>& expand_paths);
+    // Provide full nested expand paths for type inference (e.g., "DefaultSystem/Services")
+    void SetNestedExpandPaths(const std::vector<std::string>& nested_paths);
     std::vector<std::string> GetExpandedDataSchema() const;
     std::vector<duckdb::LogicalType> GetExpandedDataTypes() const;
+    std::vector<std::string> GetNestedExpandPaths() const;
     bool HasExpandedData() const;
     void UpdateExpandedColumnType(size_t index, const duckdb::LogicalType& new_type);
     
@@ -164,7 +169,10 @@ private:
     std::vector<std::string> expanded_data_schema;
     std::vector<duckdb::LogicalType> expanded_data_types;
     std::map<std::string, std::vector<duckdb::Value>> expanded_data_cache;
+    // Top-level expanded column names (iterate columns)
     std::vector<std::string> expand_paths;
+    // Full nested expand paths for recursive inference
+    std::vector<std::string> nested_expand_paths;
     
     // Performance configuration
     size_t batch_size_ = 1000;
@@ -216,6 +224,12 @@ public:
     // Type conversion methods
     duckdb::LogicalType ResolveNavigationPropertyType(const std::string& property_name) const;
     duckdb::LogicalType ConvertPrimitiveTypeString(const std::string& type_name) const;
+    // Resolve navigation target entity name from the current entity
+    std::pair<bool, std::string> GetNavTargetFromCurrentEntity(const std::string &nav_prop) const;
+    // Resolve navigation target entity name from a given entity type name
+    std::pair<bool, std::string> GetNavTargetOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const;
+    // Resolve navigation property type on a given entity type (returns LIST(child) when collection)
+    duckdb::LogicalType ResolveNavigationOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const;
     
     // Collection type handling
     std::tuple<bool, std::string> ExtractCollectionType(const std::string& type_name) const;

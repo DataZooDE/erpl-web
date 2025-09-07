@@ -1,9 +1,15 @@
 #include "odata_predicate_pushdown_helper.hpp"
+#include "odata_url_helpers.hpp"
 #include <set>
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "tracing.hpp"
 
 namespace erpl_web {
+
+// Forward declarations for local sanitization helpers
+static void SanitizeFilterParam(std::map<std::string, std::string>& params);
+static void SanitizeExpandParam(std::map<std::string, std::string>& params);
+static void EnsureJsonFormat(std::map<std::string, std::string>& params);
 
 ODataPredicatePushdownHelper::ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names)
     : all_column_names(all_column_names)
@@ -71,7 +77,11 @@ void ODataPredicatePushdownHelper::ConsumeOffset(duckdb::idx_t offset) {
 void ODataPredicatePushdownHelper::ConsumeExpand(const std::string& expand_clause) {
     if (!expand_clause.empty()) {
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Consuming expand clause: " + expand_clause);
-        this->expand_clause = "$expand=" + expand_clause;
+        auto normalized = ODataUrlCodec::normalizeAndSanitizeExpand(expand_clause);
+        if (normalized != expand_clause) {
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Normalized expand clause: " + normalized);
+        }
+        this->expand_clause = "$expand=" + normalized;
     } else {
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "No expand clause to consume");
         this->expand_clause = "";
@@ -119,15 +129,45 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
     HttpUrl result = base_url;
     std::string existing_query = result.Query();
     
-    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Existing query: '" + existing_query + "'");
+    LogCurrentClauses();
+    
+    // Parse existing query parameters to avoid duplicates
+    auto existing_params = ParseExistingQueryParameters(existing_query);
+    
+    // Sanitize existing params from URL first (normalize and encode once)
+    SanitizeFilterParam(existing_params);
+    SanitizeExpandParam(existing_params);
+    EnsureJsonFormat(existing_params);
+
+    // Apply version-specific logic
+    if (odata_version == ODataVersion::V2) {
+        ApplyV2SpecificLogic(existing_params);
+    }
+    
+    // Merge all parameters and rebuild query
+    MergeParametersIntoQuery(existing_params);
+    
+    // Rebuild final query from existing_params
+    std::string new_query = RebuildQueryString(existing_params);
+    
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Final query: '" + new_query + "'");
+    result.Query(new_query);
+    
+    ERPL_TRACE_INFO("PREDICATE_PUSHDOWN", "Updated URL: " + result.ToString());
+    return result;
+}
+
+void ODataPredicatePushdownHelper::LogCurrentClauses() const {
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Select clause: '" + select_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Filter clause: '" + filter_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Top clause: '" + top_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Skip clause: '" + skip_clause + "'");
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Expand clause: '" + expand_clause + "'");
-    
-    // Parse existing query parameters to avoid duplicates
+}
+
+std::map<std::string, std::string> ODataPredicatePushdownHelper::ParseExistingQueryParameters(const std::string& existing_query) const {
     std::map<std::string, std::string> existing_params;
+    
     if (!existing_query.empty() && existing_query != "?") {
         std::string query_str = existing_query;
         if (query_str[0] == '?') {
@@ -139,103 +179,197 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
         while (std::getline(iss, param, '&')) {
             size_t pos = param.find('=');
             if (pos != std::string::npos) {
-                std::string key = param.substr(0, pos);
-                std::string value = param.substr(pos + 1);
-                existing_params[key] = value;
+                std::string raw_key = param.substr(0, pos);
+                std::string raw_value = param.substr(pos + 1);
+                // Decode key/value; canonicalize key (e.g., %24filter -> $filter)
+                std::string decoded_key = ODataUrlCodec::decodeQueryValue(raw_key);
+                if (!decoded_key.empty() && decoded_key[0] != '$' && decoded_key.rfind("%24", 0) == 0) {
+                    decoded_key = std::string("$") + decoded_key.substr(3);
+                }
+                if (decoded_key.rfind("%24", 0) == 0) {
+                    decoded_key = std::string("$") + decoded_key.substr(3);
+                }
+                // Normalize known aliases to canonical keys
+                if (decoded_key == "filter") decoded_key = "$filter";
+                if (decoded_key == "expand") decoded_key = "$expand";
+                if (decoded_key == "select") decoded_key = "$select";
+                if (decoded_key == "top") decoded_key = "$top";
+                if (decoded_key == "skip") decoded_key = "$skip";
+                if (decoded_key == "format") decoded_key = "$format";
+                if (decoded_key == "count") decoded_key = "$count";
+
+                std::string decoded_value = ODataUrlCodec::decodeQueryValue(raw_value);
+                existing_params[decoded_key] = decoded_value;
             }
         }
     }
     
+    return existing_params;
+}
+
+// Sanitize existing URL params: encode $filter exactly once, normalize $expand
+static inline bool StringIEq(const std::string &a, const std::string &b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char ac, char bc){ return std::tolower(ac) == std::tolower(bc); });
+}
+
+static void SanitizeFilterParam(std::map<std::string, std::string>& params) {
+    auto it = params.find("$filter");
+    if (it == params.end()) return;
+    const std::string &decoded = it->second; // already decoded by parser
+    if (decoded.empty()) return;
+    // Encode once using OData encoder
+    std::string encoded = ODataUrlCodec::encodeFilterExpression(decoded);
+    it->second = encoded;
+}
+
+static void SanitizeExpandParam(std::map<std::string, std::string>& params) {
+    auto it = params.find("$expand");
+    if (it == params.end()) return;
+    const std::string &decoded = it->second; // already decoded
+    if (decoded.empty()) return;
+    std::string normalized = ODataUrlCodec::normalizeAndSanitizeExpand(decoded);
+    it->second = normalized;
+}
+
+static void EnsureJsonFormat(std::map<std::string, std::string>& params) {
+    auto it = params.find("$format");
+    if (it == params.end()) {
+        params["$format"] = "json";
+    }
+}
+
+void ODataPredicatePushdownHelper::ApplyV2SpecificLogic(std::map<std::string, std::string>& existing_params) {
     // For OData V2: if a $select is present and we have an $expand, we must also include
     // the expanded navigation properties in $select or many services omit them from the payload.
     // This differs from V4 where $expand is sufficient.
-    if (odata_version == ODataVersion::V2 && !select_clause.empty()) {
-        // Determine effective expand list (from our stored clause or existing URL)
-        std::string expand_list;
-        if (!expand_clause.empty()) {
-            // expand_clause is of the form "$expand=..."
-            auto pos = expand_clause.find('=');
-            if (pos != std::string::npos && pos + 1 < expand_clause.size()) {
-                expand_list = expand_clause.substr(pos + 1);
-            }
-        } else {
-            auto it = existing_params.find("$expand");
-            if (it != existing_params.end()) {
-                expand_list = it->second;
-            }
+    if (select_clause.empty()) {
+        return;
+    }
+    
+    std::string expand_list = GetEffectiveExpandList(existing_params);
+    if (expand_list.empty()) {
+        return;
+    }
+    
+    std::string select_fields = ExtractSelectFields();
+    std::set<std::string> selected = ParseSelectedFields(select_fields);
+    std::vector<std::string> missing_nav_props = FindMissingNavigationProperties(expand_list, selected);
+    
+    if (!missing_nav_props.empty()) {
+        AugmentSelectClauseWithNavigationProperties(select_fields, missing_nav_props);
+    }
+}
+
+std::string ODataPredicatePushdownHelper::GetEffectiveExpandList(const std::map<std::string, std::string>& existing_params) const {
+    std::string expand_list;
+    
+    if (!expand_clause.empty()) {
+        // expand_clause is of the form "$expand=..."
+        auto pos = expand_clause.find('=');
+        if (pos != std::string::npos && pos + 1 < expand_clause.size()) {
+            expand_list = expand_clause.substr(pos + 1);
         }
-
-        if (!expand_list.empty()) {
-            // Parse currently selected fields: select_clause is "$select=a,b,..."
-            std::string select_fields;
-            {
-                auto pos = select_clause.find('=');
-                if (pos != std::string::npos && pos + 1 < select_clause.size()) {
-                    select_fields = select_clause.substr(pos + 1);
-                }
-            }
-
-            // Build a set of selected field names for quick lookup
-            std::set<std::string> selected;
-            if (!select_fields.empty()) {
-                std::istringstream ss(select_fields);
-                std::string item;
-                while (std::getline(ss, item, ',')) {
-                    // trim spaces
-                    size_t start = item.find_first_not_of(' ');
-                    size_t end = item.find_last_not_of(' ');
-                    if (start == std::string::npos) continue;
-                    selected.insert(item.substr(start, end - start + 1));
-                }
-            }
-
-            // For each expanded item, add its top-level nav prop to $select if missing
-            std::vector<std::string> to_append;
-            {
-                std::istringstream ss(expand_list);
-                std::string exp;
-                while (std::getline(ss, exp, ',')) {
-                    // trim
-                    size_t start = exp.find_first_not_of(' ');
-                    size_t end = exp.find_last_not_of(' ');
-                    if (start == std::string::npos) continue;
-                    std::string nav = exp.substr(start, end - start + 1);
-                    // Stop at '(' (options) and '/' (nested path)
-                    size_t paren = nav.find('(');
-                    if (paren != std::string::npos) nav = nav.substr(0, paren);
-                    size_t slash = nav.find('/');
-                    if (slash != std::string::npos) nav = nav.substr(0, slash);
-                    if (!nav.empty() && selected.find(nav) == selected.end()) {
-                        to_append.push_back(nav);
-                    }
-                }
-            }
-
-            if (!to_append.empty()) {
-                std::ostringstream rebuilt;
-                rebuilt << "$select=" << select_fields;
-                for (auto &nav : to_append) {
-                    if (!select_fields.empty()) {
-                        rebuilt << "," << nav;
-                    } else {
-                        // In case select_fields was empty after parsing, still handle correctly
-                        rebuilt << nav;
-                    }
-                }
-                select_clause = rebuilt.str();
-                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Augmented V2 $select with expanded nav props: " + select_clause);
-            }
+    } else {
+        auto it = existing_params.find("$expand");
+        if (it != existing_params.end()) {
+            expand_list = it->second;
         }
     }
+    
+    return expand_list;
+}
 
+std::string ODataPredicatePushdownHelper::ExtractSelectFields() const {
+    std::string select_fields;
+    auto pos = select_clause.find('=');
+    if (pos != std::string::npos && pos + 1 < select_clause.size()) {
+        select_fields = select_clause.substr(pos + 1);
+    }
+    return select_fields;
+}
+
+std::set<std::string> ODataPredicatePushdownHelper::ParseSelectedFields(const std::string& select_fields) const {
+    std::set<std::string> selected;
+    
+    if (!select_fields.empty()) {
+        std::istringstream ss(select_fields);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            // trim spaces
+            size_t start = item.find_first_not_of(' ');
+            size_t end = item.find_last_not_of(' ');
+            if (start == std::string::npos) continue;
+            selected.insert(item.substr(start, end - start + 1));
+        }
+    }
+    
+    return selected;
+}
+
+std::vector<std::string> ODataPredicatePushdownHelper::FindMissingNavigationProperties(
+    const std::string& expand_list, 
+    const std::set<std::string>& selected) const {
+    
+    std::vector<std::string> to_append;
+    
+    std::istringstream ss(expand_list);
+    std::string exp;
+    while (std::getline(ss, exp, ',')) {
+        // trim
+        size_t start = exp.find_first_not_of(' ');
+        size_t end = exp.find_last_not_of(' ');
+        if (start == std::string::npos) continue;
+        
+        std::string nav = exp.substr(start, end - start + 1);
+        // Stop at '(' (options) and '/' (nested path)
+        size_t paren = nav.find('(');
+        if (paren != std::string::npos) nav = nav.substr(0, paren);
+        size_t slash = nav.find('/');
+        if (slash != std::string::npos) nav = nav.substr(0, slash);
+        
+        if (!nav.empty() && selected.find(nav) == selected.end()) {
+            to_append.push_back(nav);
+        }
+    }
+    
+    return to_append;
+}
+
+void ODataPredicatePushdownHelper::AugmentSelectClauseWithNavigationProperties(
+    const std::string& select_fields, 
+    const std::vector<std::string>& missing_nav_props) {
+    
+    std::ostringstream rebuilt;
+    rebuilt << "$select=" << select_fields;
+    
+    for (auto &nav : missing_nav_props) {
+        if (!select_fields.empty()) {
+            rebuilt << "," << nav;
+        } else {
+            // In case select_fields was empty after parsing, still handle correctly
+            rebuilt << nav;
+        }
+    }
+    
+    select_clause = rebuilt.str();
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Augmented V2 $select with expanded nav props: " + select_clause);
+}
+
+void ODataPredicatePushdownHelper::MergeParametersIntoQuery(std::map<std::string, std::string>& existing_params) {
     // Merge/overwrite parameters from our generated clauses into existing_params,
     // then rebuild the query string. This avoids duplicates (e.g., $top twice).
+    // For $filter: only set if not already present to avoid double-encoding after redirects.
     auto upsert_param = [&](const std::string &clause, bool overwrite_always) {
         if (clause.empty()) return;
         auto pos = clause.find('=');
         if (pos == std::string::npos || pos + 1 >= clause.size()) return;
         std::string key = clause.substr(0, pos);
         std::string value = clause.substr(pos + 1);
+        if (key == "$filter" && existing_params.find(key) != existing_params.end()) {
+            // Keep existing (likely already encoded by upstream service/redirect)
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Keeping existing $filter from URL to avoid double-encoding");
+            return;
+        }
         if (overwrite_always || existing_params.find(key) == existing_params.end()) {
             existing_params[key] = value;
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", std::string("Set param '") + key + "' = '" + value + "'");
@@ -246,8 +380,8 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
 
     // $select: overwrite to latest selection
     upsert_param(select_clause, true);
-    // $filter: overwrite to latest
-    upsert_param(filter_clause, true);
+    // $filter: do not overwrite an existing one (avoid double-encoding after redirects)
+    upsert_param(filter_clause, false);
     // $top/$skip: overwrite to latest
     upsert_param(top_clause, true);
     upsert_param(skip_clause, true);
@@ -260,28 +394,22 @@ HttpUrl ODataPredicatePushdownHelper::ApplyFiltersToUrl(const HttpUrl &base_url)
         auto skip_token = SkipTokenClause();
         upsert_param(skip_token, true);
     }
+}
 
-    // Rebuild final query from existing_params
-    std::string new_query = existing_query;
+std::string ODataPredicatePushdownHelper::RebuildQueryString(const std::map<std::string, std::string>& existing_params) const {
     if (existing_params.empty()) {
-        // Keep as-is
-    } else {
-        std::ostringstream oss;
-        oss << "?";
-        bool first = true;
-        for (const auto &kv : existing_params) {
-            if (!first) oss << "&";
-            first = false;
-            oss << kv.first << "=" << kv.second;
-        }
-        new_query = oss.str();
+        return "";
     }
-
-    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Final query: '" + new_query + "'");
-    result.Query(new_query);
     
-    ERPL_TRACE_INFO("PREDICATE_PUSHDOWN", "Updated URL: " + result.ToString());
-    return result;
+    std::ostringstream oss;
+    oss << "?";
+    bool first = true;
+    for (const auto &kv : existing_params) {
+        if (!first) oss << "&";
+        first = false;
+        oss << kv.first << "=" << kv.second;
+    }
+    return oss.str();
 }
 
 std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<duckdb::column_t> &column_ids) const {
@@ -456,6 +584,15 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
     }
     
     std::string result = filter_clause.str();
+
+    // result is "$filter=" + <expr>
+    const std::string prefix = "$filter=";
+    if (result.rfind(prefix, 0) == 0) {
+        std::string encoded = prefix + ODataUrlCodec::encodeFilterExpression(result.substr(prefix.size()));
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Built filter clause (smart-encoded): " + encoded);
+        return encoded;
+    }
+
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Built filter clause: " + result);
     return result;
 }

@@ -1,6 +1,7 @@
 #include "duckdb/function/table_function.hpp"
 
 #include "odata_read_functions.hpp"
+#include "odata_url_helpers.hpp"
 #include "http_client.hpp"
 #include "yyjson.hpp"
 #include "odata_expand_parser.hpp"
@@ -11,6 +12,12 @@
 #include <unordered_map>
 
 namespace erpl_web {
+void ODataReadBindData::SetNestedExpandPaths(const std::vector<std::string>& nested_paths) {
+    if (data_extractor) {
+        data_extractor->SetNestedExpandPaths(nested_paths);
+    }
+}
+
 
 // ============================================================================
 // Helper Functions
@@ -192,6 +199,54 @@ duckdb::LogicalType ODataTypeResolver::ResolveNavigationPropertyType(const std::
     return duckdb::LogicalTypeId::VARCHAR; // Default fallback
 }
 
+std::pair<bool, std::string> ODataTypeResolver::GetNavTargetFromCurrentEntity(const std::string &nav_prop) const {
+    try {
+        auto entity_type = odata_client->GetCurrentEntityType();
+        for (const auto &np : entity_type.navigation_properties) {
+            if (np.name == nav_prop) {
+                auto [is_collection, type_name] = ExtractCollectionType(np.type);
+                return {is_collection, type_name};
+            }
+        }
+    } catch (...) {}
+    return {false, std::string()};
+}
+
+std::pair<bool, std::string> ODataTypeResolver::GetNavTargetOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const {
+    try {
+        auto edmx = odata_client->GetMetadata();
+        auto type_variant = edmx.FindType(entity_type_name);
+        EntityType entity;
+        if (std::holds_alternative<EntityType>(type_variant)) {
+            entity = std::get<EntityType>(type_variant);
+        } else {
+            return {false, std::string()};
+        }
+        for (const auto &np : entity.navigation_properties) {
+            if (np.name == nav_prop) {
+                auto [is_collection, type_name] = ExtractCollectionType(np.type);
+                return {is_collection, type_name};
+            }
+        }
+    } catch (...) {}
+    return {false, std::string()};
+}
+
+duckdb::LogicalType ODataTypeResolver::ResolveNavigationOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const {
+    auto [is_collection, type_name] = GetNavTargetOnEntity(entity_type_name, nav_prop);
+    if (type_name.empty()) return duckdb::LogicalTypeId::VARCHAR;
+    duckdb::LogicalType base_type;
+    if (type_name.find("Edm.") == 0) {
+        base_type = ConvertPrimitiveTypeString(type_name);
+    } else {
+        base_type = ResolveEntityType(type_name);
+    }
+    if (is_collection) {
+        return duckdb::LogicalType::LIST(base_type);
+    }
+    return base_type;
+}
+
 duckdb::LogicalType ODataTypeResolver::ConvertPrimitiveTypeString(const std::string& type_name) const {
     if (type_name == "Edm.Binary") {
         return duckdb::LogicalTypeId::BLOB;
@@ -303,6 +358,39 @@ void ODataDataExtractor::SetExpandedDataSchema(const std::vector<std::string>& e
             ERPL_TRACE_INFO("DATA_EXTRACTOR", "Using V2 fallback type LIST(VARCHAR) for expanded column '" + expand_path + "' (EDM metadata unavailable)");
         }
         
+        // If there are nested paths such as "DefaultSystem/Services", and this is the top-level
+        // (e.g., "DefaultSystem"), augment the STRUCT type to include a field for each nested
+        // navigation as an embedded list/struct, without creating new top-level columns.
+        if (!nested_expand_paths.empty()) {
+            // Collect immediate nested props for this top-level path
+            std::vector<std::string> nested_for_top;
+            for (const auto &nested : nested_expand_paths) {
+                if (nested.find(expand_path + "/") == 0) {
+                    auto rest = nested.substr(expand_path.size() + 1);
+                    auto slash = rest.find('/');
+                    std::string child = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+                    if (!child.empty()) nested_for_top.push_back(child);
+                }
+            }
+            if (!nested_for_top.empty()) {
+                // Delegate to EDM type builder for augmentation
+                try {
+                    auto edmx_opt = EdmCache::GetInstance().Get(odata_client->GetMetadataContextUrl());
+                    if (edmx_opt) {
+                        ODataEdmTypeBuilder builder(*edmx_opt.get());
+                        // Resolve root entity type name from client
+                        auto root_entity = odata_client->GetCurrentEntityType().name;
+                        auto built = builder.BuildExpandedColumnType(root_entity, expand_path, nested_for_top);
+                        if (built.id() != duckdb::LogicalTypeId::INVALID) {
+                            column_type = built;
+                        }
+                    }
+                } catch (...) {
+                    // keep previous column_type on failure
+                }
+            }
+        }
+
         expanded_data_schema.push_back(expand_path);
         expanded_data_types.push_back(column_type);
         this->expand_paths.push_back(expand_path);
@@ -311,6 +399,10 @@ void ODataDataExtractor::SetExpandedDataSchema(const std::vector<std::string>& e
     }
     
     ERPL_TRACE_INFO("DATA_EXTRACTOR", "Set expanded data schema with " + std::to_string(expand_paths.size()) + " navigation properties and proper types");
+}
+
+void ODataDataExtractor::SetNestedExpandPaths(const std::vector<std::string>& nested_paths) {
+    nested_expand_paths = nested_paths;
 }
 
 void ODataDataExtractor::UpdateExpandedColumnType(size_t index, const duckdb::LogicalType& new_type) {
@@ -329,6 +421,10 @@ std::vector<std::string> ODataDataExtractor::GetExpandedDataSchema() const {
 
 std::vector<duckdb::LogicalType> ODataDataExtractor::GetExpandedDataTypes() const {
     return expanded_data_types;
+}
+
+std::vector<std::string> ODataDataExtractor::GetNestedExpandPaths() const {
+    return nested_expand_paths;
 }
 
 bool ODataDataExtractor::HasExpandedData() const {
@@ -412,17 +508,10 @@ void ODataDataExtractor::ProcessODataV4ExpandedData(duckdb_yyjson::yyjson_val* v
                                 break;
                             }
                         }
-                        
-                        char* json_str = duckdb_yyjson::yyjson_val_write(expand_data, 0, nullptr);
-                        if (json_str) {
-                            std::string json_string(json_str);
-                            free(json_str);
-                            
-                            duckdb::Value parsed_value = ParseJsonToDuckDBValue(json_string, target_type);
-                            expanded_data_cache[expand_path].push_back(parsed_value);
-                        } else {
-                            expanded_data_cache[expand_path].push_back(duckdb::Value());
-                        }
+                        // Recursively parse nested expands for V4 similarly to V2 flow
+                        // Ensure nested fields inside the parent struct (e.g., Services list) are preserved
+                        duckdb::Value parsed_value = ParseExpandedDataRecursively(expand_data, expand_path, target_type);
+                        expanded_data_cache[expand_path].push_back(parsed_value);
                     } catch (const std::exception& e) {
                         ERPL_TRACE_WARN("DATA_EXTRACTOR", "Failed to parse expand data for path '" + expand_path + "': " + e.what());
                         expanded_data_cache[expand_path].push_back(duckdb::Value());
@@ -1130,8 +1219,15 @@ bool ODataReadBindData::ShouldUseDirectHttp(const std::string& entity_set_url) {
 duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const std::string& entity_set_url, 
                                                                            std::shared_ptr<HttpAuthParams> auth_params)
 {
-    auto http_client = std::make_shared<HttpClient>();
-    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, entity_set_url, auth_params);
+    // Create HTTP client with URL encoding disabled for OData (V2 & V4)
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
+
+    // Ensure $format=json is present on the entity set URL; encode $filter via ODataUrlCodec
+    HttpUrl es_url(entity_set_url);
+    ODataUrlCodec::ensureJsonFormat(es_url);
+    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, es_url, auth_params);
     
     // Determine OData version and approach
     bool is_odata_v2_url = IsODataV2Url(entity_set_url);
@@ -1154,7 +1250,7 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(const
         }
         
         try {
-            HttpRequest req(HttpMethod::GET, HttpUrl(entity_set_url));
+            HttpRequest req(HttpMethod::GET, HttpUrl(es_url));
             req.AuthHeadersFromParams(*auth_params);
             req.headers["Accept"] = "application/json";
             auto resp = http_client->SendRequest(req);
@@ -1860,6 +1956,8 @@ void ODataReadBindData::SetExpandedDataSchema(const std::vector<std::string>& ex
     ERPL_TRACE_INFO("ODATA_READ_BIND", "Set expanded data schema with " + std::to_string(expand_paths.size()) + " navigation properties");
 }
 
+// duplicate definition removed; implementation is at top of file to ensure availability before use
+
 bool ODataReadBindData::HasExpandedData() const {
     return data_extractor->HasExpandedData();
 }
@@ -2034,9 +2132,43 @@ duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context,
         if (!expand_value.empty()) {
             auto expand_paths = ODataExpandParser::ParseExpandClause(expand_value);
             std::vector<std::string> navigation_properties;
+            std::vector<std::string> nested_full_paths;
             for (const auto& path : expand_paths) {
                 navigation_properties.push_back(path.navigation_property);
+                // Capture nested full expand paths for recursive inference, e.g., DefaultSystem/Services
+                for (const auto &sub : path.sub_expands) {
+                    nested_full_paths.push_back(path.navigation_property + "/" + sub);
+                }
+                // Fallback: parse nested expands from options if not captured
+                if (path.sub_expands.empty()) {
+                    const std::string &raw = path.full_expand_path;
+                    size_t lp = raw.find('(');
+                    size_t rp = raw.rfind(')');
+                    if (lp != std::string::npos && rp != std::string::npos && rp > lp) {
+                        std::string opts = raw.substr(lp + 1, rp - lp - 1);
+                        size_t k = opts.find("$expand=");
+                        if (k != std::string::npos) {
+                            std::string subs = opts.substr(k + 8);
+                            size_t semi = subs.find(';');
+                            if (semi != std::string::npos) subs = subs.substr(0, semi);
+                            std::stringstream ss(subs);
+                            std::string item;
+                            while (std::getline(ss, item, ',')) {
+                                // trim
+                                size_t s = item.find_first_not_of(" \t\r\n");
+                                size_t e = item.find_last_not_of(" \t\r\n");
+                                std::string t = (s == std::string::npos) ? std::string() : item.substr(s, e - s + 1);
+                                if (t.empty()) continue;
+                                size_t p = t.find('(');
+                                if (p != std::string::npos) t = t.substr(0, p);
+                                if (!t.empty()) nested_full_paths.push_back(path.navigation_property + "/" + t);
+                            }
+                        }
+                    }
+                }
             }
+            // set nested paths first so schema augmentation can see them
+            bind_data->SetNestedExpandPaths(nested_full_paths);
             bind_data->SetExpandedDataSchema(navigation_properties);
             ERPL_TRACE_DEBUG("ODATA_BIND", "Set expanded data schema with " + std::to_string(navigation_properties.size()) + " navigation properties");
         }
@@ -2050,9 +2182,15 @@ duckdb::unique_ptr<FunctionData> ODataReadBind(ClientContext &context,
         // Parse the expand clause to set up expanded data schema
         auto expand_paths = ODataExpandParser::ParseExpandClause(url_expand_clause);
         std::vector<std::string> navigation_properties;
+        std::vector<std::string> nested_full_paths;
         for (const auto& path : expand_paths) {
             navigation_properties.push_back(path.navigation_property);
+            for (const auto &sub : path.sub_expands) {
+                nested_full_paths.push_back(path.navigation_property + "/" + sub);
+            }
         }
+        // set nested paths first so schema augmentation can see them
+        bind_data->SetNestedExpandPaths(nested_full_paths);
         bind_data->SetExpandedDataSchema(navigation_properties);
         ERPL_TRACE_DEBUG("ODATA_BIND", "Set expanded data schema from URL with " + std::to_string(navigation_properties.size()) + " navigation properties");
     }

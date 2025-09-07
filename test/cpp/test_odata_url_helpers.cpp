@@ -27,4 +27,32 @@ TEST_CASE("InputParametersFormatter formats params and inserts before /Set", "[o
     REQUIRE(p.find("(CARRIER='AA',YEAR=2024)/Set") != std::string::npos);
 }
 
+TEST_CASE("ODataUrlCodec encodes and decodes using httplib", "[odata_url]") {
+    // Spaces, quotes, semicolon, unicode
+    std::string raw = "Country eq 'Ger many';v=2 ";
+    auto enc = ODataUrlCodec::encodeQueryValue(raw);
+    // Expect %20, %27, %3B etc.
+    REQUIRE(enc.find("%20") != std::string::npos);
+    REQUIRE(enc.find("%27") != std::string::npos);
+    REQUIRE(enc.find("%3B") != std::string::npos);
+    auto dec = ODataUrlCodec::decodeQueryValue(enc);
+    REQUIRE(dec == raw);
+}
+
+TEST_CASE("ODataUrlCodec ensureJsonFormat appends $format=json", "[odata_url]") {
+    HttpUrl url1("https://h/svc/Entity");
+    ODataUrlCodec::ensureJsonFormat(url1);
+    REQUIRE(url1.Query().find("$format=json") != std::string::npos);
+
+    HttpUrl url2("https://h/svc/Entity?$top=3");
+    ODataUrlCodec::ensureJsonFormat(url2);
+    REQUIRE(url2.Query().find("$format=json") != std::string::npos);
+
+    HttpUrl url3("https://h/svc/Entity?$format=json");
+    ODataUrlCodec::ensureJsonFormat(url3);
+    // no duplicate
+    std::string q3 = url3.Query();
+    REQUIRE(q3.find("$format=json") == q3.rfind("$format=json"));
+}
+
 

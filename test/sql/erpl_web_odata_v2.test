@@ -12,7 +12,7 @@ statement ok
 SET autoload_known_extensions=1;
 
 statement ok
-SET erpl_trace_enabled=true;
+SET erpl_trace_enabled=false;
 
 # ============================================================================
 # OData v2 Service Testing (Northwind)
@@ -36,7 +36,6 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 ----
 20
 
-# Test OData v2 with $filter
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=Country eq ''Germany''&$format=json');
 ----

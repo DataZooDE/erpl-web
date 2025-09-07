@@ -211,20 +211,28 @@ protected:
 
     std::unique_ptr<HttpResponse> DoMetadataHttpGet(const std::string& metadata_url_raw) 
     {
-        //std::cout << "Fetching Metadata from: " << metadata_url_raw << std::endl;
-        auto current_svc_url = url;
-        auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
-        
-        // For metadata requests, don't use version-specific headers since we don't know the version yet
-        // This allows us to detect the version from the metadata response
-        if (odata_version != ODataVersion::UNKNOWN) {
-            // Only use version-specific headers if we already know the version
-            metadata_request.SetODataVersion(odata_version);
-            metadata_request.AddODataVersionHeaders();
+        // Sanitize: strip any query from a $metadata URL (e.g., remove "$format=json")
+        std::string sanitized_raw = metadata_url_raw;
+        {
+            auto meta_pos = sanitized_raw.find("/$metadata");
+            if (meta_pos != std::string::npos) {
+                auto qpos = sanitized_raw.find('?', meta_pos);
+                if (qpos != std::string::npos) {
+                    sanitized_raw = sanitized_raw.substr(0, qpos);
+                }
+            }
         }
-        
-        // Override Accept header for metadata (XML is standard for both v2 and v4)
+
+        //std::cout << "Fetching Metadata from: " << sanitized_raw << std::endl;
+        auto current_svc_url = url;
+        auto metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, sanitized_raw));
+
+        // For metadata requests, do NOT add version-specific headers.
+        // Some SAP gateways respond 400 to metadata when OData-Version headers are present.
+
+        // Ensure metadata Accept is XML and request is not kept-alive (ICM 400s observed otherwise)
         metadata_request.headers["Accept"] = "application/xml";
+        metadata_request.headers["Connection"] = "close";
         
         if (auth_params != nullptr) {
             metadata_request.AuthHeadersFromParams(*auth_params);
@@ -233,7 +241,7 @@ protected:
         // Trace metadata request details
         std::stringstream request_trace;
         request_trace << "OData Metadata HTTP Request:" << std::endl;
-        request_trace << "  URL: " << HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw).ToString() << std::endl;
+        request_trace << "  URL: " << HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, sanitized_raw).ToString() << std::endl;
         request_trace << "  Method: GET" << std::endl;
         request_trace << "  Headers:";
         for (const auto& header : metadata_request.headers) {
@@ -244,8 +252,12 @@ protected:
         std::unique_ptr<HttpResponse> metadata_response;
         for (size_t num_retries = 3; num_retries > 0; --num_retries) {
             ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " of 3");
-            
-            metadata_response = http_client->SendRequest(metadata_request);
+            // Use a fresh non-cached HTTP client for metadata to mirror http_get behavior exactly
+            HttpParams meta_params;
+            meta_params.url_encode = false;
+            meta_params.keep_alive = false;
+            HttpClient meta_client(meta_params);
+            metadata_response = meta_client.SendRequest(metadata_request);
             if (metadata_response != nullptr && metadata_response->Code() == 200) {
                 // Trace successful metadata response
                 std::stringstream response_trace;
@@ -281,12 +293,12 @@ protected:
                 ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " failed: No response received");
             }
 
-            // The OData v4 spec defines that the metadata document when given as a relative URL
-            // can also be attachted to the root ULR of the service. However we don't have that
-            // URL here. So what we can do is to try to pop the last segment of the URL path and 
-            // try whether that is the service root URL.
+            // Pop one level and retry toward service-root $metadata
             current_svc_url = current_svc_url.PopPath();
-            metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, metadata_url_raw));
+            metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, sanitized_raw));
+            // Re-apply essential headers on each retry
+            metadata_request.headers["Accept"] = "application/xml";
+            metadata_request.headers["Connection"] = "close";
             ERPL_TRACE_DEBUG("ODATA_CLIENT", "Retrying metadata request with popped URL: " + current_svc_url.ToString());
             
             if (auth_params != nullptr) {
@@ -297,7 +309,7 @@ protected:
         // Trace final failure
         std::stringstream final_error;
         final_error << "All metadata request attempts failed. Final attempt details:" << std::endl;
-        final_error << "  Final URL: " << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString() << std::endl;
+        final_error << "  Final URL: " << HttpUrl::MergeWithBaseUrlIfRelative(url, sanitized_raw).ToString() << std::endl;
         if (metadata_response != nullptr) {
             final_error << "  Final Status Code: " << metadata_response->Code() << std::endl;
             final_error << "  Final Content Type: " << metadata_response->ContentType() << std::endl;
@@ -309,7 +321,7 @@ protected:
         
         std::stringstream ss;
         ss << "Failed to get OData metadata from "
-           << HttpUrl::MergeWithBaseUrlIfRelative(url, metadata_url_raw).ToString();
+           << HttpUrl::MergeWithBaseUrlIfRelative(url, sanitized_raw).ToString();
         if (metadata_response != nullptr) {
             ss << " (HTTP " << metadata_response->Code() << ")";
             auto body = metadata_response->Content();
