@@ -117,6 +117,7 @@ public:
 
     virtual Edmx GetMetadata()
     {    
+        ERPL_TRACE_INFO("ODATA_CLIENT", "GetMetadata() called - generating stack trace");
         // Always resolve metadata; for Datasphere parameterized reads, use @odata.context (without fragment)
         auto metadata_url = GetMetadataContextUrl();
         auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);
@@ -390,6 +391,37 @@ public:
     
     std::shared_ptr<ODataServiceResponse> Get(bool get_next = false) override;
     std::string GetMetadataContextUrl() override;
+};
+
+// -------------------------------------------------------------------------------------------------
+// Factory for creating specialized OData clients and bind data
+// -------------------------------------------------------------------------------------------------
+
+class ODataClientFactory {
+public:
+    struct ProbeResult {
+        ODataVersion version;
+        bool is_service_root;
+        std::string initial_content;
+        HttpUrl normalized_url;
+        std::shared_ptr<HttpAuthParams> auth_params;
+        
+        ProbeResult() : version(ODataVersion::UNKNOWN), is_service_root(false), normalized_url("") {}
+    };
+    
+    // Single probe to determine content type and version
+    static ProbeResult ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params);
+    
+    // Create appropriate client based on probe result
+    static std::shared_ptr<ODataEntitySetClient> CreateEntitySetClient(const ProbeResult& result);
+    static std::shared_ptr<ODataServiceClient> CreateServiceClient(const ProbeResult& result);
+    
+private:
+    // Helper to detect OData version from response
+    static ODataVersion DetectVersionFromResponse(const std::string& content, const std::string& content_type);
+    
+    // Helper to detect if response is a service root document
+    static bool IsServiceRootResponse(const std::string& content);
 };
 
 } // namespace erpl_web

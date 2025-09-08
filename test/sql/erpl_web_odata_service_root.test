@@ -1,0 +1,34 @@
+# name: test/sql/erpl_web_odata_service_root.test
+# description: Test OData service root functionality for both V4 and V2
+# group: [erpl_web]
+
+# Load the extension
+statement ok
+LOAD 'build/debug/extension/erpl_web/erpl_web.duckdb_extension';
+
+# Test V4 service root (TripPin)
+query III
+SELECT name, kind, url FROM odata_read('https://services.odata.org/TripPinRESTierService/') ORDER BY name LIMIT 5;
+----
+Airlines	EntitySet	https://services.odata.org/TripPinRESTierService/Airlines
+Airports	EntitySet	https://services.odata.org/TripPinRESTierService/Airports
+People	EntitySet	https://services.odata.org/TripPinRESTierService/People
+
+# Test that V4 service root returns the correct schema
+query I
+SELECT COUNT(*) FROM (SELECT name, kind, url FROM odata_read('https://services.odata.org/TripPinRESTierService/'));
+----
+3
+
+# Test V2 service root (Northwind)
+query I
+SELECT COUNT(*) > 0 FROM (SELECT name, kind, url FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/') ORDER BY 1 LIMIT 1000);
+----
+1
+
+
+# Test that V2 service root returns rows
+query I
+SELECT COUNT(*) > 0 FROM (SELECT name, kind, url FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/'));
+----
+1

@@ -589,4 +589,267 @@ std::string ODataServiceClient::GetMetadataContextUrl()
     return current_response->MetadataContextUrl();
 }
 
+// -------------------------------------------------------------------------------------------------
+// ODataClientFactory Implementation
+// -------------------------------------------------------------------------------------------------
+
+ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params)
+{
+    ERPL_TRACE_DEBUG("ODATA_FACTORY", "Probing URL: " + url);
+    
+    // Create HTTP client with URL encoding disabled for OData (V2 & V4)
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
+    
+    // Normalize URL: preserve existing query parameters and ensure $format=json is present
+    HttpUrl normalized_url(url);
+
+    // Rebuild query to preserve keys and encode $filter values
+    try {
+        auto qmark = url.find('?');
+        if (qmark != std::string::npos && qmark + 1 < url.size()) {
+            std::string original_query = url.substr(qmark + 1);
+            std::istringstream iss(original_query);
+            std::string param;
+            std::vector<std::pair<std::string, std::string>> kv_pairs;
+
+            while (std::getline(iss, param, '&')) {
+                if (param.empty()) {
+                    continue;
+                }
+                size_t eq = param.find('=');
+                std::string raw_key = (eq == std::string::npos) ? param : param.substr(0, eq);
+                std::string raw_value = (eq == std::string::npos) ? std::string("") : param.substr(eq + 1);
+
+                // Decode key and canonicalize common aliases
+                std::string decoded_key = ODataUrlCodec::decodeQueryValue(raw_key);
+                if (!decoded_key.empty() && decoded_key.rfind("%24", 0) == 0) {
+                    decoded_key = std::string("$") + decoded_key.substr(3);
+                }
+                if (decoded_key == "filter") decoded_key = "$filter";
+                if (decoded_key == "expand") decoded_key = "$expand";
+                if (decoded_key == "select") decoded_key = "$select";
+                if (decoded_key == "top") decoded_key = "$top";
+                if (decoded_key == "skip") decoded_key = "$skip";
+                if (decoded_key == "format") decoded_key = "$format";
+
+                // Decode value for inspection, and ensure $filter value is encoded as a single query value
+                std::string decoded_value = ODataUrlCodec::decodeQueryValue(raw_value);
+                std::string final_value = raw_value;
+                if (decoded_key == "$filter" && !decoded_value.empty()) {
+                    final_value = ODataUrlCodec::encodeFilterExpression(decoded_value);
+                }
+
+                // If we failed to decode a meaningful key, keep the raw key to avoid losing information
+                std::string final_key = decoded_key.empty() ? raw_key : decoded_key;
+                kv_pairs.emplace_back(final_key, final_value);
+            }
+
+            if (!kv_pairs.empty()) {
+                std::ostringstream rebuilt;
+                rebuilt << "?";
+                for (size_t i = 0; i < kv_pairs.size(); ++i) {
+                    if (i > 0) rebuilt << "&";
+                    rebuilt << kv_pairs[i].first << "=" << kv_pairs[i].second;
+                }
+                normalized_url.Query(rebuilt.str());
+            }
+        }
+    } catch (...) {
+        // If anything goes wrong during query normalization, fall back to original
+    }
+
+    // Ensure JSON format is present (idempotent)
+    ODataUrlCodec::ensureJsonFormat(normalized_url);
+    
+    // Make a single HTTP request to probe the content
+    auto http_request = HttpRequest(HttpMethod::GET, normalized_url);
+    
+    // Don't add OData version headers for the probe - let the service respond naturally
+    if (auth_params != nullptr) {
+        http_request.AuthHeadersFromParams(*auth_params);
+    }
+    
+    auto http_response = http_client->SendRequest(http_request);
+    
+    if (http_response == nullptr || http_response->Code() != 200) {
+        std::stringstream ss;
+        ss << "Failed to probe OData URL: " << url << " (HTTP " << (http_response ? http_response->Code() : 0) << ")";
+        throw std::runtime_error(ss.str());
+    }
+    
+    std::string content = http_response->Content();
+    std::string content_type = http_response->ContentType();
+    
+    // Detect OData version from response
+    ODataVersion version = DetectVersionFromResponse(content, content_type);
+    
+    // Detect if this is a service root document
+    bool is_service_root = IsServiceRootResponse(content);
+    
+    ERPL_TRACE_INFO("ODATA_FACTORY", "Probe result - Version: " + std::to_string(static_cast<int>(version)) + 
+                     ", IsServiceRoot: " + (is_service_root ? "true" : "false"));
+    ERPL_TRACE_INFO("ODATA_FACTORY", "Content preview: " + content.substr(0, 200) + "...");
+    
+    ProbeResult result;
+    result.version = version;
+    result.is_service_root = is_service_root;
+    result.initial_content = content;
+    result.normalized_url = normalized_url;
+    result.auth_params = auth_params;
+    return result;
+}
+
+std::shared_ptr<ODataEntitySetClient> ODataClientFactory::CreateEntitySetClient(const ProbeResult& result)
+{
+    ERPL_TRACE_DEBUG("ODATA_FACTORY", "Creating ODataEntitySetClient");
+    
+    // Create HTTP client with URL encoding disabled for OData (V2 & V4)
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
+    
+    auto client = std::make_shared<ODataEntitySetClient>(http_client, result.normalized_url, result.auth_params);
+    
+    // Set the detected OData version
+    client->SetODataVersion(result.version);
+    
+    return client;
+}
+
+std::shared_ptr<ODataServiceClient> ODataClientFactory::CreateServiceClient(const ProbeResult& result)
+{
+    ERPL_TRACE_DEBUG("ODATA_FACTORY", "Creating ODataServiceClient");
+    
+    // Create HTTP client with URL encoding disabled for OData (V2 & V4)
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
+    
+    auto client = std::make_shared<ODataServiceClient>(http_client, result.normalized_url, result.auth_params);
+    
+    // Set the detected OData version
+    client->SetODataVersion(result.version);
+    
+    return client;
+}
+
+ODataVersion ODataClientFactory::DetectVersionFromResponse(const std::string& content, const std::string& content_type)
+{
+    // Prefer structured JSON-based detection to handle service documents
+    try {
+        return ODataJsonContentMixin::DetectODataVersion(content);
+    } catch (...) {
+        // Fallback: simple heuristics
+        if (content.find("@odata.context") != std::string::npos) {
+            return ODataVersion::V4;
+        }
+        if (content.find("__metadata") != std::string::npos) {
+            return ODataVersion::V2;
+        }
+        if (content_type.find("application/json") != std::string::npos) {
+            return ODataVersion::V4;
+        }
+        return ODataVersion::V4;
+    }
+}
+
+bool ODataClientFactory::IsServiceRootResponse(const std::string& content)
+{
+    // Check for service root document patterns
+    // Service root documents contain entity set references, not actual entity data
+    // V4: has "value" array with objects that have "name" and "url" properties
+    // V2: has "d" object with "results" array containing entity set references
+    
+    try {
+        auto doc = yyjson_read(content.c_str(), content.length(), 0);
+        if (!doc) {
+            return false;
+        }
+        
+        auto root = yyjson_doc_get_root(doc);
+        if (!root) {
+            yyjson_doc_free(doc);
+            return false;
+        }
+        
+        // V4 service root: has "value" array with entity set references
+        auto value_arr = yyjson_obj_get(root, "value");
+        if (value_arr && yyjson_is_arr(value_arr)) {
+            // Check if this is a service root by looking at the first item
+            auto first_item = yyjson_arr_get_first(value_arr);
+            if (first_item && yyjson_is_obj(first_item)) {
+                // Service root items have "name" and "url" properties
+                // Entity set items have actual entity properties
+                bool has_name = yyjson_obj_get(first_item, "name") != nullptr;
+                bool has_url = yyjson_obj_get(first_item, "url") != nullptr;
+                
+                // If it has name/url, it's likely a service root
+                if (has_name && has_url) {
+                    yyjson_doc_free(doc);
+                    return true;
+                }
+            }
+        }
+        
+        // V2 service root: has "d" with "EntitySets" array of strings
+        auto d_obj = yyjson_obj_get(root, "d");
+        if (d_obj && yyjson_is_obj(d_obj)) {
+            auto entity_sets_arr = yyjson_obj_get(d_obj, "EntitySets");
+            if (entity_sets_arr && yyjson_is_arr(entity_sets_arr)) {
+                // V2 service root has EntitySets array with string values
+                auto first_item = yyjson_arr_get_first(entity_sets_arr);
+                if (first_item && yyjson_is_str(first_item)) {
+                    // If EntitySets contains string values, it's a V2 service root
+                    yyjson_doc_free(doc);
+                    return true;
+                }
+            }
+            
+            // Also check for V2 service root with "results" containing entity set references
+            auto results_arr = yyjson_obj_get(d_obj, "results");
+            if (results_arr && yyjson_is_arr(results_arr)) {
+                // Check if this is a service root by looking at the first item
+                auto first_item = yyjson_arr_get_first(results_arr);
+                if (first_item && yyjson_is_obj(first_item)) {
+                    // Service root items have "Name" and "Url" properties (V2 uses capital letters)
+                    bool has_name = yyjson_obj_get(first_item, "Name") != nullptr;
+                    bool has_url = yyjson_obj_get(first_item, "Url") != nullptr;
+                    
+                    // If it has Name/Url, it's likely a service root
+                    if (has_name && has_url) {
+                        yyjson_doc_free(doc);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        // Direct "results" array (V2 pattern)
+        auto results_arr = yyjson_obj_get(root, "results");
+        if (results_arr && yyjson_is_arr(results_arr)) {
+            // Check if this is a service root by looking at the first item
+            auto first_item = yyjson_arr_get_first(results_arr);
+            if (first_item && yyjson_is_obj(first_item)) {
+                // Service root items have "Name" and "Url" properties (V2 uses capital letters)
+                bool has_name = yyjson_obj_get(first_item, "Name") != nullptr;
+                bool has_url = yyjson_obj_get(first_item, "Url") != nullptr;
+                
+                // If it has Name/Url, it's likely a service root
+                if (has_name && has_url) {
+                    yyjson_doc_free(doc);
+                    return true;
+                }
+            }
+        }
+        
+        yyjson_doc_free(doc);
+        return false;
+        
+    } catch (...) {
+        return false;
+    }
+}
+
 } // namespace erpl_web

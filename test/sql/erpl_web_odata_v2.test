@@ -24,6 +24,12 @@ SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/
 ----
 1
 
+# Test expand on V2 entity set
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
+----
+20
+
 # Test OData v2 with pagination
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=25&$select=CustomerID,CompanyName,ContactName&$format=json');

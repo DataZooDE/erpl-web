@@ -30,6 +30,12 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierServic
 ----
 20
 
+# Test OData v4 service root listing
+query I
+SELECT COUNT(*) > 0 FROM odata_read('https://services.odata.org/TripPinRESTierService/');
+----
+1
+
 # Test OData v4 with $select
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=10&$select=UserName,FirstName,LastName');

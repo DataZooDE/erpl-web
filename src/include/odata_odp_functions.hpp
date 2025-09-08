@@ -34,8 +34,10 @@ public:
     void LoadServiceData();
     
 private:
+    void LoadV2Services();
+    void LoadV4Services();
     void ParseODataV2CatalogFromResponse(std::shared_ptr<ODataEntitySetResponse> response);
-    void ParseODataV4Catalog(const std::string& content);
+    void ParseODataV4CatalogFromResponse(std::shared_ptr<ODataEntitySetResponse> response);
 };
 
 // Bind data for ODP service discovery

@@ -35,10 +35,27 @@ public:
     static duckdb::unique_ptr<ODataReadBindData> FromEntitySetRoot(
         const std::string& entity_set_url, 
         std::shared_ptr<HttpAuthParams> auth_params);
+    static duckdb::unique_ptr<ODataReadBindData> FromServiceRoot(
+        const std::string& service_root_url,
+        std::shared_ptr<HttpAuthParams> auth_params);
+    
+    // Factory pattern methods
+    static duckdb::unique_ptr<ODataReadBindData> FromProbeResult(
+        const ODataClientFactory::ProbeResult& result);
+    static duckdb::unique_ptr<ODataReadBindData> FromEntitySetClient(
+        std::shared_ptr<ODataEntitySetClient> client,
+        const std::string& initial_content = "");
+    static duckdb::unique_ptr<ODataReadBindData> FromServiceClient(
+        std::shared_ptr<ODataServiceClient> client,
+        const std::string& initial_content = "");
 
 public:
     ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client);
+    ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client, bool defer_initialization);
     ~ODataReadBindData() = default;
+
+    // Service-root mode (list resources from service document)
+    void EnableServiceRootMode() { service_root_mode_ = true; }
 
     // Core DuckDB interface methods
     std::vector<std::string> GetResultNames(bool all_columns = false);
@@ -106,9 +123,10 @@ private:
     bool first_page_cached_ = false;
     // Tracks how many rows have been emitted so far to align expanded cache row-wise
     size_t emitted_row_index_ = 0;
+    bool service_root_mode_ = false;
 
     // Helper methods
-    void InitializeComponents();
+    void InitializeComponents(bool service_root_mode = false);
 
 private:
     // FromEntitySetRoot refactoring helper methods
@@ -121,12 +139,10 @@ private:
     static void ParseODataV2Response(duckdb_yyjson::yyjson_val* root,
                                    std::shared_ptr<ODataEntitySetClient> odata_client,
                                    std::vector<std::string>& extracted_column_names);
-    static void HandleServiceDocument(duckdb_yyjson::yyjson_val* value_arr,
-                                    const std::string& entity_set_url,
-                                    std::shared_ptr<ODataEntitySetClient> odata_client);
     static std::vector<std::string> GetNavigationPropertyNames(std::shared_ptr<ODataEntitySetClient> odata_client);
     static std::string ExtractEntitySetNameFromUrl(const std::string& entity_set_url);
-    static bool IsServiceDocumentResponse(const std::vector<std::string>& column_names);
+public:
+    static bool LooksLikeServiceRootUrl(const std::string &url);
 };
 
 // ============================================================================
@@ -163,6 +179,18 @@ public:
     void ResetErrorState();
 
 private:
+    // Modular helpers for JSON -> DuckDB conversions
+    duckdb::Value ConvertList(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
+    duckdb::Value ConvertStruct(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
+    duckdb::Value ConvertVarchar(duckdb_yyjson::yyjson_val* value);
+    duckdb::Value ConvertInteger(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
+    duckdb::Value ConvertBigint(duckdb_yyjson::yyjson_val* value);
+    duckdb::Value ConvertFloatLike(duckdb_yyjson::yyjson_val* value);
+    duckdb::Value ConvertDecimal(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
+    duckdb::Value ConvertBoolean(duckdb_yyjson::yyjson_val* value);
+    duckdb::Value ConvertTimestamp(duckdb_yyjson::yyjson_val* value);
+    duckdb::Value ConvertFallbackAsString(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
+
     std::shared_ptr<ODataEntitySetClient> odata_client;
     std::shared_ptr<ODataTypeResolver> type_resolver;
     
@@ -296,6 +324,19 @@ private:
     std::deque<std::vector<duckdb::Value>> row_buffer_;
     bool has_next_page_ = false;
 };
+
+// ============================================================================
+// Helper Functions for ODataReadBind Modularization
+// ============================================================================
+namespace ODataReadBindHelpers {
+    void ProcessNamedParameters(ODataReadBindData* bind_data, const TableFunctionBindInput& input);
+    void ProcessExpandClause(ODataReadBindData* bind_data, const std::string& expand_clause);
+    std::string ExtractExpandClauseFromUrl(const std::string& url);
+    void SetupSchemaFromProbeResult(const ODataClientFactory::ProbeResult& probe_result, 
+                                   ODataReadBindData* bind_data,
+                                   vector<LogicalType>& return_types, 
+                                   vector<string>& names);
+}
 
 // ============================================================================
 // Function Declarations
