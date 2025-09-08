@@ -2,9 +2,8 @@
 # description: Test OData service root functionality for both V4 and V2
 # group: [erpl_web]
 
-# Load the extension
-statement ok
-LOAD 'build/debug/extension/erpl_web/erpl_web.duckdb_extension';
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
 
 # Test V4 service root (TripPin)
 query III
