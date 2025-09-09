@@ -370,7 +370,7 @@ void ODataDataExtractor::SetExpandedDataSchema(
       // we'll use LIST(VARCHAR) as a safe fallback that can hold the JSON
       // strings This allows the expand to work while preserving the data
       // structure
-            column_type = duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR);
+            column_type = duckdb::LogicalType::LIST(duckdb::LogicalTypeId::VARCHAR);
       ERPL_TRACE_INFO(
           "DATA_EXTRACTOR",
           "Using V2 fallback type LIST(VARCHAR) for expanded column '" +
@@ -784,7 +784,7 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
                         long long sec = ms / 1000;
             auto ts_val = duckdb::Value::TIMESTAMP(
                 duckdb::Timestamp::FromEpochSeconds(sec));
-                        return ts_val.DefaultCastAs(duckdb::LogicalType::VARCHAR);
+                        return ts_val.DefaultCastAs(duckdb::LogicalTypeId::VARCHAR);
                     } catch (...) {
                         // fall through to raw string
                     }
@@ -1109,7 +1109,7 @@ ODataDataExtractor::ParseJsonObject(duckdb_yyjson::yyjson_val *obj_val,
 duckdb::LogicalType ODataDataExtractor::InferStructTypeFromJsonObject(
     duckdb_yyjson::yyjson_val *obj_val) {
     if (!obj_val || !duckdb_yyjson::yyjson_is_obj(obj_val)) {
-        return duckdb::LogicalType::VARCHAR; // Fallback to VARCHAR if not an object
+        return duckdb::LogicalTypeId::VARCHAR; // Fallback to VARCHAR if not an object
     }
     
     duckdb::child_list_t<duckdb::LogicalType> struct_fields;
@@ -1135,7 +1135,7 @@ duckdb::LogicalType ODataDataExtractor::InferStructTypeFromJsonObject(
     }
     
     if (struct_fields.empty()) {
-        return duckdb::LogicalType::VARCHAR; // Fallback if no fields
+        return duckdb::LogicalTypeId::VARCHAR; // Fallback if no fields
     }
     
     return duckdb::LogicalType::STRUCT(struct_fields);
@@ -1145,11 +1145,11 @@ duckdb::LogicalType ODataDataExtractor::InferStructTypeFromJsonObject(
 duckdb::LogicalType
 ODataDataExtractor::InferTypeFromJsonValue(duckdb_yyjson::yyjson_val *value) {
     if (!value) {
-        return duckdb::LogicalType::VARCHAR;
+        return duckdb::LogicalTypeId::VARCHAR;
     }
     
     if (duckdb_yyjson::yyjson_is_null(value)) {
-        return duckdb::LogicalType::VARCHAR; // NULL values get VARCHAR type
+        return duckdb::LogicalTypeId::VARCHAR; // NULL values get VARCHAR type
     }
     
     if (duckdb_yyjson::yyjson_is_str(value)) {
@@ -1158,63 +1158,63 @@ ODataDataExtractor::InferTypeFromJsonValue(duckdb_yyjson::yyjson_val *value) {
         // Check for special OData V2 date format: "/Date(timestamp)/"
     if (str_val.length() > 8 && str_val.substr(0, 6) == "/Date(" &&
         str_val.substr(str_val.length() - 2) == ")/") {
-            return duckdb::LogicalType::TIMESTAMP;
+            return duckdb::LogicalTypeId::TIMESTAMP;
         }
         
         // Check if it looks like a date
         if (str_val.length() == 10 && str_val[4] == '-' && str_val[7] == '-') {
-            return duckdb::LogicalType::DATE;
+            return duckdb::LogicalTypeId::DATE;
         }
         
         // Check if it looks like a timestamp
     if (str_val.length() >= 19 && str_val[4] == '-' && str_val[7] == '-' &&
         str_val[10] == 'T') {
-            return duckdb::LogicalType::TIMESTAMP;
+            return duckdb::LogicalTypeId::TIMESTAMP;
         }
         
-        return duckdb::LogicalType::VARCHAR;
+        return duckdb::LogicalTypeId::VARCHAR;
     }
     
     if (duckdb_yyjson::yyjson_is_int(value)) {
         int64_t int_val = duckdb_yyjson::yyjson_get_int(value);
     if (int_val >= std::numeric_limits<int32_t>::min() &&
         int_val <= std::numeric_limits<int32_t>::max()) {
-            return duckdb::LogicalType::INTEGER;
+            return duckdb::LogicalTypeId::INTEGER;
         } else {
-            return duckdb::LogicalType::BIGINT;
+            return duckdb::LogicalTypeId::BIGINT;
         }
     }
     
     if (duckdb_yyjson::yyjson_is_uint(value)) {
         uint64_t uint_val = duckdb_yyjson::yyjson_get_uint(value);
         if (uint_val <= std::numeric_limits<int32_t>::max()) {
-            return duckdb::LogicalType::INTEGER;
+            return duckdb::LogicalTypeId::INTEGER;
         } else {
-            return duckdb::LogicalType::BIGINT;
+            return duckdb::LogicalTypeId::BIGINT;
         }
     }
     
     if (duckdb_yyjson::yyjson_is_real(value)) {
-        return duckdb::LogicalType::DOUBLE;
+        return duckdb::LogicalTypeId::DOUBLE;
     }
     
     if (duckdb_yyjson::yyjson_is_bool(value)) {
-        return duckdb::LogicalType::BOOLEAN;
+        return duckdb::LogicalTypeId::BOOLEAN;
     }
     
     if (duckdb_yyjson::yyjson_is_arr(value)) {
         // For arrays, we'll use LIST(VARCHAR) as a safe default
         // The actual item types could be inferred later if needed
-        return duckdb::LogicalType::LIST(duckdb::LogicalType::VARCHAR);
+        return duckdb::LogicalType::LIST(duckdb::LogicalTypeId::VARCHAR);
     }
     
     if (duckdb_yyjson::yyjson_is_obj(value)) {
         // For objects, we could recursively infer the struct type
         // But for now, we'll use VARCHAR to avoid infinite recursion
-        return duckdb::LogicalType::VARCHAR;
+        return duckdb::LogicalTypeId::VARCHAR;
     }
     
-    return duckdb::LogicalType::VARCHAR; // Default fallback
+    return duckdb::LogicalTypeId::VARCHAR; // Default fallback
 }
 
 // This method was removed as it required HTTP requests that aren't available in
@@ -1951,9 +1951,9 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
       // In service root mode, use fixed VARCHAR types for the unified schema
       ERPL_TRACE_INFO("ODATA_READ_BIND",
                       "Using fixed VARCHAR types for service root mode");
-      all_result_types = {duckdb::LogicalType::VARCHAR,
-                          duckdb::LogicalType::VARCHAR,
-                          duckdb::LogicalType::VARCHAR};
+      all_result_types = {duckdb::LogicalTypeId::VARCHAR,
+                          duckdb::LogicalTypeId::VARCHAR,
+                          duckdb::LogicalTypeId::VARCHAR};
     } else {
       ERPL_TRACE_INFO("ODATA_READ_BIND",
                       "Calling odata_client->GetResultTypes() for metadata");
@@ -1984,7 +1984,7 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
                                    all_result_types[metadata_index].ToString());
                         } else {
                             // Fallback to VARCHAR if metadata index is out of bounds
-                            mapped_types.push_back(duckdb::LogicalType::VARCHAR);
+                            mapped_types.push_back(duckdb::LogicalTypeId::VARCHAR);
               ERPL_TRACE_WARN(
                   "ODATA_READ_BIND",
                   "Column '" + extracted_name +
@@ -1992,7 +1992,7 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
                         }
                     } else {
                         // Fallback to VARCHAR if column not found in metadata
-                        mapped_types.push_back(duckdb::LogicalType::VARCHAR);
+                        mapped_types.push_back(duckdb::LogicalTypeId::VARCHAR);
             ERPL_TRACE_WARN(
                 "ODATA_READ_BIND",
                 "Column '" + extracted_name +
@@ -2012,7 +2012,7 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
                 "count (%d); defaulting all types to VARCHAR",
                     all_result_types.size(), extracted_column_names.size()));
         all_result_types.assign(extracted_column_names.size(),
-                                duckdb::LogicalType::VARCHAR);
+                                duckdb::LogicalTypeId::VARCHAR);
             }
         }
     }
@@ -2047,7 +2047,7 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
         for (size_t i = 0; i < exp_schema.size(); ++i) {
             const auto &exp_name = exp_schema[i];
       duckdb::LogicalType exp_type =
-          (i < exp_types.size()) ? exp_types[i] : duckdb::LogicalType::VARCHAR;
+          (i < exp_types.size()) ? exp_types[i] : duckdb::LogicalTypeId::VARCHAR;
             
       // Check if this type has been updated from the fallback LIST(VARCHAR) to
       // a proper struct type
@@ -2714,7 +2714,7 @@ duckdb::LogicalType
 ODataDataExtractor::InferStructTypeFromJsonObjectWithNestedExpands(
     duckdb_yyjson::yyjson_val *obj_val, const std::string &expand_path) {
     if (!obj_val || !duckdb_yyjson::yyjson_is_obj(obj_val)) {
-        return duckdb::LogicalType::VARCHAR; // Fallback to VARCHAR if not an object
+        return duckdb::LogicalTypeId::VARCHAR; // Fallback to VARCHAR if not an object
     }
     
     duckdb::child_list_t<duckdb::LogicalType> struct_fields;
@@ -2761,7 +2761,7 @@ ODataDataExtractor::InferStructTypeFromJsonObjectWithNestedExpands(
               json_val, expand_path + "/" + field_name);
                 }
             } else {
-                field_type = duckdb::LogicalType::VARCHAR; // Fallback
+                field_type = duckdb::LogicalTypeId::VARCHAR; // Fallback
             }
         } else {
             // Regular field, infer the type normally
@@ -2773,7 +2773,7 @@ ODataDataExtractor::InferStructTypeFromJsonObjectWithNestedExpands(
     }
     
     if (struct_fields.empty()) {
-        return duckdb::LogicalType::VARCHAR; // Fallback if no fields
+        return duckdb::LogicalTypeId::VARCHAR; // Fallback if no fields
     }
     
     return duckdb::LogicalType::STRUCT(struct_fields);
@@ -2935,8 +2935,9 @@ void SetupSchemaFromProbeResult(
     vector<string> &names) {
   if (probe_result.is_service_root) {
     names = {"name", "kind", "url"};
-    return_types = {duckdb::LogicalType::VARCHAR, duckdb::LogicalType::VARCHAR,
-                    duckdb::LogicalType::VARCHAR};
+    return_types = {duckdb::LogicalTypeId::VARCHAR, 
+                    duckdb::LogicalTypeId::VARCHAR,
+                    duckdb::LogicalTypeId::VARCHAR};
   } else {
     // Use existing entity-set schema logic
     names = bind_data->GetResultNames();
@@ -3062,7 +3063,7 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
 TableFunctionSet CreateODataReadFunction() {
     TableFunctionSet function_set("odata_read");
     
-  TableFunction read_entity_set({LogicalType::VARCHAR}, ODataReadScan,
+  TableFunction read_entity_set({LogicalTypeId::VARCHAR}, ODataReadScan,
                                 ODataReadBind, ODataReadTableInitGlobalState);
     read_entity_set.filter_pushdown = true;
     read_entity_set.projection_pushdown = true;
@@ -3442,9 +3443,9 @@ static duckdb::Value BuildFunctionsList(const Edmx& metadata) {
             // Handle empty params list
             if (params.empty()) {
                 child_list_t<LogicalType> param_struct;
-                param_struct.emplace_back("name", LogicalType::VARCHAR);
-                param_struct.emplace_back("type", LogicalType::VARCHAR);
-                param_struct.emplace_back("nullable", LogicalType::BOOLEAN);
+                param_struct.emplace_back("name", LogicalTypeId::VARCHAR);
+                param_struct.emplace_back("type", LogicalTypeId::VARCHAR);
+                param_struct.emplace_back("nullable", LogicalTypeId::BOOLEAN);
                 func_struct.emplace_back("parameters", Value::LIST(LogicalType::STRUCT(param_struct), vector<Value>()));
             } else {
                 func_struct.emplace_back("parameters", Value::LIST(params));
@@ -3592,8 +3593,8 @@ static void ODataDescribeScan(
 TableFunctionSet CreateODataDescribeFunction() {
     TableFunctionSet describe_func("odata_describe");
     
-    TableFunction describe_function({LogicalType::VARCHAR}, ODataDescribeScan, ODataDescribeBind);
-    describe_function.named_parameters["secret"] = LogicalType::VARCHAR;
+    TableFunction describe_function({LogicalTypeId::VARCHAR}, ODataDescribeScan, ODataDescribeBind);
+    describe_function.named_parameters["secret"] = LogicalTypeId::VARCHAR;
     
     describe_func.AddFunction(describe_function);
     return describe_func;
