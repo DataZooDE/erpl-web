@@ -24,6 +24,12 @@ SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/
 ----
 1
 
+# Test v2 endpoint without explicit version path (default $count disabled)
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers');
+----
+20
+
 # Test expand on V2 entity set
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
