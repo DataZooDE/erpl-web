@@ -236,7 +236,10 @@ static void RegisterWebFunctions(DatabaseInstance &instance)
 static void RegisterODataFunctions(DatabaseInstance &instance)
 {
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataReadFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataDescribeFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataAttachFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateSapODataShowFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
 
     auto &config = DBConfig::GetConfig(instance);
     config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
@@ -263,9 +266,7 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
 
 static void RegisterOdpFunctions(DatabaseInstance &instance)
 {
-    // Register ODP discovery functions
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateSapODataShowFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
+    // ODP functions are now registered in RegisterODataFunctions
 }
 
 static void RegisterTracingPragmas(DatabaseInstance &instance)

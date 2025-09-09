@@ -347,4 +347,7 @@ unique_ptr<FunctionData> ODataReadBind(ClientContext &context, TableFunctionBind
 double ODataReadTableProgress(ClientContext &, const FunctionData *func_data, const GlobalTableFunctionState *);
 TableFunctionSet CreateODataReadFunction();
 
+// OData Describe function
+TableFunctionSet CreateODataDescribeFunction();
+
 } // namespace erpl_web

@@ -1,0 +1,110 @@
+# Test OData Describe Function
+
+require erpl_web
+
+# Test service root description
+query IIII
+SELECT 
+    resource_type,
+    entity_set_name = '' as no_entity_set,
+    list_count(entity_sets) > 0 as has_entity_sets,
+    list_count(properties) as prop_count
+FROM odata_describe('https://services.odata.org/V4/Northwind/Northwind.svc');
+----
+service	true	true	0
+
+# Test entity sets from service root
+query II
+SELECT 
+    unnest.name,
+    unnest.entity_type
+FROM odata_describe('https://services.odata.org/V4/Northwind/Northwind.svc'),
+     UNNEST(entity_sets)
+WHERE unnest.name = 'Products';
+----
+Products	NorthwindModel.Product
+
+# Test Trippin V4 service root
+query IIII
+SELECT 
+    resource_type,
+    entity_set_name = '' as no_entity_set,
+    list_count(entity_sets) as entity_set_count,
+    list_count(properties) as prop_count
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/');
+----
+service	true	3	0
+
+# Test Trippin V4 entity sets
+query II
+SELECT 
+    unnest.name,
+    unnest.entity_type
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/'),
+     UNNEST(entity_sets)
+ORDER BY unnest.name;
+----
+Airlines	Trippin.Airline
+Airports	Trippin.Airport
+People	Trippin.Person
+
+# Test Trippin V4 entity set description (People)
+query IIIII
+SELECT 
+    resource_type,
+    entity_set_name,
+    entity_type_name,
+    list_count(properties) as prop_count,
+    list_count(navigation_properties) as nav_prop_count
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/People');
+----
+entity_set	People	Trippin.Person	11	3
+
+# Test Trippin V4 key properties
+query III
+SELECT 
+    unnest.name,
+    unnest.duckdb_type,
+    unnest.is_key
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/People'),
+     UNNEST(properties)
+WHERE unnest.is_key = true;
+----
+UserName	VARCHAR	true
+
+# Test Trippin V4 navigation properties
+query III
+SELECT 
+    unnest.name,
+    unnest.target_entity,
+    unnest.is_collection
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/People'),
+     UNNEST(navigation_properties)
+ORDER BY unnest.name;
+----
+BestFriend	Trippin.Person	false
+Friends	Trippin.Person	true
+Trips	Trippin.Trip	true
+
+# Test Trippin V4 recursive navigation property info
+query IIII
+SELECT 
+    unnest.name,
+    unnest.target_entity,
+    unnest.target_entity_type.name,
+    unnest.target_entity_type.property_count
+FROM odata_describe('https://services.odata.org/TripPinRESTierService/People'),
+     UNNEST(navigation_properties)
+WHERE unnest.target_entity = 'Trippin.Trip';
+----
+Trips	Trippin.Trip	Trip	8
+
+# Test with OData V2 service - commented out as V2 returns JSON instead of XML for metadata
+# query III
+# SELECT 
+#     resource_type,
+#     list_count(entity_sets) > 0 as has_entity_sets,
+#     list_count(functions) >= 0 as has_functions
+# FROM odata_describe('https://services.odata.org/V2/Northwind/Northwind.svc');
+# ----
+# service	true	true

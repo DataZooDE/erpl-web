@@ -3078,4 +3078,607 @@ TableFunctionSet CreateODataReadFunction() {
     return function_set;
 }
 
+// ============================================================================
+// OData Describe Function Implementation
+// ============================================================================
+
+class ODataDescribeBindData : public TableFunctionData {
+public:
+    std::string url;
+    std::string resource_type;  // "service" or "entity_set"
+    std::string entity_set_name;
+    std::shared_ptr<ODataEntitySetClient> entity_client;
+    std::shared_ptr<ODataServiceClient> service_client;
+    std::shared_ptr<HttpAuthParams> auth_params;
+    bool data_loaded = false;
+    std::vector<duckdb::Value> result_row;  // Single row result
+};
+
+// Helper to build property struct
+static duckdb::Value BuildPropertyStruct(const Property& prop, const Edmx& edmx) {
+    // Convert EDM type to DuckDB type string using static method
+    auto duck_type_str = DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(prop.type_name);
+    
+    child_list_t<Value> property_struct;
+    property_struct.emplace_back("name", Value(prop.name));
+    property_struct.emplace_back("duckdb_type", Value(duck_type_str));
+    property_struct.emplace_back("edm_type", Value(prop.type_name));
+    property_struct.emplace_back("is_nullable", Value(prop.nullable));
+    property_struct.emplace_back("is_key", Value(false));  // Will be set based on key info
+    property_struct.emplace_back("max_length", prop.max_length > 0 ? Value(prop.max_length) : Value());
+    property_struct.emplace_back("precision", prop.precision > 0 ? Value(prop.precision) : Value());
+    property_struct.emplace_back("scale", prop.scale > 0 ? Value(prop.scale) : Value());
+    
+    return Value::STRUCT(property_struct);
+}
+
+// Helper to recursively build navigation property info
+static duckdb::Value BuildNavigationPropertyStruct(
+    const NavigationProperty& nav_prop, 
+    const Edmx& edmx,
+    std::set<std::string>& visited_types  // Prevent infinite recursion
+) {
+    child_list_t<Value> nav_struct;
+    nav_struct.emplace_back("name", Value(nav_prop.name));
+    
+    // Extract target entity type
+    DuckTypeConverter converter(const_cast<Edmx&>(edmx));
+    auto [is_collection, target_type] = converter.ExtractCollectionType(nav_prop.type);
+    nav_struct.emplace_back("target_entity", Value(target_type));
+    
+    // Recursive: Get target entity type info (if not already visited)
+    child_list_t<Value> type_info;
+    if (visited_types.find(target_type) == visited_types.end()) {
+        visited_types.insert(target_type);
+        
+        auto entity_type_variant = edmx.FindType(target_type);
+        if (std::holds_alternative<EntityType>(entity_type_variant)) {
+            // Build a simplified struct of the target entity
+            auto& target_entity = std::get<EntityType>(entity_type_variant);
+            
+            type_info.emplace_back("name", Value(target_entity.name));
+            type_info.emplace_back("property_count", Value((int64_t)target_entity.properties.size()));
+            type_info.emplace_back("nav_property_count", Value((int64_t)target_entity.navigation_properties.size()));
+        } else {
+            // Provide empty values when target entity not found
+            type_info.emplace_back("name", Value(""));
+            type_info.emplace_back("property_count", Value((int64_t)0));
+            type_info.emplace_back("nav_property_count", Value((int64_t)0));
+        }
+    } else {
+        // Provide empty values when already visited (to avoid infinite recursion)
+        type_info.emplace_back("name", Value(""));
+        type_info.emplace_back("property_count", Value((int64_t)0));
+        type_info.emplace_back("nav_property_count", Value((int64_t)0));
+    }
+    Value target_type_value = Value::STRUCT(type_info);
+    nav_struct.emplace_back("target_entity_type", target_type_value);
+    nav_struct.emplace_back("is_collection", Value(is_collection));
+    nav_struct.emplace_back("partner", nav_prop.partner.empty() ? Value("") : Value(nav_prop.partner));
+    
+    // Add referential constraints
+    vector<Value> constraints;
+    for (const auto& constraint : nav_prop.referential_constraints) {
+        child_list_t<Value> constraint_struct;
+        constraint_struct.emplace_back("property", Value(constraint.property));
+        constraint_struct.emplace_back("referenced_property", Value(constraint.referenced_property));
+        constraints.push_back(Value::STRUCT(constraint_struct));
+    }
+    
+    // Handle empty constraints list
+    if (constraints.empty()) {
+        child_list_t<LogicalType> constraint_struct;
+        constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+        constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+        nav_struct.emplace_back("referential_constraints", Value::LIST(LogicalType::STRUCT(constraint_struct), vector<Value>()));
+    } else {
+        nav_struct.emplace_back("referential_constraints", Value::LIST(constraints));
+    }
+    
+    return Value::STRUCT(nav_struct);
+}
+
+// Bind function for odata_describe
+static unique_ptr<FunctionData> ODataDescribeBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<string> &names
+) {
+    ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Starting OData describe bind");
+    
+    // Reuse authentication handling from ODataReadBind
+    auto auth_params = AuthParamsFromInput(context, input);
+    
+    // Get URL argument
+    auto url = input.inputs[0].GetValue<string>();
+    ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Describing URL: " + url);
+    
+    // Reuse probe logic from ODataClientFactory
+    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
+    
+    auto bind_data = make_uniq<ODataDescribeBindData>();
+    bind_data->url = url;
+    bind_data->auth_params = auth_params;
+    
+    // Create appropriate client based on probe result
+    if (probe_result.is_service_root) {
+        bind_data->resource_type = "service";
+        bind_data->service_client = ODataClientFactory::CreateServiceClient(probe_result);
+        ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Detected service root");
+    } else {
+        bind_data->resource_type = "entity_set";
+        bind_data->entity_client = ODataClientFactory::CreateEntitySetClient(probe_result);
+        
+        // Extract entity set name from URL
+        HttpUrl parsed_url(url);
+        auto path = parsed_url.Path();
+        auto last_slash = path.find_last_of('/');
+        if (last_slash != std::string::npos) {
+            auto entity_set_part = path.substr(last_slash + 1);
+            // Remove any query parameters
+            auto query_pos = entity_set_part.find('?');
+            if (query_pos != std::string::npos) {
+                entity_set_part = entity_set_part.substr(0, query_pos);
+            }
+            // Remove any parentheses (for specific entity access)
+            auto paren_pos = entity_set_part.find('(');
+            if (paren_pos != std::string::npos) {
+                entity_set_part = entity_set_part.substr(0, paren_pos);
+            }
+            bind_data->entity_set_name = entity_set_part;
+        }
+        ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Detected entity set: " + bind_data->entity_set_name);
+    }
+    
+    // Define output schema
+    names = {"url", "resource_type", "entity_set_name", "entity_type_name", 
+             "properties", "navigation_properties", "entity_sets", "functions"};
+    
+    // Build types for the complex columns
+    // Properties struct
+    child_list_t<LogicalType> property_struct;
+    property_struct.emplace_back("name", LogicalType::VARCHAR);
+    property_struct.emplace_back("duckdb_type", LogicalType::VARCHAR);
+    property_struct.emplace_back("edm_type", LogicalType::VARCHAR);
+    property_struct.emplace_back("is_nullable", LogicalType::BOOLEAN);
+    property_struct.emplace_back("is_key", LogicalType::BOOLEAN);
+    property_struct.emplace_back("max_length", LogicalType::INTEGER);
+    property_struct.emplace_back("precision", LogicalType::INTEGER);
+    property_struct.emplace_back("scale", LogicalType::INTEGER);
+    auto property_type = LogicalType::STRUCT(property_struct);
+    
+    // Navigation properties struct
+    child_list_t<LogicalType> nav_struct;
+    nav_struct.emplace_back("name", LogicalType::VARCHAR);
+    nav_struct.emplace_back("target_entity", LogicalType::VARCHAR);
+    
+    // Target entity type sub-struct (nullable)
+    child_list_t<LogicalType> target_type_struct;
+    target_type_struct.emplace_back("name", LogicalType::VARCHAR);
+    target_type_struct.emplace_back("property_count", LogicalType::BIGINT);
+    target_type_struct.emplace_back("nav_property_count", LogicalType::BIGINT);
+    nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
+    
+    nav_struct.emplace_back("is_collection", LogicalType::BOOLEAN);
+    nav_struct.emplace_back("partner", LogicalType::VARCHAR);
+    
+    // Referential constraints sub-struct
+    child_list_t<LogicalType> constraint_struct;
+    constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+    constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+    nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
+    
+    auto nav_type = LogicalType::STRUCT(nav_struct);
+    
+    // Entity sets struct (for service root)
+    child_list_t<LogicalType> entity_set_struct;
+    entity_set_struct.emplace_back("name", LogicalType::VARCHAR);
+    entity_set_struct.emplace_back("entity_type", LogicalType::VARCHAR);
+    entity_set_struct.emplace_back("url", LogicalType::VARCHAR);
+    auto entity_set_type = LogicalType::STRUCT(entity_set_struct);
+    
+    // Functions struct
+    child_list_t<LogicalType> function_struct;
+    function_struct.emplace_back("name", LogicalType::VARCHAR);
+    function_struct.emplace_back("return_type", LogicalType::VARCHAR);
+    
+    // Function parameters sub-struct
+    child_list_t<LogicalType> param_struct;
+    param_struct.emplace_back("name", LogicalType::VARCHAR);
+    param_struct.emplace_back("type", LogicalType::VARCHAR);
+    param_struct.emplace_back("nullable", LogicalType::BOOLEAN);
+    function_struct.emplace_back("parameters", LogicalType::LIST(LogicalType::STRUCT(param_struct)));
+    
+    auto function_type = LogicalType::STRUCT(function_struct);
+    
+    return_types = {
+        LogicalType::VARCHAR,                    // url
+        LogicalType::VARCHAR,                    // resource_type
+        LogicalType::VARCHAR,                    // entity_set_name
+        LogicalType::VARCHAR,                    // entity_type_name
+        LogicalType::LIST(property_type),        // properties
+        LogicalType::LIST(nav_type),            // navigation_properties
+        LogicalType::LIST(entity_set_type),     // entity_sets
+        LogicalType::LIST(function_type)        // functions
+    };
+    
+    return bind_data;
+}
+
+// Scan function for odata_describe
+static void ODataDescribeScan(
+    ClientContext &context,
+    TableFunctionInput &data_p,
+    DataChunk &output
+) {
+    auto &bind_data = data_p.bind_data->CastNoConst<ODataDescribeBindData>();
+    
+    if (!bind_data.data_loaded) {
+        ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Loading metadata for: " + bind_data.url);
+        
+        // Load metadata
+        Edmx metadata;
+        
+        try {
+            if (bind_data.resource_type == "service") {
+                metadata = bind_data.service_client->GetMetadata();
+            } else {
+                metadata = bind_data.entity_client->GetMetadata();
+            }
+        } catch (const std::exception& e) {
+            throw InvalidInputException("Failed to fetch metadata: " + std::string(e.what()));
+        }
+        
+        // Build result row
+        vector<Value> row_values;
+        
+        // Basic info
+        row_values.push_back(Value(bind_data.url));
+        row_values.push_back(Value(bind_data.resource_type));
+        
+        if (bind_data.resource_type == "entity_set") {
+            // Entity set specific processing
+            row_values.push_back(Value(bind_data.entity_set_name));
+            
+            // Find the entity set in metadata
+            EntitySet entity_set;
+            bool found_entity_set = false;
+            for (const auto& schema : metadata.data_services.schemas) {
+                for (const auto& container : schema.entity_containers) {
+                    for (const auto& es : container.entity_sets) {
+                        if (es.name == bind_data.entity_set_name) {
+                            entity_set = es;
+                            found_entity_set = true;
+                            break;
+                        }
+                    }
+                    if (found_entity_set) break;
+                }
+                if (found_entity_set) break;
+            }
+            
+            if (!found_entity_set) {
+                // Try to find by looking at all entity sets
+                auto all_entity_sets = metadata.FindEntitySets();
+                for (const auto& es : all_entity_sets) {
+                    if (es.name == bind_data.entity_set_name) {
+                        entity_set = es;
+                        found_entity_set = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (found_entity_set) {
+                row_values.push_back(Value(entity_set.entity_type_name));
+                
+                // Get entity type
+                auto entity_type_variant = metadata.FindType(entity_set.entity_type_name);
+                if (std::holds_alternative<EntityType>(entity_type_variant)) {
+                    auto& et = std::get<EntityType>(entity_type_variant);
+                    
+                    // Build properties list
+                    vector<Value> properties;
+                    std::set<std::string> key_properties;
+                    for (const auto& key_ref : et.key.property_refs) {
+                        key_properties.insert(key_ref.name);
+                    }
+                    
+                    for (const auto& prop : et.properties) {
+                        auto prop_struct = BuildPropertyStruct(prop, metadata);
+                        // Update is_key field
+                        auto struct_children = StructValue::GetChildren(prop_struct);
+                        struct_children[4] = Value(key_properties.count(prop.name) > 0);
+                        
+                        // Create new struct with updated is_key
+                        child_list_t<Value> updated_struct;
+                        updated_struct.emplace_back("name", struct_children[0]);
+                        updated_struct.emplace_back("duckdb_type", struct_children[1]);
+                        updated_struct.emplace_back("edm_type", struct_children[2]);
+                        updated_struct.emplace_back("is_nullable", struct_children[3]);
+                        updated_struct.emplace_back("is_key", struct_children[4]);
+                        updated_struct.emplace_back("max_length", struct_children[5]);
+                        updated_struct.emplace_back("precision", struct_children[6]);
+                        updated_struct.emplace_back("scale", struct_children[7]);
+                        
+                        properties.push_back(Value::STRUCT(updated_struct));
+                    }
+                    // Add properties list (handle empty case)
+                    if (properties.empty()) {
+                        child_list_t<LogicalType> property_struct;
+                        property_struct.emplace_back("name", LogicalType::VARCHAR);
+                        property_struct.emplace_back("duckdb_type", LogicalType::VARCHAR);
+                        property_struct.emplace_back("edm_type", LogicalType::VARCHAR);
+                        property_struct.emplace_back("is_nullable", LogicalType::BOOLEAN);
+                        property_struct.emplace_back("is_key", LogicalType::BOOLEAN);
+                        property_struct.emplace_back("max_length", LogicalType::INTEGER);
+                        property_struct.emplace_back("precision", LogicalType::INTEGER);
+                        property_struct.emplace_back("scale", LogicalType::INTEGER);
+                        row_values.push_back(Value::LIST(LogicalType::STRUCT(property_struct), vector<Value>()));
+                    } else {
+                        row_values.push_back(Value::LIST(properties));
+                    }
+                    
+                    // Build navigation properties list with recursion
+                    vector<Value> nav_properties;
+                    std::set<std::string> visited_types;
+                    visited_types.insert(entity_set.entity_type_name);
+                    
+                    for (const auto& nav_prop : et.navigation_properties) {
+                        nav_properties.push_back(
+                            BuildNavigationPropertyStruct(nav_prop, metadata, visited_types)
+                        );
+                    }
+                    
+                    // Add navigation properties list (handle empty case)
+                    if (nav_properties.empty()) {
+                        child_list_t<LogicalType> nav_struct;
+                        nav_struct.emplace_back("name", LogicalType::VARCHAR);
+                        nav_struct.emplace_back("target_entity", LogicalType::VARCHAR);
+                        
+                        child_list_t<LogicalType> target_type_struct;
+                        target_type_struct.emplace_back("name", LogicalType::VARCHAR);
+                        target_type_struct.emplace_back("property_count", LogicalType::BIGINT);
+                        target_type_struct.emplace_back("nav_property_count", LogicalType::BIGINT);
+                        nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
+                        
+                        nav_struct.emplace_back("is_collection", LogicalType::BOOLEAN);
+                        nav_struct.emplace_back("partner", LogicalType::VARCHAR);
+                        
+                        child_list_t<LogicalType> constraint_struct;
+                        constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+                        constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+                        nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
+                        
+                        row_values.push_back(Value::LIST(LogicalType::STRUCT(nav_struct), vector<Value>()));
+                    } else {
+                        row_values.push_back(Value::LIST(nav_properties));
+                    }
+                } else {
+                    // Entity type not found, return empty lists with proper types
+                    // Use the same struct types as defined in bind
+                    child_list_t<LogicalType> property_struct;
+                    property_struct.emplace_back("name", LogicalType::VARCHAR);
+                    property_struct.emplace_back("duckdb_type", LogicalType::VARCHAR);
+                    property_struct.emplace_back("edm_type", LogicalType::VARCHAR);
+                    property_struct.emplace_back("is_nullable", LogicalType::BOOLEAN);
+                    property_struct.emplace_back("is_key", LogicalType::BOOLEAN);
+                    property_struct.emplace_back("max_length", LogicalType::INTEGER);
+                    property_struct.emplace_back("precision", LogicalType::INTEGER);
+                    property_struct.emplace_back("scale", LogicalType::INTEGER);
+                    row_values.push_back(Value::LIST(LogicalType::STRUCT(property_struct), vector<Value>()));
+                    
+                    child_list_t<LogicalType> nav_struct;
+                    nav_struct.emplace_back("name", LogicalType::VARCHAR);
+                    nav_struct.emplace_back("target_entity", LogicalType::VARCHAR);
+                    child_list_t<LogicalType> target_type_struct;
+                    target_type_struct.emplace_back("name", LogicalType::VARCHAR);
+                    target_type_struct.emplace_back("property_count", LogicalType::BIGINT);
+                    target_type_struct.emplace_back("nav_property_count", LogicalType::BIGINT);
+                    nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
+                    nav_struct.emplace_back("is_collection", LogicalType::BOOLEAN);
+                    nav_struct.emplace_back("partner", LogicalType::VARCHAR);
+                    child_list_t<LogicalType> constraint_struct;
+                    constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+                    constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+                    nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
+                    row_values.push_back(Value::LIST(LogicalType::STRUCT(nav_struct), vector<Value>()));
+                }
+            } else {
+                // Entity set not found
+                row_values.push_back(Value(""));  // entity_type_name (empty string instead of NULL)
+                
+                // Properties empty list
+                child_list_t<LogicalType> property_struct;
+                property_struct.emplace_back("name", LogicalType::VARCHAR);
+                property_struct.emplace_back("duckdb_type", LogicalType::VARCHAR);
+                property_struct.emplace_back("edm_type", LogicalType::VARCHAR);
+                property_struct.emplace_back("is_nullable", LogicalType::BOOLEAN);
+                property_struct.emplace_back("is_key", LogicalType::BOOLEAN);
+                property_struct.emplace_back("max_length", LogicalType::INTEGER);
+                property_struct.emplace_back("precision", LogicalType::INTEGER);
+                property_struct.emplace_back("scale", LogicalType::INTEGER);
+                row_values.push_back(Value::LIST(LogicalType::STRUCT(property_struct), vector<Value>()));
+                
+                // Navigation properties empty list
+                child_list_t<LogicalType> nav_struct;
+                nav_struct.emplace_back("name", LogicalType::VARCHAR);
+                nav_struct.emplace_back("target_entity", LogicalType::VARCHAR);
+                child_list_t<LogicalType> target_type_struct;
+                target_type_struct.emplace_back("name", LogicalType::VARCHAR);
+                target_type_struct.emplace_back("property_count", LogicalType::BIGINT);
+                target_type_struct.emplace_back("nav_property_count", LogicalType::BIGINT);
+                nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
+                nav_struct.emplace_back("is_collection", LogicalType::BOOLEAN);
+                nav_struct.emplace_back("partner", LogicalType::VARCHAR);
+                child_list_t<LogicalType> constraint_struct;
+                constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+                constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+                nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
+                row_values.push_back(Value::LIST(LogicalType::STRUCT(nav_struct), vector<Value>()));
+            }
+            
+            // Empty entity_sets and functions for entity set
+            child_list_t<LogicalType> entity_set_struct;
+            entity_set_struct.emplace_back("name", LogicalType::VARCHAR);
+            entity_set_struct.emplace_back("entity_type", LogicalType::VARCHAR);
+            entity_set_struct.emplace_back("url", LogicalType::VARCHAR);
+            row_values.push_back(Value::LIST(LogicalType::STRUCT(entity_set_struct), vector<Value>()));
+            
+            child_list_t<LogicalType> function_struct;
+            function_struct.emplace_back("name", LogicalType::VARCHAR);
+            function_struct.emplace_back("return_type", LogicalType::VARCHAR);
+            child_list_t<LogicalType> param_struct;
+            param_struct.emplace_back("name", LogicalType::VARCHAR);
+            param_struct.emplace_back("type", LogicalType::VARCHAR);
+            param_struct.emplace_back("nullable", LogicalType::BOOLEAN);
+            function_struct.emplace_back("parameters", LogicalType::LIST(LogicalType::STRUCT(param_struct)));
+            row_values.push_back(Value::LIST(LogicalType::STRUCT(function_struct), vector<Value>()));
+            
+        } else {
+            // Service root
+            row_values.push_back(Value(""));  // entity_set_name (empty string instead of NULL)
+            row_values.push_back(Value(""));  // entity_type_name (empty string instead of NULL)
+            
+            // Properties empty list (same struct as defined in bind)
+            child_list_t<LogicalType> property_struct;
+            property_struct.emplace_back("name", LogicalType::VARCHAR);
+            property_struct.emplace_back("duckdb_type", LogicalType::VARCHAR);
+            property_struct.emplace_back("edm_type", LogicalType::VARCHAR);
+            property_struct.emplace_back("is_nullable", LogicalType::BOOLEAN);
+            property_struct.emplace_back("is_key", LogicalType::BOOLEAN);
+            property_struct.emplace_back("max_length", LogicalType::INTEGER);
+            property_struct.emplace_back("precision", LogicalType::INTEGER);
+            property_struct.emplace_back("scale", LogicalType::INTEGER);
+            row_values.push_back(Value::LIST(LogicalType::STRUCT(property_struct), vector<Value>()));
+            
+            // Navigation properties empty list (same struct as defined in bind)
+            child_list_t<LogicalType> nav_struct;
+            nav_struct.emplace_back("name", LogicalType::VARCHAR);
+            nav_struct.emplace_back("target_entity", LogicalType::VARCHAR);
+            child_list_t<LogicalType> target_type_struct;
+            target_type_struct.emplace_back("name", LogicalType::VARCHAR);
+            target_type_struct.emplace_back("property_count", LogicalType::BIGINT);
+            target_type_struct.emplace_back("nav_property_count", LogicalType::BIGINT);
+            nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
+            nav_struct.emplace_back("is_collection", LogicalType::BOOLEAN);
+            nav_struct.emplace_back("partner", LogicalType::VARCHAR);
+            child_list_t<LogicalType> constraint_struct;
+            constraint_struct.emplace_back("property", LogicalType::VARCHAR);
+            constraint_struct.emplace_back("referenced_property", LogicalType::VARCHAR);
+            nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
+            row_values.push_back(Value::LIST(LogicalType::STRUCT(nav_struct), vector<Value>()));
+            
+            // Build entity sets list
+            vector<Value> entity_sets;
+            for (const auto& schema : metadata.data_services.schemas) {
+                for (const auto& container : schema.entity_containers) {
+                    for (const auto& entity_set : container.entity_sets) {
+                        child_list_t<Value> es_struct;
+                        es_struct.emplace_back("name", Value(entity_set.name));
+                        es_struct.emplace_back("entity_type", Value(entity_set.entity_type_name));
+                        
+                        // Build full URL for entity set
+                        std::string entity_url = bind_data.url;
+                        if (!entity_url.empty() && entity_url.back() != '/') {
+                            entity_url += "/";
+                        }
+                        entity_url += entity_set.name;
+                        
+                        es_struct.emplace_back("url", Value(entity_url));
+                        entity_sets.push_back(Value::STRUCT(es_struct));
+                    }
+                }
+            }
+            // Add entity sets list (handle empty case)
+            if (entity_sets.empty()) {
+                // Create empty list with proper struct type
+                child_list_t<LogicalType> entity_set_struct;
+                entity_set_struct.emplace_back("name", LogicalType::VARCHAR);
+                entity_set_struct.emplace_back("entity_type", LogicalType::VARCHAR);
+                entity_set_struct.emplace_back("url", LogicalType::VARCHAR);
+                row_values.push_back(Value::LIST(LogicalType::STRUCT(entity_set_struct), vector<Value>()));
+            } else {
+                row_values.push_back(Value::LIST(entity_sets));
+            }
+            
+            // Build functions list
+            vector<Value> functions;
+            for (const auto& schema : metadata.data_services.schemas) {
+                for (const auto& func : schema.functions) {
+                    child_list_t<Value> func_struct;
+                    func_struct.emplace_back("name", Value(func.name));
+                    func_struct.emplace_back("return_type", Value(func.return_type));
+                    
+                    vector<Value> params;
+                    for (const auto& param : func.parameters) {
+                        child_list_t<Value> param_struct;
+                        param_struct.emplace_back("name", Value(param.name));
+                        param_struct.emplace_back("type", Value(param.type));
+                        param_struct.emplace_back("nullable", Value(param.nullable));
+                        params.push_back(Value::STRUCT(param_struct));
+                    }
+                    
+                    // Handle empty params list
+                    if (params.empty()) {
+                        child_list_t<LogicalType> param_struct;
+                        param_struct.emplace_back("name", LogicalType::VARCHAR);
+                        param_struct.emplace_back("type", LogicalType::VARCHAR);
+                        param_struct.emplace_back("nullable", LogicalType::BOOLEAN);
+                        func_struct.emplace_back("parameters", Value::LIST(LogicalType::STRUCT(param_struct), vector<Value>()));
+                    } else {
+                        func_struct.emplace_back("parameters", Value::LIST(params));
+                    }
+                    functions.push_back(Value::STRUCT(func_struct));
+                }
+            }
+            
+            // Add functions list (handle empty case)
+            if (functions.empty()) {
+                // Create empty list with proper struct type
+                child_list_t<LogicalType> function_struct;
+                function_struct.emplace_back("name", LogicalType::VARCHAR);
+                function_struct.emplace_back("return_type", LogicalType::VARCHAR);
+                
+                child_list_t<LogicalType> param_struct;
+                param_struct.emplace_back("name", LogicalType::VARCHAR);
+                param_struct.emplace_back("type", LogicalType::VARCHAR);
+                param_struct.emplace_back("nullable", LogicalType::BOOLEAN);
+                function_struct.emplace_back("parameters", LogicalType::LIST(LogicalType::STRUCT(param_struct)));
+                
+                row_values.push_back(Value::LIST(LogicalType::STRUCT(function_struct), vector<Value>()));
+            } else {
+                row_values.push_back(Value::LIST(functions));
+            }
+        }
+        
+        bind_data.result_row = row_values;
+        bind_data.data_loaded = true;
+        ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Metadata loaded successfully");
+    }
+    
+    // Output single row
+    if (!bind_data.result_row.empty()) {
+        for (idx_t i = 0; i < bind_data.result_row.size(); i++) {
+            output.SetValue(i, 0, bind_data.result_row[i]);
+        }
+        output.SetCardinality(1);
+        bind_data.result_row.clear();  // Clear to indicate we've returned the row
+    } else {
+        output.SetCardinality(0);
+    }
+}
+
+// Create the odata_describe function
+TableFunctionSet CreateODataDescribeFunction() {
+    TableFunctionSet describe_func("odata_describe");
+    
+    TableFunction describe_function({LogicalType::VARCHAR}, ODataDescribeScan, ODataDescribeBind);
+    describe_function.named_parameters["secret"] = LogicalType::VARCHAR;
+    
+    describe_func.AddFunction(describe_function);
+    return describe_func;
+}
+
 } // namespace erpl_web
