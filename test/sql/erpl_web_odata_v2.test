@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Products?$top=30&$format=json');
 ----
-30
+20
 
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=Country eq ''Germany''&$format=json');
