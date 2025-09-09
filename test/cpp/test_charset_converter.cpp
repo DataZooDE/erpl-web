@@ -19,7 +19,7 @@ TEST_CASE("CharsetConverter Tests", "[charset_converter]")
     SECTION("Convert UTF-8 to ISO-8859-1") {
         CharsetConverter converter("text/html; charset=ISO-8859-1");
         std::string input = u8"Hello, 世界!";
-        std::string expected = "Hello, ?????!";
+        std::string expected = "Hello, \?\?\?\?\?!";
         std::string result = converter.convert(input);
         //REQUIRE(result == expected);
     }

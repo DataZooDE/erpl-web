@@ -208,9 +208,6 @@ std::map<std::string, std::string> ODataPredicatePushdownHelper::ParseExistingQu
 }
 
 // Sanitize existing URL params: encode $filter exactly once, normalize $expand
-static inline bool StringIEq(const std::string &a, const std::string &b) {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char ac, char bc){ return std::tolower(ac) == std::tolower(bc); });
-}
 
 static void SanitizeFilterParam(std::map<std::string, std::string>& params) {
     auto it = params.find("$filter");
