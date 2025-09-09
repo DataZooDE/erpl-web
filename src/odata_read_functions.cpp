@@ -2914,6 +2914,19 @@ void ProcessNamedParameters(ODataReadBindData *bind_data,
                                        expand_value.c_str()));
     ProcessExpandClause(bind_data, expand_value);
   }
+
+  // Handle COUNT parameter
+  if (input.named_parameters.find("count") != input.named_parameters.end()) {
+      auto count_value =
+          input.named_parameters["count"].GetValue<bool>();
+      ERPL_TRACE_DEBUG("ODATA_BIND",
+                       duckdb::StringUtil::Format(
+                           "Named parameter 'count' set to: %s",
+                           count_value ? "true" : "false"));
+      if (count_value) {
+          bind_data->PredicatePushdownHelper()->EnableInlineCount(true);
+      }
+  }
 }
 
 void SetupSchemaFromProbeResult(
@@ -3055,10 +3068,11 @@ TableFunctionSet CreateODataReadFunction() {
     read_entity_set.projection_pushdown = true;
     read_entity_set.table_scan_progress = ODataReadTableProgress;
     
-    // Add named parameters for TOP, SKIP, and EXPAND
+    // Add named parameters for TOP, SKIP, EXPAND, and COUNT
     read_entity_set.named_parameters["top"] = LogicalType::UBIGINT;
     read_entity_set.named_parameters["skip"] = LogicalType::UBIGINT;
     read_entity_set.named_parameters["expand"] = LogicalType::VARCHAR;
+    read_entity_set.named_parameters["count"] = LogicalType::BOOLEAN;
 
     function_set.AddFunction(read_entity_set);
     return function_set;

@@ -168,22 +168,6 @@ protected:
         
         // Add input parameters to the URL if they exist (virtual method call)
         modified_url = AddInputParametersToUrl(modified_url);
-        
-        // If OData v4, append $count=true (lenient) unless already present
-        if (odata_version == ODataVersion::V4) {
-            auto q = modified_url.Query();
-            const bool has_q = !q.empty();
-            // Avoid duplicate count when nextLink already contains it (may be URL-encoded as %24count=)
-            const bool has_count_plain = (q.find("$count=") != std::string::npos);
-            const bool has_count_encoded = (q.find("%24count=") != std::string::npos);
-            if (!has_count_plain && !has_count_encoded) {
-                std::string sep = has_q ? "&" : "?";
-                modified_url.Query(q + sep + "$count=true");
-                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Appended $count=true to URL for progress: " + modified_url.ToString());
-            } else {
-                ERPL_TRACE_DEBUG("ODATA_CLIENT", "Skipping $count append; query already has count parameter: " + q);
-            }
-        }
 
         ERPL_TRACE_DEBUG("ODATA_CLIENT", "DoHttpGet: URL after input parameters: " + modified_url.ToString());
         
