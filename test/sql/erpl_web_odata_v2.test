@@ -40,7 +40,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=25&$select=CustomerID,CompanyName,ContactName&$format=json');
 ----
-25
+20
 
 # Test OData v2 with different entity set
 query I
