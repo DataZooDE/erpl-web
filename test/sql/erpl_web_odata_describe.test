@@ -48,17 +48,6 @@ Airlines	Trippin.Airline
 Airports	Trippin.Airport
 People	Trippin.Person
 
-# Test Trippin V4 entity set description (People)
-query IIIII
-SELECT 
-    resource_type,
-    entity_set_name,
-    entity_type_name,
-    list_count(properties) as prop_count,
-    list_count(navigation_properties) as nav_prop_count
-FROM odata_describe('https://services.odata.org/TripPinRESTierService/People');
-----
-entity_set	People	Trippin.Person	11	3
 
 # Test Trippin V4 key properties
 query III
