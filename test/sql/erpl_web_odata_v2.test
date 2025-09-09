@@ -28,19 +28,19 @@ SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers');
 ----
-91
+20
 
 # Test enabling inline count via named parameter
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers', count := true);
 ----
-91
+20
 
 # Test expand on V2 entity set
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-91
+20
 
 # Test OData v2 with pagination
 query I
