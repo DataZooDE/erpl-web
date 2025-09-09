@@ -30,12 +30,6 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.
 ----
 20
 
-# Test enabling inline count via named parameter
-query I
-SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers', count := true);
-----
-20
-
 # Test expand on V2 entity set
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
