@@ -28,31 +28,31 @@ SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers');
 ----
-20
+91
 
 # Test enabling inline count via named parameter
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers', count := true);
 ----
-20
+91
 
 # Test expand on V2 entity set
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test OData v2 with pagination
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$top=25&$select=CustomerID,CompanyName,ContactName&$format=json');
 ----
-20
+25
 
 # Test OData v2 with different entity set
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Products?$top=30&$format=json');
 ----
-20
+30
 
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers?$filter=Country eq ''Germany''&$format=json');
