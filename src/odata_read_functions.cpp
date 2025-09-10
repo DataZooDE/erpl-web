@@ -3166,9 +3166,9 @@ static duckdb::Value BuildPropertyStruct(const Property& prop, bool is_key = fal
     property_struct.emplace_back("edm_type", Value(prop.type_name));
     property_struct.emplace_back("is_nullable", Value(prop.nullable));
     property_struct.emplace_back("is_key", Value(is_key));
-    property_struct.emplace_back("max_length", prop.max_length > 0 ? Value(prop.max_length) : Value());
-    property_struct.emplace_back("precision", prop.precision > 0 ? Value(prop.precision) : Value());
-    property_struct.emplace_back("scale", prop.scale > 0 ? Value(prop.scale) : Value());
+    property_struct.emplace_back("max_length", prop.max_length > 0 ? Value(prop.max_length) : Value::INTEGER(0));
+    property_struct.emplace_back("precision", prop.precision > 0 ? Value(prop.precision) : Value::INTEGER(0));
+    property_struct.emplace_back("scale", prop.scale > 0 ? Value(prop.scale) : Value::INTEGER(0));
     
     return Value::STRUCT(property_struct);
 }
