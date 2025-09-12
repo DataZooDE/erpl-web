@@ -18,7 +18,17 @@ statement ok
 SET erpl_trace_level='INFO';
 
 # Skip this test in CI unless ERPL_SAP_BASE_URL is provided
-require env ERPL_SAP_BASE_URL
+require-env ERPL_SAP_BASE_URL
+
+require-env ERPL_SAP_PASSWORD
+
+statement ok
+CREATE SECRET (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD '${ERPL_SAP_BASE_URL}',
+    SCOPE '${ERPL_SAP_BASE_URL}/sap/'
+);
 
 # ============================================================================
 # SECTION 1: SAP OData to discovery
@@ -32,7 +42,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odata_show';
 
 # Final verification that both functions are properly registered
 query I
-SELECT COUNT(*) FROM sap_odata_show(getenv('ERPL_SAP_BASE_URL'));
+SELECT COUNT(*) FROM sap_odata_show(${ERPL_SAP_BASE_URL});
 ----
 1003
 

@@ -11,16 +11,21 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
+# Skip this test in CI unless ERPL_SAP_BASE_URL is provided
+require-env ERPL_SAP_BASE_URL
+
+require-env ERPL_SAP_PASSWORD
+
 statement ok
 CREATE SECRET (
 	TYPE http_basic,
 	USERNAME 'DEVELOPER',
-	PASSWORD 'ABAPtr2022#00',
-    SCOPE 'http://localhost:50000/sap/'
+	PASSWORD '${ERPL_SAP_PASSWORD}',
+    SCOPE '${ERPL_SAP_BASE_URL}/sap/'
 );
 
 statement ok
-ATTACH 'http://localhost:50000/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/' AS travel (TYPE odata, IGNORE 'I_Draft*')
+ATTACH '${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/' AS travel (TYPE odata, IGNORE 'I_Draft*')
 
 # Can query from attached table
 query I
