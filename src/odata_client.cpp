@@ -3,7 +3,6 @@
 #include "odata_client.hpp"
 #include "tracing.hpp"
 #include "odata_url_helpers.hpp"
-#include "odata_behavior.hpp"
 
 namespace erpl_web {
 
@@ -146,8 +145,7 @@ std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataConten
     ERPL_TRACE_DEBUG("ODATA_CONTENT", "Content size: " + std::to_string(content.length()) + " bytes");
     
     if (ODataJsonContentMixin::IsJsonContentType(ContentType())) {
-        ODataVersionDetector detector;
-        auto detected_version = detector.detectFromJson(content);
+        auto detected_version = ODataJsonContentMixin::DetectODataVersion(content);
         ERPL_TRACE_DEBUG("ODATA_CONTENT", std::string("Detected OData version from response: ") + (detected_version == ODataVersion::V2 ? "V2" : "V4"));
         ERPL_TRACE_DEBUG("ODATA_CONTENT", std::string("Metadata suggested version: ") + (odata_version == ODataVersion::V2 ? "V2" : "V4"));
         auto content_obj = std::make_shared<ODataEntitySetJsonContent>(content);

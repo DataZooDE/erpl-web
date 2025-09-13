@@ -87,7 +87,6 @@ set(EXTENSION_SOURCES
     src/oauth2_flow_v2.cpp
     src/oauth2_server.cpp
     src/timeout_http_client.cpp
-    src/odata_behavior.cpp
     src/odata_url_helpers.cpp
 )
 

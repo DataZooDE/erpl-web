@@ -17,7 +17,6 @@ set(TEST_SOURCES
     test_odata_edm_builder.cpp
     test_odata_client.cpp
     test_odata_content.cpp
-    test_odata_behavior.cpp
     test_odata_url_helpers.cpp
     test_datasphere_integration.cpp
     test_datasphere_oauth2_consolidated.cpp
