@@ -1,0 +1,66 @@
+# name: test/sql/erpl_odata_v4_storage.test
+# description: test erpl_odata extension for OData v4 service (TripPin), including attach functionality
+# group: [erpl_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+# ============================================================================
+# OData v4 Service Storage Testing (TripPin)
+# ============================================================================
+
+# Attach OData v4 service to database
+statement ok
+ATTACH 'https://services.odata.org/TripPinRESTierService/' AS trippin (TYPE odata)
+
+# Can query from attached table
+query I
+SELECT COUNT(*) FROM trippin.People;
+----
+20
+
+# Can query from attached table with specific data
+query I
+SELECT COUNT(*) FROM trippin.Airlines;
+----
+3
+
+# Test querying specific person data
+query T
+SELECT UserName FROM trippin.People WHERE FirstName = 'Russell' AND LastName = 'Whyte' ORDER BY UserName LIMIT 1;
+----
+russellwhyte
+
+# Test querying airline data
+query T
+SELECT Name FROM trippin.Airlines WHERE AirlineCode = 'AA' ORDER BY Name LIMIT 1;
+----
+American Airlines
+
+# Test querying airport data
+query I
+SELECT COUNT(*) FROM trippin.Airports;
+----
+3
+
+# Test querying with filter
+query I
+SELECT COUNT(*) FROM trippin.People WHERE Gender = 'Female';
+----
+5
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+SELECT 'OData v4 storage tests completed...' as status;

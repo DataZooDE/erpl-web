@@ -1,0 +1,60 @@
+# name: test/sql/erpl_odata_v2_storage.test
+# description: test erpl_odata extension for OData v2 service (Northwind), including attach functionality
+# group: [erpl_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+# ============================================================================
+# OData v2 Service Storage Testing (Northwind)
+# ============================================================================
+
+# Attach OData v2 service to database
+statement ok
+ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc/' AS northwind (TYPE odata)
+
+# Can query from attached table
+query I
+SELECT COUNT(*) FROM northwind.Customers;
+----
+20
+
+# Can query from attached table with specific data
+query I
+SELECT COUNT(*) FROM northwind.Products;
+----
+20
+
+# Test querying specific customer data
+query T
+SELECT CustomerID FROM northwind.Customers WHERE Country = 'Germany' ORDER BY CustomerID LIMIT 1;
+----
+ALFKI
+
+# Test querying product data
+query T
+SELECT ProductName FROM northwind.Products WHERE ProductID = 1;
+----
+Chai
+
+# Test querying order data
+query I
+SELECT COUNT(*) FROM northwind.Orders;
+----
+20
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+SELECT 'OData v2 storage tests completed...' as status;

@@ -11,8 +11,34 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
+# Skip this test in CI unless Datasphere OAuth environment variables are provided
+require-env ERPL_DATASPHERE_TENANT
+
+require-env ERPL_DATASPHERE_CLIENT_ID
+
+require-env ERPL_DATASPHERE_CLIENT_SECRET
+
+require-env ERPL_DATASPHERE_REDIRECT_URI
+
+require-env ERPL_DATASPHERE_SCOPE
+
 # ============================================================================
-# SECTION 1: Datasphere Function Registration
+# SECTION 1: Datasphere OAuth2 Secret Creation
+# ============================================================================
+
+# Create OAuth2 secret for Datasphere authentication
+statement ok
+CREATE SECRET (
+	TYPE oauth2,
+	TENANT '${ERPL_DATASPHERE_TENANT}',
+	CLIENT_ID '${ERPL_DATASPHERE_CLIENT_ID}',
+	CLIENT_SECRET '${ERPL_DATASPHERE_CLIENT_SECRET}',
+	REDIRECT_URI '${ERPL_DATASPHERE_REDIRECT_URI}',
+	SCOPE '${ERPL_DATASPHERE_SCOPE}'
+);
+
+# ============================================================================
+# SECTION 2: Datasphere Function Registration
 # ============================================================================
 
 # Test that Datasphere functions are registered (without calling them)
@@ -32,7 +58,7 @@ statement ok
 SELECT 'Testing datasphere_asset function registration...' as status;
 
 # ============================================================================
-# SECTION 2: Datasphere Function Verification
+# SECTION 3: Datasphere Function Verification
 # ============================================================================
 
 # Verify Datasphere functions exist in function catalog
@@ -58,7 +84,7 @@ datasphere_show_assets
 datasphere_show_spaces
 
 # ============================================================================
-# SECTION 3: Datasphere OAuth2 Configuration
+# SECTION 4: Datasphere OAuth2 Configuration
 # ============================================================================
 
 # Test Datasphere OAuth2 configuration (without actual authentication)
@@ -74,7 +100,7 @@ statement ok
 SELECT 'Testing Datasphere catalog functionality...' as status;
 
 # ============================================================================
-# SECTION 4: Datasphere Integration Features
+# SECTION 5: Datasphere Integration Features
 # ============================================================================
 
 # Test Datasphere browser integration (mock)
@@ -90,7 +116,7 @@ statement ok
 SELECT 'Testing Datasphere secret management...' as status;
 
 # ============================================================================
-# SECTION 5: Datasphere Configuration
+# SECTION 6: Datasphere Configuration
 # ============================================================================
 
 # Test Datasphere-specific settings
@@ -102,7 +128,7 @@ statement ok
 SELECT 'Testing Datasphere OAuth2 flow configuration...' as status;
 
 # ============================================================================
-# SECTION 6: Datasphere Function Parameters
+# SECTION 7: Datasphere Function Parameters
 # ============================================================================
 
 # Test function parameter validation (without execution)
@@ -114,7 +140,7 @@ statement ok
 SELECT 'Testing Datasphere function return type definitions...' as status;
 
 # ============================================================================
-# SECTION 7: Final Verification
+# SECTION 8: Final Verification
 # ============================================================================
 
 # Final verification that all Datasphere functions are accessible

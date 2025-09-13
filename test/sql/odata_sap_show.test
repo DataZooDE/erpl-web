@@ -42,7 +42,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odata_show';
 
 # Final verification that both functions are properly registered
 query I
-SELECT COUNT(*) FROM sap_odata_show(${ERPL_SAP_BASE_URL});
+SELECT COUNT(*) FROM sap_odata_show('${ERPL_SAP_BASE_URL}');
 ----
 1003
 
