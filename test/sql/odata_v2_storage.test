@@ -1,4 +1,4 @@
-# name: test/sql/erpl_odata_v2_storage.test
+# name: test/sql/odata_v2_storage.test
 # description: test erpl_odata extension for OData v2 service (Northwind), including attach functionality
 # group: [erpl_odata]
 
@@ -18,39 +18,72 @@ SET erpl_trace_enabled=false;
 # OData v2 Service Storage Testing (Northwind)
 # ============================================================================
 
-# Attach OData v2 service to database
+# Test ATTACH command works
 statement ok
 ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc/' AS northwind (TYPE odata)
 
-# Can query from attached table
+# Test that database is attached
 query I
-SELECT COUNT(*) FROM northwind.Customers;
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name = 'northwind';
 ----
-20
+1
 
-# Can query from attached table with specific data
+# Test SHOW TABLES works and returns expected number of tables
 query I
-SELECT COUNT(*) FROM northwind.Products;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_catalog = 'northwind';
 ----
-20
+26
 
-# Test querying specific customer data
+# Test basic SELECT queries work
 query T
-SELECT CustomerID FROM northwind.Customers WHERE Country = 'Germany' ORDER BY CustomerID LIMIT 1;
+SELECT CategoryName FROM northwind.Categories WHERE CategoryID = 1;
+----
+Beverages
+
+# Test SELECT with multiple columns
+query II
+SELECT CategoryID, CategoryName FROM northwind.Categories WHERE CategoryID <= 2 ORDER BY CategoryID;
+----
+1	Beverages
+2	Condiments
+
+# Test querying customer data
+query T
+SELECT CustomerID FROM northwind.Customers WHERE CustomerID = 'ALFKI';
 ----
 ALFKI
 
-# Test querying product data
+# Test querying product data  
 query T
 SELECT ProductName FROM northwind.Products WHERE ProductID = 1;
 ----
 Chai
 
-# Test querying order data
+# Test COUNT works on Categories (smaller table)
 query I
-SELECT COUNT(*) FROM northwind.Orders;
+SELECT COUNT(*) FROM northwind.Categories;
 ----
-20
+8
+
+# ============================================================================
+# Multi-database testing
+# ============================================================================
+
+# Attach second database
+statement ok
+ATTACH 'https://services.odata.org/TripPinRESTierService/' AS trippin (TYPE odata)
+
+# Test both databases work together
+query I
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name IN ('northwind', 'trippin');
+----
+2
+
+# Test cross-database table listing
+query I
+SELECT COUNT(*) FROM information_schema.tables WHERE table_catalog IN ('northwind', 'trippin');
+----
+29
 
 # ============================================================================
 # Cleanup

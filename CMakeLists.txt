@@ -69,6 +69,7 @@ set(EXTENSION_SOURCES
     src/odata_expand_parser.cpp
     src/odata_read_functions.cpp
     src/odata_storage.cpp
+    src/odata_catalog.cpp
     src/odata_transaction_manager.cpp
     src/secret_functions.cpp
     src/web_functions.cpp

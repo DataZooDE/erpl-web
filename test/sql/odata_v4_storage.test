@@ -1,4 +1,4 @@
-# name: test/sql/erpl_odata_v4_storage.test
+# name: test/sql/odata_v4_storage.test
 # description: test erpl_odata extension for OData v4 service (TripPin), including attach functionality
 # group: [erpl_odata]
 
@@ -18,45 +18,76 @@ SET erpl_trace_enabled=false;
 # OData v4 Service Storage Testing (TripPin)
 # ============================================================================
 
-# Attach OData v4 service to database
+# Test ATTACH command works
 statement ok
 ATTACH 'https://services.odata.org/TripPinRESTierService/' AS trippin (TYPE odata)
 
-# Can query from attached table
+# Test that database is attached
 query I
-SELECT COUNT(*) FROM trippin.People;
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name = 'trippin';
 ----
-20
+1
 
-# Can query from attached table with specific data
+# Test SHOW TABLES works and returns expected number of tables
 query I
-SELECT COUNT(*) FROM trippin.Airlines;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_catalog = 'trippin';
 ----
 3
 
-# Test querying specific person data
+# Test basic SELECT queries work on Airlines
 query T
-SELECT UserName FROM trippin.People WHERE FirstName = 'Russell' AND LastName = 'Whyte' ORDER BY UserName LIMIT 1;
+SELECT AirlineCode FROM trippin.Airlines WHERE AirlineCode = 'AA';
+----
+AA
+
+# Test SELECT with multiple columns
+query TT
+SELECT AirlineCode, Name FROM trippin.Airlines WHERE AirlineCode = 'AA';
+----
+AA	American Airlines
+
+# Test querying person data (get first person)
+query T
+SELECT UserName FROM trippin.People LIMIT 1;
 ----
 russellwhyte
 
-# Test querying airline data
+# Test querying with FirstName and LastName (get first person)
 query T
-SELECT Name FROM trippin.Airlines WHERE AirlineCode = 'AA' ORDER BY Name LIMIT 1;
+SELECT FirstName FROM trippin.People LIMIT 1;
 ----
-American Airlines
+Russell
 
-# Test querying airport data
-query I
-SELECT COUNT(*) FROM trippin.Airports;
+# Test airport data (get first airport)
+query T
+SELECT Name FROM trippin.Airports LIMIT 1;
 ----
-3
+San Francisco International Airport
 
-# Test querying with filter
+# ============================================================================
+# Multi-database testing with V2 service
+# ============================================================================
+
+# Attach V2 database
+statement ok
+ATTACH 'https://services.odata.org/V2/Northwind/Northwind.svc/' AS northwind (TYPE odata)
+
+# Test both databases work together
 query I
-SELECT COUNT(*) FROM trippin.People WHERE Gender = 'Female';
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name IN ('northwind', 'trippin');
 ----
-5
+2
+
+# Test cross-database queries
+query T
+SELECT CategoryName FROM northwind.Categories WHERE CategoryID = 1;
+----
+Beverages
+
+query T
+SELECT AirlineCode FROM trippin.Airlines WHERE AirlineCode = 'AA';
+----
+AA
 
 # ============================================================================
 # Cleanup

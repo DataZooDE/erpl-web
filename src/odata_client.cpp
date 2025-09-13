@@ -587,6 +587,45 @@ std::string ODataServiceClient::GetMetadataContextUrl()
     return current_response->MetadataContextUrl();
 }
 
+Edmx ODataServiceClient::GetMetadata()
+{
+    ERPL_TRACE_INFO("ODATA_CLIENT", "ODataServiceClient::GetMetadata() called - handling V2/V4 compatibility");
+    
+    // Try to get the metadata context URL from service root first
+    std::string metadata_url;
+    try {
+        metadata_url = GetMetadataContextUrl();
+    } catch (const std::exception& e) {
+        // If service root fails (e.g., V2 service with V4 headers), fall back to direct $metadata URL
+        ERPL_TRACE_WARN("ODATA_CLIENT", "Service root request failed: " + std::string(e.what()) + ", falling back to direct $metadata URL");
+        metadata_url = url.ToString();
+        if (!metadata_url.empty() && metadata_url.back() != '/') {
+            metadata_url += "/";
+        }
+        metadata_url += "$metadata";
+    }
+    
+    // Check cache first
+    auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);
+    if (cached_edmx) {
+        return *cached_edmx;
+    }
+
+    // Fetch metadata directly
+    auto metadata_response = DoMetadataHttpGet(metadata_url);
+    auto content = metadata_response->Content();
+    auto edmx = Edmx::FromXml(content);
+    
+    // Auto-detect version from metadata if not already set
+    if (odata_version == ODataVersion::UNKNOWN) {
+        odata_version = edmx.GetVersion();
+        ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version from metadata: " + std::string(odata_version == ODataVersion::V2 ? "V2" : "V4"));
+    }
+
+    EdmCache::GetInstance().Set(metadata_url, edmx);
+    return edmx;
+}
+
 // -------------------------------------------------------------------------------------------------
 // ODataClientFactory Implementation
 // -------------------------------------------------------------------------------------------------

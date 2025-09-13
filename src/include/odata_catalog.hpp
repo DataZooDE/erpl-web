@@ -30,6 +30,9 @@
 #include "odata_transaction_manager.hpp"
 #include "odata_client.hpp"
 
+#include <unordered_map>
+#include <mutex>
+
 using namespace duckdb;
 
 namespace erpl_web {
@@ -38,6 +41,7 @@ namespace erpl_web {
 // -------------------------------------------------------------------------------------------------
 
 class ODataCatalog; // forward declaration
+class ODataTableEntry; // forward declaration
 
 class ODataSchemaEntry : public duckdb::SchemaCatalogEntry {
 public:
@@ -59,6 +63,13 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> GetEntry(CatalogTransaction transaction, CatalogType type, const string &name);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
+
+private:
+	void LoadTables();
+	
+	mutable std::mutex tables_mutex;
+	bool tables_loaded;
+	std::unordered_map<std::string, duckdb::unique_ptr<ODataTableEntry>> table_entries;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -117,6 +128,7 @@ public:
     void GetTableInfo(const std::string &table_name, 
                       duckdb::ColumnList &columns, 
                       std::vector<duckdb::unique_ptr<duckdb::Constraint>> &constraints);
+    ODataServiceClient& GetServiceClient();
 
 protected:
     ODataServiceClient service_client;

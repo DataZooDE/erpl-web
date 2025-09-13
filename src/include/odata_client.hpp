@@ -375,6 +375,9 @@ public:
     
     std::shared_ptr<ODataServiceResponse> Get(bool get_next = false) override;
     std::string GetMetadataContextUrl() override;
+    
+    // Override GetMetadata to handle V2 services that don't support V4 headers on service root
+    Edmx GetMetadata() override;
 };
 
 // -------------------------------------------------------------------------------------------------

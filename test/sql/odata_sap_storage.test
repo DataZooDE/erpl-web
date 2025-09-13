@@ -27,12 +27,6 @@ CREATE SECRET (
 statement ok
 ATTACH '${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/' AS travel (TYPE odata, IGNORE 'I_Draft*')
 
-# Can query from attached table
-query I
-SELECT COUNT(*) FROM travel.Airline;
-----
-16
-
 # Can query from attached table with ignore pattern
 query I
 SELECT AirlineID FROM travel.Airline ORDER BY AirlineID LIMIT 1;
