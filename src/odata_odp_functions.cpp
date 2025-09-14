@@ -6,7 +6,10 @@
 #include "odata_url_helpers.hpp"
 #include "duckdb_argument_helper.hpp"
 #include "yyjson.hpp"
+#include "duckdb/common/vector_size.hpp"
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 namespace erpl_web {
 
@@ -99,7 +102,7 @@ void OdpODataShowBindData::LoadOdpServiceData() {
         ParseOdpServicesFromV2Response(response);
         
         data_loaded = true;
-        ERPL_TRACE_INFO("ODP_ODATA_SHOW", "ODP service discovery completed, found " + std::to_string(odp_service_data.size()) + " ODP services");
+        ERPL_TRACE_INFO("ODP_ODATA_SHOW", "ODP service discovery completed, found " + std::to_string(odp_service_data.size()) + " ODP entity sets");
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_ODATA_SHOW", "Error during ODP service discovery: " + std::string(e.what()));
@@ -209,16 +212,16 @@ static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientC
     
     auto bind_data = duckdb::make_uniq<OdpODataShowBindData>(http_client, auth_params, base_url);
     
-    // Define return schema for ODP services
+    // Define return schema for ODP entity sets (one row per entity set)
     return_types = {
         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // service_id
-        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // description
-        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // service_url
-        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_sets
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // service_description
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_set_id
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_set_description
         duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN)   // change_tracking
     };
     
-    names = {"service_id", "description", "service_url", "entity_sets", "change_tracking"};
+    names = {"service_id", "service_description", "entity_set_id", "entity_set_description", "change_tracking"};
     
     return std::move(bind_data);
 }
@@ -230,21 +233,29 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
     
     try {
         if (!bind_data.data_loaded) {
+            ERPL_TRACE_DEBUG("ODP_SCAN", "Loading ODP service data in scan function");
             bind_data.LoadOdpServiceData();
         }
         
+        ERPL_TRACE_DEBUG("ODP_SCAN", "ODP service data size: " + std::to_string(bind_data.odp_service_data.size()));
+        
         // Return the discovered ODP services
         if (bind_data.odp_service_data.empty()) {
+            ERPL_TRACE_DEBUG("ODP_SCAN", "No ODP service data found, returning 0 rows");
             output.SetCardinality(0);
             return;
         }
     
-    // Get the next batch of services
+    // Get the next batch of services (align with STANDARD_VECTOR_SIZE semantics)
+    const idx_t target = STANDARD_VECTOR_SIZE;
     idx_t start_idx = bind_data.next_index;
-    idx_t end_idx = std::min(start_idx + output.size(), static_cast<idx_t>(bind_data.odp_service_data.size()));
+    idx_t end_idx = std::min(start_idx + target, static_cast<idx_t>(bind_data.odp_service_data.size()));
     idx_t count = end_idx - start_idx;
     
+    ERPL_TRACE_DEBUG("ODP_SCAN", "start_idx: " + std::to_string(start_idx) + ", end_idx: " + std::to_string(end_idx) + ", count: " + std::to_string(count) + ", output.size(): " + std::to_string(output.size()));
+    
     if (count == 0) {
+        ERPL_TRACE_DEBUG("ODP_SCAN", "Count is 0, returning 0 rows");
         output.SetCardinality(0);
         return;
     }
@@ -254,11 +265,11 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
         idx_t row_idx = start_idx + i;
         const auto& odp_service_row = bind_data.odp_service_data[row_idx];
         
-        // Set each column value
+        // Set each column value for entity set data
         output.data[0].SetValue(i, odp_service_row[0]); // service_id
-        output.data[1].SetValue(i, odp_service_row[1]); // description
-        output.data[2].SetValue(i, odp_service_row[2]); // service_url
-        output.data[3].SetValue(i, odp_service_row[3]); // entity_sets
+        output.data[1].SetValue(i, odp_service_row[1]); // service_description
+        output.data[2].SetValue(i, odp_service_row[2]); // entity_set_id
+        output.data[3].SetValue(i, odp_service_row[3]); // entity_set_description
         output.data[4].SetValue(i, odp_service_row[4]); // change_tracking
     }
     
@@ -302,19 +313,95 @@ std::string ExtractJsonString(duckdb_yyjson::yyjson_val* obj, const std::string&
     return "";
 }
 
+// Helper function to extract and add ODP entity sets as individual rows
+void OdpODataShowBindData::ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val* service_entry, 
+                                                      const std::string& service_id, 
+                                                      const std::string& service_description) {
+    // Look for EntitySets in the expanded data
+    auto entity_sets_obj = duckdb_yyjson::yyjson_obj_get(service_entry, "EntitySets");
+    if (!entity_sets_obj) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "No EntitySets found in service entry for " + service_id);
+        return;
+    }
+    
+    if (!duckdb_yyjson::yyjson_is_obj(entity_sets_obj)) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "EntitySets is not an object for " + service_id);
+        return;
+    }
+    
+    // Look for results array within EntitySets
+    auto results_arr = duckdb_yyjson::yyjson_obj_get(entity_sets_obj, "results");
+    if (!results_arr) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "No results array found in EntitySets for " + service_id);
+        return;
+    }
+    
+    if (!duckdb_yyjson::yyjson_is_arr(results_arr)) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "EntitySets.results is not an array for " + service_id);
+        return;
+    }
+    
+    // Iterate through each entity set
+    duckdb_yyjson::yyjson_arr_iter arr_it;
+    duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
+    
+    duckdb_yyjson::yyjson_val* entity_set;
+    while ((entity_set = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
+        if (duckdb_yyjson::yyjson_is_obj(entity_set)) {
+            std::string entity_set_id = ExtractJsonString(entity_set, "ID");
+            std::string entity_set_description = ExtractJsonString(entity_set, "Description");
+            
+            ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found entity set: " + entity_set_id);
+            
+            // Check if this entity set follows ODP patterns (case-insensitive)
+            if (!entity_set_id.empty()) {
+                std::string entity_name_upper = entity_set_id;
+                std::transform(entity_name_upper.begin(), entity_name_upper.end(), entity_name_upper.begin(), ::toupper);
+                
+                if (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0) {
+                    ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found ODP entity set: " + entity_set_id);
+                    
+                    // Create a row for this ODP entity set
+                    std::vector<duckdb::Value> odp_entity_row;
+                    odp_entity_row.push_back(duckdb::Value(service_id));           // service_id
+                    odp_entity_row.push_back(duckdb::Value(service_description));  // service_description
+                    odp_entity_row.push_back(duckdb::Value(entity_set_id));        // entity_set_id
+                    odp_entity_row.push_back(duckdb::Value(entity_set_description)); // entity_set_description
+                    odp_entity_row.push_back(duckdb::Value(true));                 // change_tracking
+                    
+                    odp_service_data.push_back(odp_entity_row);
+                    ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Added ODP entity set: " + entity_set_id + " from service: " + service_id);
+                }
+            }
+        }
+    }
+}
+
 // Helper function to extract ODP entity sets from JSON
 std::string ExtractOdpEntitySetsFromJson(duckdb_yyjson::yyjson_val* service_entry) {
     std::vector<std::string> odp_entity_sets;
     
     // Look for EntitySets in the expanded data
     auto entity_sets_obj = duckdb_yyjson::yyjson_obj_get(service_entry, "EntitySets");
-    if (!entity_sets_obj || !duckdb_yyjson::yyjson_is_obj(entity_sets_obj)) {
+    if (!entity_sets_obj) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "No EntitySets found in service entry");
+        return "";
+    }
+    
+    if (!duckdb_yyjson::yyjson_is_obj(entity_sets_obj)) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "EntitySets is not an object");
         return "";
     }
     
     // Look for results array within EntitySets
     auto results_arr = duckdb_yyjson::yyjson_obj_get(entity_sets_obj, "results");
-    if (!results_arr || !duckdb_yyjson::yyjson_is_arr(results_arr)) {
+    if (!results_arr) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "No results array found in EntitySets");
+        return "";
+    }
+    
+    if (!duckdb_yyjson::yyjson_is_arr(results_arr)) {
+        ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "EntitySets.results is not an array");
         return "";
     }
     
@@ -325,12 +412,18 @@ std::string ExtractOdpEntitySetsFromJson(duckdb_yyjson::yyjson_val* service_entr
     duckdb_yyjson::yyjson_val* entity_set;
     while ((entity_set = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
         if (duckdb_yyjson::yyjson_is_obj(entity_set)) {
-            std::string entity_set_name = ExtractJsonString(entity_set, "Name");
+            std::string entity_set_name = ExtractJsonString(entity_set, "ID");
+            ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found entity set: " + entity_set_name);
             
-            // Check if this entity set follows ODP patterns
-            if (!entity_set_name.empty() && 
-                (entity_set_name.find("EntityOf") == 0 || entity_set_name.find("FactsOf") == 0)) {
-                odp_entity_sets.push_back(entity_set_name);
+            // Check if this entity set follows ODP patterns (case-insensitive)
+            if (!entity_set_name.empty()) {
+                std::string entity_name_upper = entity_set_name;
+                std::transform(entity_name_upper.begin(), entity_name_upper.end(), entity_name_upper.begin(), ::toupper);
+                
+                if (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0) {
+                    ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found ODP entity set: " + entity_set_name);
+                    odp_entity_sets.push_back(entity_set_name);
+                }
             }
         }
     }
@@ -666,21 +759,9 @@ void OdpODataShowBindData::ParseOdpServicesFromV2Response(std::shared_ptr<ODataE
                         }
                         std::string service_url = ExtractJsonString(service_entry, "ServiceUrl");
                         
-                        // Extract EntitySets from the expanded data
-                        std::string entity_sets = ExtractOdpEntitySetsFromJson(service_entry);
-                        bool has_odp_entity_sets = !entity_sets.empty();
-                        
-                        // Only add services that have ODP entity sets
-                        if (!service_id.empty() && has_odp_entity_sets) {
-                            std::vector<duckdb::Value> odp_service_row;
-                            odp_service_row.push_back(duckdb::Value(service_id));
-                            odp_service_row.push_back(duckdb::Value(description));
-                            odp_service_row.push_back(duckdb::Value(service_url));
-                            odp_service_row.push_back(duckdb::Value(entity_sets));
-                            odp_service_row.push_back(duckdb::Value(true)); // change_tracking (assume ODP services support it)
-                            
-                            odp_service_data.push_back(odp_service_row);
-                            ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Added ODP service: " + service_id + " with entity sets: " + entity_sets);
+                        // Extract and process each ODP entity set individually
+                        if (!service_id.empty()) {
+                            ExtractAndAddOdpEntitySets(service_entry, service_id, description);
                         }
                     }
                 }
@@ -692,7 +773,7 @@ void OdpODataShowBindData::ParseOdpServicesFromV2Response(std::shared_ptr<ODataE
         }
         
         duckdb_yyjson::yyjson_doc_free(doc);
-        ERPL_TRACE_INFO("ODP_ODATA_SHOW", "Parsed " + std::to_string(odp_service_data.size()) + " ODP services from JSON");
+        ERPL_TRACE_INFO("ODP_ODATA_SHOW", "Parsed " + std::to_string(odp_service_data.size()) + " ODP entity sets from JSON");
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_ODATA_SHOW", "Error parsing OData V2 catalog response: " + std::string(e.what()));

@@ -2102,7 +2102,11 @@ ODataReadBindData::GetResultTypes(bool all_columns) {
     return active_result_types;
 }
 
-unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
+// ============================================================================
+// FetchNextResult Helper Methods
+// ============================================================================
+
+void ODataReadBindData::EnsureInitialized() {
     // Ensure input parameters are set on client before any request
     if (!input_parameters.empty()) {
         odata_client->SetInputParameters(input_parameters);
@@ -2112,147 +2116,216 @@ unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
     if (!first_page_cached_) {
         PrefetchFirstPage();
     }
+}
 
+SchemaInfo ODataReadBindData::PrepareSchemaInfo() {
+    SchemaInfo info;
+    
     // Always use full schema for buffering; projection is applied at emission
-    auto all_result_names = GetResultNames(true);
-    auto all_result_types = GetResultTypes(true);
+    info.all_result_names = GetResultNames(true);
+    info.all_result_types = GetResultTypes(true);
+    info.has_expand = HasExpandedData();
     
     // Build name->index map for robust lookups
-    std::unordered_map<std::string, duckdb::idx_t> name_to_index;
-    name_to_index.reserve(all_result_names.size());
-    for (duckdb::idx_t k = 0; k < (duckdb::idx_t)all_result_names.size(); ++k) {
-        name_to_index.emplace(all_result_names[k], k);
+    info.name_to_index.reserve(info.all_result_names.size());
+    for (duckdb::idx_t k = 0; k < (duckdb::idx_t)info.all_result_names.size(); ++k) {
+        info.name_to_index.emplace(info.all_result_names[k], k);
     }
     
-    // Check if we have expanded data to process
-    bool has_expand = HasExpandedData();
+    return info;
+}
 
+void ODataReadBindData::FetchAdditionalPagesIfNeeded(const SchemaInfo& schema_info) {
     const idx_t target = STANDARD_VECTOR_SIZE;
-    idx_t emitted = 0;
-    auto null_value = duckdb::Value();
-
-  // Fetch additional pages until we have enough buffered rows to fill the
-  // vector or no more pages
+    
+    // Fetch additional pages until we have enough buffered rows to fill the
+    // vector or no more pages
     while (row_buffer->Size() < target && row_buffer->HasNextPage()) {
         auto next_response = odata_client->Get(true);
         if (!next_response) {
             row_buffer->SetHasNextPage(false);
             break;
         }
-        // Capture total count once for progress
-        if (next_response->GetODataVersion() == ODataVersion::V4) {
-            auto total = next_response->Content()->TotalCount();
-      if (total.has_value() && (!progress_tracker->HasTotalCount() ||
-                                progress_tracker->GetTotalCount() == 0)) {
-                progress_tracker->SetTotalCount(total.value());
-            }
-        }
-        // Extract expanded data from subsequent pages as well
-        if (has_expand && !data_extractor->GetExpandedDataSchema().empty()) {
-            try {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                         "Extracting expanded data from subsequent page");
-        data_extractor->ExtractExpandedDataFromResponse(
-            next_response->RawContent());
-      } catch (const std::exception &e) {
-        ERPL_TRACE_WARN(
-            "ODATA_READ_BIND",
-            "Failed to extract expanded data from subsequent page: " +
-                std::string(e.what()));
-            }
-        }
+        
+        ProcessPageResponse(next_response, schema_info);
+    }
+}
 
-        // Buffer full rows using full schema to keep indices stable
-        auto page_rows = next_response->ToRows(all_result_names, all_result_types);
-        row_buffer->AddRows(page_rows);
-        row_buffer->SetHasNextPage(next_response->NextUrl().has_value());
-        progress_tracker->IncrementRowsFetched(page_rows.size());
+void ODataReadBindData::ProcessPageResponse(
+    std::shared_ptr<ODataEntitySetResponse> response, 
+    const SchemaInfo& schema_info) {
+    
+    // Capture total count once for progress
+    if (response->GetODataVersion() == ODataVersion::V4) {
+        auto total = response->Content()->TotalCount();
+        if (total.has_value() && (!progress_tracker->HasTotalCount() ||
+                                  progress_tracker->GetTotalCount() == 0)) {
+            progress_tracker->SetTotalCount(total.value());
+        }
+    }
+    
+    // Extract expanded data from subsequent pages as well
+    if (schema_info.has_expand && !data_extractor->GetExpandedDataSchema().empty()) {
+        try {
+            ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                           "Extracting expanded data from subsequent page");
+            data_extractor->ExtractExpandedDataFromResponse(response->RawContent());
+        } catch (const std::exception &e) {
+            ERPL_TRACE_WARN(
+                "ODATA_READ_BIND",
+                "Failed to extract expanded data from subsequent page: " +
+                    std::string(e.what()));
+        }
     }
 
-    // Emit up to target rows from buffer
+    // Buffer full rows using full schema to keep indices stable
+    // ToRows expects non-const references, so create copies
+    auto column_names = schema_info.all_result_names;
+    auto column_types = schema_info.all_result_types;
+    auto page_rows = response->ToRows(column_names, column_types);
+    row_buffer->AddRows(page_rows);
+    row_buffer->SetHasNextPage(response->NextUrl().has_value());
+    progress_tracker->IncrementRowsFetched(page_rows.size());
+}
+
+idx_t ODataReadBindData::EmitRowsToOutput(duckdb::DataChunk &output, const SchemaInfo& schema_info) {
+    const idx_t target = STANDARD_VECTOR_SIZE;
     idx_t to_emit = std::min<idx_t>(row_buffer->Size(), target);
+    
     for (idx_t i = 0; i < to_emit; i++) {
         const auto &row = row_buffer->GetNextRow();
-        for (idx_t j = 0; j < output.ColumnCount(); j++) {
-            // Map activated index j to original column index in full schema
-      duckdb::idx_t original_column_index =
-          (j < activated_to_original_mapping.size())
-              ? activated_to_original_mapping[j]
-              : j;
-
-            if (original_column_index < all_result_names.size()) {
-                // Check if this original index points to an expanded column
-                if (has_expand && !data_extractor->GetExpandedDataSchema().empty() &&
-            original_column_index >=
-                (all_result_names.size() -
-                 data_extractor->GetExpandedDataSchema().size())) {
-          size_t expand_index =
-              original_column_index -
-              (all_result_names.size() -
-               data_extractor->GetExpandedDataSchema().size());
-                    if (expand_index < data_extractor->GetExpandedDataSchema().size()) {
-            std::string expand_path =
-                data_extractor->GetExpandedDataSchema()[expand_index];
-            // Use global emitted_row_index_ to align with how cache was filled
-            // (per input row)
-            auto expand_data = data_extractor->ExtractExpandedDataForRow(
-                std::to_string(emitted_row_index_), expand_path);
-                        if (!expand_data.IsNull()) {
-                            output.SetValue(j, i, expand_data);
-              ERPL_TRACE_INFO("ODATA_SCAN", "Setting expanded data column " +
-                                                std::to_string(j) +
-                                                " with data for path '" +
-                                                expand_path + "'");
-                        } else {
-                            output.SetValue(j, i, null_value);
-              ERPL_TRACE_INFO(
-                  "ODATA_SCAN",
-                  "Setting expanded data column " + std::to_string(j) +
-                      " to NULL (no data) for path '" + expand_path + "'");
-                        }
-                    } else {
-                auto col_type = output.data[j].GetType();
-                output.SetValue(j, i, null_value.DefaultCastAs(col_type));
-                    }
-            } else {
-          // Regular base column from buffered full row: resolve by name to
-          // guard against index drift
-                    const std::string &col_name = all_result_names[original_column_index];
-                    auto it = name_to_index.find(col_name);
-                    if (it != name_to_index.end() && it->second < row.size()) {
-                        output.SetValue(j, i, row[it->second]);
-                    } else {
-                        auto col_type = output.data[j].GetType();
-                        output.SetValue(j, i, null_value.DefaultCastAs(col_type));
-                    }
-                }
-            } else {
-                auto col_type = output.data[j].GetType();
-                output.SetValue(j, i, null_value.DefaultCastAs(col_type));
-            }
-        }
-        emitted++;
+        EmitSingleRowToOutput(output, row, i, schema_info);
         emitted_row_index_++;
     }
+    
+    output.SetCardinality(to_emit);
+    return to_emit;
+}
 
-    output.SetCardinality(emitted);
-
-    // Update cumulative progress
-    progress_tracker->IncrementRowsFetched(emitted);
-  if (progress_tracker->HasTotalCount() &&
-      progress_tracker->GetTotalCount() > 0) {
-    double pct = 100.0 * (double)progress_tracker->GetRowsFetched() /
-                 (double)progress_tracker->GetTotalCount();
-    if (pct > 100.0)
-      pct = 100.0;
-    ERPL_TRACE_INFO("ODATA_SCAN",
-                    duckdb::StringUtil::Format(
-                        "Progress: %.2f%% (%llu/%llu)", pct,
-            (unsigned long long)progress_tracker->GetRowsFetched(),
-            (unsigned long long)progress_tracker->GetTotalCount()));
+void ODataReadBindData::EmitSingleRowToOutput(
+    duckdb::DataChunk &output, 
+    const std::vector<duckdb::Value> &row, 
+    idx_t row_index,
+    const SchemaInfo& schema_info) {
+    
+    auto null_value = duckdb::Value();
+    
+    for (idx_t j = 0; j < output.ColumnCount(); j++) {
+        duckdb::idx_t original_column_index = GetOriginalColumnIndex(j);
+        
+        if (original_column_index < schema_info.all_result_names.size()) {
+            auto value = GetColumnValue(original_column_index, row, schema_info);
+            output.SetValue(j, row_index, value);
+        } else {
+            auto col_type = output.data[j].GetType();
+            output.SetValue(j, row_index, null_value.DefaultCastAs(col_type));
+        }
     }
+}
 
-    return emitted;
+duckdb::idx_t ODataReadBindData::GetOriginalColumnIndex(idx_t activated_column_index) const {
+    return (activated_column_index < activated_to_original_mapping.size())
+               ? activated_to_original_mapping[activated_column_index]
+               : activated_column_index;
+}
+
+duckdb::Value ODataReadBindData::GetColumnValue(
+    duckdb::idx_t original_column_index,
+    const std::vector<duckdb::Value> &row,
+    const SchemaInfo& schema_info) {
+    
+    auto null_value = duckdb::Value();
+    
+    // Check if this original index points to an expanded column
+    if (IsExpandedColumn(original_column_index, schema_info)) {
+        return GetExpandedColumnValue(original_column_index, schema_info);
+    } else {
+        return GetRegularColumnValue(original_column_index, row, schema_info);
+    }
+}
+
+bool ODataReadBindData::IsExpandedColumn(duckdb::idx_t original_column_index, const SchemaInfo& schema_info) const {
+    return schema_info.has_expand && 
+           !data_extractor->GetExpandedDataSchema().empty() &&
+           original_column_index >= (schema_info.all_result_names.size() - 
+                                   data_extractor->GetExpandedDataSchema().size());
+}
+
+duckdb::Value ODataReadBindData::GetExpandedColumnValue(
+    duckdb::idx_t original_column_index, 
+    const SchemaInfo& schema_info) {
+    
+    auto null_value = duckdb::Value();
+    
+    size_t expand_index = original_column_index - 
+                         (schema_info.all_result_names.size() - 
+                          data_extractor->GetExpandedDataSchema().size());
+    
+    if (expand_index < data_extractor->GetExpandedDataSchema().size()) {
+        std::string expand_path = data_extractor->GetExpandedDataSchema()[expand_index];
+        
+        // Use global emitted_row_index_ to align with how cache was filled (per input row)
+        auto expand_data = data_extractor->ExtractExpandedDataForRow(
+            std::to_string(emitted_row_index_), expand_path);
+        
+        if (!expand_data.IsNull()) {
+            ERPL_TRACE_DEBUG("ODATA_SCAN", duckdb::StringUtil::Format("Setting expanded data for path '%s'", expand_path.c_str()));
+            return expand_data;
+        } else {
+            ERPL_TRACE_DEBUG("ODATA_SCAN", duckdb::StringUtil::Format("Setting expanded data to NULL for path '%s'", expand_path.c_str()));
+            return null_value;
+        }
+    }
+    
+    return null_value;
+}
+
+duckdb::Value ODataReadBindData::GetRegularColumnValue(
+    duckdb::idx_t original_column_index,
+    const std::vector<duckdb::Value> &row,
+    const SchemaInfo& schema_info) {
+    
+    auto null_value = duckdb::Value();
+    
+    // Regular base column from buffered full row: resolve by name to guard against index drift
+    const std::string &col_name = schema_info.all_result_names[original_column_index];
+    auto it = schema_info.name_to_index.find(col_name);
+    
+    if (it != schema_info.name_to_index.end() && it->second < row.size()) {
+        return row[it->second];
+    } else {
+        return null_value;
+    }
+}
+
+void ODataReadBindData::UpdateProgressTracking(idx_t rows_emitted) {
+    progress_tracker->IncrementRowsFetched(rows_emitted);
+    
+    if (progress_tracker->HasTotalCount() && progress_tracker->GetTotalCount() > 0) {
+        double pct = 100.0 * (double)progress_tracker->GetRowsFetched() /
+                     (double)progress_tracker->GetTotalCount();
+        if (pct > 100.0) {
+            pct = 100.0;
+        }
+        
+        ERPL_TRACE_INFO("ODATA_SCAN",
+                        duckdb::StringUtil::Format(
+                            "Progress: %.2f%% (%llu/%llu)", pct,
+                            (unsigned long long)progress_tracker->GetRowsFetched(),
+                            (unsigned long long)progress_tracker->GetTotalCount()));
+    }
+}
+
+unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
+    EnsureInitialized();
+    
+    auto schema_info = PrepareSchemaInfo();
+    FetchAdditionalPagesIfNeeded(schema_info);
+    
+    idx_t rows_emitted = EmitRowsToOutput(output, schema_info);
+    UpdateProgressTracking(rows_emitted);
+    
+    return rows_emitted;
 }
 
 bool ODataReadBindData::HasMoreResults() {
@@ -3035,10 +3108,6 @@ ODataReadTableInitGlobalState(ClientContext &context,
 double ODataReadTableProgress(ClientContext &, const FunctionData *func_data,
                               const GlobalTableFunctionState *) {
     auto &bind_data = func_data->CastNoConst<ODataReadBindData>();
-  ERPL_TRACE_DEBUG("ODATA_READ_TABLE_PROGRESS",
-                   "Progress fraction: " +
-                       std::to_string(bind_data.GetProgressFraction()));
-
     return bind_data.GetProgressFraction();
 }
 

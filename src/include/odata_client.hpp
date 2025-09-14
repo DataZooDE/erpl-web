@@ -117,7 +117,6 @@ public:
 
     virtual Edmx GetMetadata()
     {    
-        ERPL_TRACE_INFO("ODATA_CLIENT", "GetMetadata() called - generating stack trace");
         // Always resolve metadata; for Datasphere parameterized reads, use @odata.context (without fragment)
         auto metadata_url = GetMetadataContextUrl();
         auto cached_edmx = EdmCache::GetInstance().Get(metadata_url);

@@ -62,6 +62,9 @@ public:
 private:
     void ParseOdpServicesFromCatalog(const std::string& content);
     void ParseOdpServicesFromV2Response(std::shared_ptr<ODataEntitySetResponse> response);
+    void ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val* service_entry, 
+                                   const std::string& service_id, 
+                                   const std::string& service_description);
 };
 
 // Helper function declarations

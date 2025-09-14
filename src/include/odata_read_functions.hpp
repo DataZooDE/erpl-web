@@ -11,6 +11,7 @@
 #include <deque>
 #include <mutex>
 #include <algorithm>
+#include <unordered_map>
 
 #include "odata_client.hpp"
 #include "odata_edm.hpp"
@@ -25,6 +26,14 @@ class ODataDataExtractor;
 class ODataTypeResolver;
 class ODataProgressTracker;
 class ODataRowBuffer;
+
+// Helper structs
+struct SchemaInfo {
+    std::vector<std::string> all_result_names;
+    std::vector<duckdb::LogicalType> all_result_types;
+    std::unordered_map<std::string, duckdb::idx_t> name_to_index;
+    bool has_expand;
+};
 
 // ============================================================================
 // Core Data Binding Class - Focused on DuckDB integration
@@ -127,6 +136,20 @@ private:
 
     // Helper methods
     void InitializeComponents(bool service_root_mode = false);
+    
+    // FetchNextResult helper methods
+    void EnsureInitialized();
+    SchemaInfo PrepareSchemaInfo();
+    void FetchAdditionalPagesIfNeeded(const SchemaInfo& schema_info);
+    void ProcessPageResponse(std::shared_ptr<ODataEntitySetResponse> response, const SchemaInfo& schema_info);
+    idx_t EmitRowsToOutput(duckdb::DataChunk &output, const SchemaInfo& schema_info);
+    void EmitSingleRowToOutput(duckdb::DataChunk &output, const std::vector<duckdb::Value> &row, idx_t row_index, const SchemaInfo& schema_info);
+    duckdb::idx_t GetOriginalColumnIndex(idx_t activated_column_index) const;
+    duckdb::Value GetColumnValue(duckdb::idx_t original_column_index, const std::vector<duckdb::Value> &row, const SchemaInfo& schema_info);
+    bool IsExpandedColumn(duckdb::idx_t original_column_index, const SchemaInfo& schema_info) const;
+    duckdb::Value GetExpandedColumnValue(duckdb::idx_t original_column_index, const SchemaInfo& schema_info);
+    duckdb::Value GetRegularColumnValue(duckdb::idx_t original_column_index, const std::vector<duckdb::Value> &row, const SchemaInfo& schema_info);
+    void UpdateProgressTracking(idx_t rows_emitted);
 
 private:
     // FromEntitySetRoot refactoring helper methods
