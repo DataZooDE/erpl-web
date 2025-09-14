@@ -18,6 +18,7 @@ set(TEST_SOURCES
     test_odata_client.cpp
     test_odata_content.cpp
     test_odata_url_helpers.cpp
+    test_odp_parsing.cpp
     test_datasphere_integration.cpp
     test_datasphere_oauth2_consolidated.cpp
     test_datasphere_discovery.cpp

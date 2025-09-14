@@ -71,23 +71,35 @@ static void OnTraceEnabled(ClientContext &context, SetScope scope, Value &parame
     erpl_web::ErplTracer::Instance().SetEnabled(enabled);
 }
 
-static void OnTraceLevel(ClientContext &context, SetScope scope, Value &parameter)
-{
-    auto level_str = parameter.GetValue<string>();
+static erpl_web::TraceLevel StringToTraceLevel(const string &level_str) {
     auto level_str_upper = StringUtil::Upper(level_str);
     
     erpl_web::TraceLevel level = erpl_web::TraceLevel::INFO;
     
-    if (level_str_upper == "NONE") level = erpl_web::TraceLevel::NONE;
-    else if (level_str_upper == "ERROR") level = erpl_web::TraceLevel::ERROR;
-    else if (level_str_upper == "WARN") level = erpl_web::TraceLevel::WARN;
-    else if (level_str_upper == "INFO") level = erpl_web::TraceLevel::INFO;
-    else if (level_str_upper == "DEBUG") level = erpl_web::TraceLevel::DEBUG_LEVEL;
-    else if (level_str_upper == "TRACE") level = erpl_web::TraceLevel::TRACE;
+    if (level_str_upper == "NONE") {
+        level = erpl_web::TraceLevel::NONE;
+    } else if (level_str_upper == "ERROR") {
+        level = erpl_web::TraceLevel::ERROR;
+    } else if (level_str_upper == "WARN") {
+        level = erpl_web::TraceLevel::WARN;
+    } else if (level_str_upper == "INFO") {
+        level = erpl_web::TraceLevel::INFO;
+    } else if (level_str_upper == "DEBUG") {
+        level = erpl_web::TraceLevel::DEBUG_LEVEL;
+    } else if (level_str_upper == "TRACE") {
+        level = erpl_web::TraceLevel::TRACE;
+    }
     else {
         throw BinderException("Invalid trace level: " + level_str + ". Valid levels are: NONE, ERROR, WARN, INFO, DEBUG, TRACE");
     }
-    
+
+    return level;
+}
+
+static void OnTraceLevel(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto level_str = parameter.GetValue<string>();
+    erpl_web::TraceLevel level = StringToTraceLevel(level_str);
     erpl_web::ErplTracer::Instance().SetLevel(level);
 }
 
@@ -147,20 +159,7 @@ static string SetTraceLevelPragmaFunction(ClientContext &context, const Function
     }
     
     auto level_str = parameters.values[0].GetValue<string>();
-    StringUtil::Upper(level_str);
-    
-    erpl_web::TraceLevel level = erpl_web::TraceLevel::INFO;
-    
-    if (level_str == "NONE") level = erpl_web::TraceLevel::NONE;
-    else if (level_str == "ERROR") level = erpl_web::TraceLevel::ERROR;
-    else if (level_str == "WARN") level = erpl_web::TraceLevel::WARN;
-    else if (level_str == "INFO") level = erpl_web::TraceLevel::INFO;
-    else if (level_str == "DEBUG") level = erpl_web::TraceLevel::DEBUG_LEVEL;
-    else if (level_str == "TRACE") level = erpl_web::TraceLevel::TRACE;
-    else {
-        throw BinderException("Invalid trace level: " + level_str + ". Valid levels are: NONE, ERROR, WARN, INFO, DEBUG, TRACE");
-    }
-    
+    erpl_web::TraceLevel level = StringToTraceLevel(level_str);    
     erpl_web::ErplTracer::Instance().SetLevel(level);
     
     stringstream result;
@@ -239,7 +238,7 @@ static void RegisterODataFunctions(DatabaseInstance &instance)
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataDescribeFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataAttachFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateSapODataShowFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
+    
 
     auto &config = DBConfig::GetConfig(instance);
     config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
@@ -266,7 +265,7 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
 
 static void RegisterOdpFunctions(DatabaseInstance &instance)
 {
-    // ODP functions are now registered in RegisterODataFunctions
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());// ODP functions are now registered in RegisterODataFunctions
 }
 
 static void RegisterTracingPragmas(DatabaseInstance &instance)

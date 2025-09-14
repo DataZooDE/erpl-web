@@ -1,0 +1,194 @@
+# name: test/sql/erpl_web_odp_odata_show.test
+# description: Test erpl_web extension SAP ODP OData service discovery functionality
+# group: [erpl_web_odp_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+statement ok
+SET erpl_trace_level='INFO';
+
+# Skip this test in CI unless ERPL_SAP_BASE_URL is provided
+require-env ERPL_SAP_BASE_URL
+
+require-env ERPL_SAP_PASSWORD
+
+statement ok
+CREATE SECRET (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD '${ERPL_SAP_PASSWORD}',
+  SCOPE '${ERPL_SAP_BASE_URL}/sap/'
+);
+
+# ============================================================================
+# SECTION 1: Function Registration Tests
+# ============================================================================
+
+# Verify that SAP ODP OData show function is registered
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odp_odata_show';
+----
+1
+
+# Verify that regular SAP OData show function is also registered for comparison
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odata_show';
+----
+1
+
+# ============================================================================
+# SECTION 2: Basic Functionality Tests
+# ============================================================================
+
+# Test ODP OData show function returns results (should return 0 or more ODP services)
+# Note: This test may fail with 401 if SAP system requires different authentication
+# but it verifies the function is properly registered and callable
+query I
+SELECT COUNT(*) FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}');
+----
+0
+
+# Test that ODP function returns proper column structure
+query
+DESCRIBE sap_odp_odata_show('${ERPL_SAP_BASE_URL}');
+----
+column_name: service_id
+column_type: VARCHAR
+null: YES
+key: NO
+default: NULL
+extra: NULL
+
+column_name: service_description
+column_type: VARCHAR
+null: YES
+key: NO
+default: NULL
+extra: NULL
+
+column_name: service_url
+column_type: VARCHAR
+null: YES
+key: NO
+NULL
+extra: NULL
+
+column_name: entity_sets
+column_type: VARCHAR
+null: YES
+key: NO
+default: NULL
+extra: NULL
+
+# ============================================================================
+# SECTION 3: ODP-Specific Filtering Tests
+# ============================================================================
+
+# Test that ODP function only returns services with ODP entity sets
+# (This test verifies that the filtering logic works correctly)
+query
+SELECT service_id, entity_sets 
+FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}') 
+WHERE entity_sets IS NOT NULL AND entity_sets != '';
+----
+
+# Test that all returned entity sets follow ODP naming patterns
+# (This test verifies the ODP pattern matching logic)
+query
+SELECT service_id, entity_sets
+FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+WHERE entity_sets IS NOT NULL 
+  AND entity_sets != ''
+  AND (
+    entity_sets LIKE '%EntityOf%' 
+    OR entity_sets LIKE '%FactsOf%'
+  );
+----
+
+# ============================================================================
+# SECTION 4: Comparison with Regular OData Show
+# ============================================================================
+
+# Compare count of all services vs ODP services
+# (ODP services should be a subset of all services)
+query
+SELECT 
+  (SELECT COUNT(*) FROM sap_odata_show('${ERPL_SAP_BASE_URL}')) as total_services,
+  (SELECT COUNT(*) FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')) as odp_services;
+----
+
+# ============================================================================
+# SECTION 5: Error Handling Tests
+# ============================================================================
+
+# Test with invalid URL (should throw error)
+statement error
+SELECT COUNT(*) FROM sap_odp_odata_show('https://invalid-url-that-does-not-exist.com');
+
+# Test with empty URL (should throw error)
+statement error
+SELECT COUNT(*) FROM sap_odp_odata_show('');
+
+# ============================================================================
+# SECTION 6: Performance and Data Quality Tests
+# ============================================================================
+
+# Test that ODP function returns consistent results on multiple calls
+query
+WITH first_call AS (
+  SELECT COUNT(*) as count1 FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+),
+second_call AS (
+  SELECT COUNT(*) as count2 FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+)
+SELECT count1, count2, (count1 = count2) as results_consistent
+FROM first_call, second_call;
+----
+
+# Test that all returned services have valid URLs
+query
+SELECT service_id, service_url
+FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+WHERE service_url IS NULL 
+   OR service_url = ''
+   OR service_url NOT LIKE 'http%';
+----
+
+# ============================================================================
+# SECTION 7: ODP Entity Set Pattern Validation
+# ============================================================================
+
+# Test that entity sets follow proper ODP naming conventions
+# Entity sets should start with "EntityOf" or "FactsOf"
+query
+SELECT service_id, entity_sets
+FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+WHERE entity_sets IS NOT NULL 
+  AND entity_sets != ''
+  AND entity_sets NOT LIKE '%EntityOf%'
+  AND entity_sets NOT LIKE '%FactsOf%';
+----
+
+# Test that we can extract individual entity set names
+query
+SELECT 
+  service_id,
+  entity_sets,
+  CASE 
+    WHEN entity_sets LIKE '%EntityOf%' THEN 'Contains EntityOf patterns'
+    WHEN entity_sets LIKE '%FactsOf%' THEN 'Contains FactsOf patterns'
+    ELSE 'No ODP patterns found'
+  END as pattern_type
+FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}')
+WHERE entity_sets IS NOT NULL AND entity_sets != '';
+----

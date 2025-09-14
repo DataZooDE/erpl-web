@@ -70,34 +70,33 @@ void OdpODataShowBindData::LoadOdpServiceData() {
     ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Loading ODP services from: " + base_url);
     
     try {
-        // Create request with base URL and manually set the path to avoid URL encoding
-        HttpRequest catalog_request(HttpMethod::GET, HttpUrl(base_url));
-        // Override the path to avoid httplib URL encoding the semicolon
-        catalog_request.url.Path("/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection");
-        catalog_request.url.Query("?$expand=EntitySets");
-        catalog_request.SetODataVersion(ODataVersion::V2);
-        catalog_request.AuthHeadersFromParams(*auth_params);
-        // Use exact same headers as HTTPie for compatibility
-        catalog_request.headers["Accept"] = "*/*";
-        catalog_request.headers["Accept-Encoding"] = "gzip, deflate";
-        catalog_request.headers["Connection"] = "keep-alive";
-        catalog_request.headers["Host"] = "localhost:50000";
-        catalog_request.headers["User-Agent"] = "HTTPie/3.2.4";
+        // Use the same approach as sap_odata_show to ensure consistency
+        std::string v2_catalog_url = base_url + "/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection";
         
-        auto catalog_response = http_client->SendRequest(catalog_request);
-        if (!catalog_response) {
-            throw std::runtime_error("Failed to get response from SAP ODP service catalog endpoint");
+        // Create OData V2 client using the same approach as sap_odata_show
+        HttpParams http_params;
+        http_params.url_encode = false;  // Disable URL encoding for OData V2
+        auto odata_http_client = std::make_shared<HttpClient>(http_params);
+        
+        // Ensure $format=json and $expand=EntitySets just like sap_odata_show
+        HttpUrl v2_url(v2_catalog_url);
+        ODataUrlCodec::ensureJsonFormat(v2_url);
+        v2_url.Query("?$expand=EntitySets");
+
+        // Create OData client for the catalog service
+        auto odata_client = std::make_shared<ODataEntitySetClient>(odata_http_client, v2_url, auth_params);
+        odata_client->SetODataVersionDirectly(ODataVersion::V2);
+        
+        // Get the service data using the existing OData infrastructure
+        auto response = odata_client->Get();
+        if (!response) {
+            throw std::runtime_error("Failed to get response from SAP OData V2 catalog endpoint");
         }
         
-        if (catalog_response->Code() != 200) {
-            std::string error_msg = "SAP ODP service catalog request failed with HTTP " + 
-                                   std::to_string(catalog_response->Code()) + ": " + catalog_response->Content();
-            ERPL_TRACE_ERROR("ODP_ODATA_SHOW", error_msg);
-            throw std::runtime_error(error_msg);
-        }
+        ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Successfully retrieved V2 catalog using OData client");
         
-        ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Successfully retrieved service catalog");
-        ParseOdpServicesFromCatalog(catalog_response->Content());
+        // Parse V2 response to extract ODP service information
+        ParseOdpServicesFromV2Response(response);
         
         data_loaded = true;
         ERPL_TRACE_INFO("ODP_ODATA_SHOW", "ODP service discovery completed, found " + std::to_string(odp_service_data.size()) + " ODP services");
@@ -202,10 +201,11 @@ static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientC
     // Get HTTP client and auth params from DuckDB secrets
     auto auth_params = HttpAuthParams::FromDuckDbSecrets(context, base_url);
     ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Auth params type: " + std::to_string(static_cast<int>(auth_params->AuthType())));
-    ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Auth params: " + auth_params->ToString());
+    ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Auth params: " + auth_params->ToString());
     
-    
-    auto http_client = std::make_shared<HttpClient>();
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
     
     auto bind_data = duckdb::make_uniq<OdpODataShowBindData>(http_client, auth_params, base_url);
     
@@ -271,45 +271,6 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Function registration
-// -------------------------------------------------------------------------------------------------
-
-duckdb::TableFunctionSet CreateSapODataShowFunction() {
-    duckdb::TableFunctionSet function_set("sap_odata_show");
-    
-    duckdb::TableFunction sap_odata_show(
-        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
-        SapODataShowScan, 
-        SapODataShowBind
-    );
-    
-    // Add named parameters for optional configuration
-    sap_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
-    
-    function_set.AddFunction(sap_odata_show);
-    
-    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING SAP_ODATA_SHOW FUNCTION ===");
-    return function_set;
-}
-
-duckdb::TableFunctionSet CreateOdpODataShowFunction() {
-    duckdb::TableFunctionSet function_set("erpl_odp_odata_show");
-    
-    duckdb::TableFunction odp_odata_show(
-        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
-        OdpODataShowScan, 
-        OdpODataShowBind
-    );
-    
-    // Add named parameters for optional configuration
-    odp_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
-    
-    function_set.AddFunction(odp_odata_show);
-    
-    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING ODP_ODATA_SHOW FUNCTION ===");
-    return function_set;
-}
 
 // -------------------------------------------------------------------------------------------------
 // Private parsing methods
@@ -339,6 +300,51 @@ std::string ExtractJsonString(duckdb_yyjson::yyjson_val* obj, const std::string&
     }
     
     return "";
+}
+
+// Helper function to extract ODP entity sets from JSON
+std::string ExtractOdpEntitySetsFromJson(duckdb_yyjson::yyjson_val* service_entry) {
+    std::vector<std::string> odp_entity_sets;
+    
+    // Look for EntitySets in the expanded data
+    auto entity_sets_obj = duckdb_yyjson::yyjson_obj_get(service_entry, "EntitySets");
+    if (!entity_sets_obj || !duckdb_yyjson::yyjson_is_obj(entity_sets_obj)) {
+        return "";
+    }
+    
+    // Look for results array within EntitySets
+    auto results_arr = duckdb_yyjson::yyjson_obj_get(entity_sets_obj, "results");
+    if (!results_arr || !duckdb_yyjson::yyjson_is_arr(results_arr)) {
+        return "";
+    }
+    
+    // Iterate through entity sets
+    duckdb_yyjson::yyjson_arr_iter arr_it;
+    duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
+    
+    duckdb_yyjson::yyjson_val* entity_set;
+    while ((entity_set = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
+        if (duckdb_yyjson::yyjson_is_obj(entity_set)) {
+            std::string entity_set_name = ExtractJsonString(entity_set, "Name");
+            
+            // Check if this entity set follows ODP patterns
+            if (!entity_set_name.empty() && 
+                (entity_set_name.find("EntityOf") == 0 || entity_set_name.find("FactsOf") == 0)) {
+                odp_entity_sets.push_back(entity_set_name);
+            }
+        }
+    }
+    
+    // Join entity sets with comma
+    if (odp_entity_sets.empty()) return "";
+    
+    std::string result;
+    for (size_t i = 0; i < odp_entity_sets.size(); ++i) {
+        if (i > 0) result += ",";
+        result += odp_entity_sets[i];
+    }
+    
+    return result;
 }
 
 // Helper function to extract ODP entity sets from XML
@@ -615,6 +621,85 @@ void SapODataShowBindData::ParseODataV4CatalogFromResponse(std::shared_ptr<OData
     }
 }
 
+void OdpODataShowBindData::ParseOdpServicesFromV2Response(std::shared_ptr<ODataEntitySetResponse> response) {
+    // Use the same JSON parsing logic as sap_odata_show to extract service information
+    // This ensures consistency with the working OData V2 functionality
+    
+    ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Parsing OData V2 catalog JSON response for ODP services");
+    
+    try {
+        // Get the raw JSON content from the response
+        auto content = response->RawContent();
+        ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Response content length: " + std::to_string(content.length()));
+        
+        // Parse JSON using the same approach as sap_odata_show
+        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+        if (!doc) {
+            throw std::runtime_error("Failed to parse JSON response");
+        }
+        
+        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        if (!root) {
+            duckdb_yyjson::yyjson_doc_free(doc);
+            throw std::runtime_error("Failed to get JSON root");
+        }
+        
+        // Parse OData V2 format: {"d": {"results": [...]}}
+        auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+        if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
+            auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
+            if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
+                ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Found results array in OData V2 response");
+                
+                // Iterate through each service entry
+                duckdb_yyjson::yyjson_arr_iter arr_it;
+                duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
+                
+                duckdb_yyjson::yyjson_val* service_entry;
+                while ((service_entry = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
+                    if (duckdb_yyjson::yyjson_is_obj(service_entry)) {
+                        // Extract service information from JSON object
+                        std::string service_id = ExtractJsonString(service_entry, "ID");
+                        std::string description = ExtractJsonString(service_entry, "Description");
+                        if (description.empty()) {
+                            description = ExtractJsonString(service_entry, "Title");
+                        }
+                        std::string service_url = ExtractJsonString(service_entry, "ServiceUrl");
+                        
+                        // Extract EntitySets from the expanded data
+                        std::string entity_sets = ExtractOdpEntitySetsFromJson(service_entry);
+                        bool has_odp_entity_sets = !entity_sets.empty();
+                        
+                        // Only add services that have ODP entity sets
+                        if (!service_id.empty() && has_odp_entity_sets) {
+                            std::vector<duckdb::Value> odp_service_row;
+                            odp_service_row.push_back(duckdb::Value(service_id));
+                            odp_service_row.push_back(duckdb::Value(description));
+                            odp_service_row.push_back(duckdb::Value(service_url));
+                            odp_service_row.push_back(duckdb::Value(entity_sets));
+                            odp_service_row.push_back(duckdb::Value(true)); // change_tracking (assume ODP services support it)
+                            
+                            odp_service_data.push_back(odp_service_row);
+                            ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Added ODP service: " + service_id + " with entity sets: " + entity_sets);
+                        }
+                    }
+                }
+            } else {
+                ERPL_TRACE_WARN("ODP_ODATA_SHOW", "Could not find 'results' array in OData V2 response");
+            }
+        } else {
+            ERPL_TRACE_WARN("ODP_ODATA_SHOW", "Could not find 'd' object in OData V2 response");
+        }
+        
+        duckdb_yyjson::yyjson_doc_free(doc);
+        ERPL_TRACE_INFO("ODP_ODATA_SHOW", "Parsed " + std::to_string(odp_service_data.size()) + " ODP services from JSON");
+        
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("ODP_ODATA_SHOW", "Error parsing OData V2 catalog response: " + std::string(e.what()));
+        throw;
+    }
+}
+
 void OdpODataShowBindData::ParseOdpServicesFromCatalog(const std::string& content) {
     // Parse Atom XML feed to extract ODP services
     // The content is an Atom XML feed with service entries and expanded EntitySets
@@ -670,5 +755,46 @@ void OdpODataShowBindData::ParseOdpServicesFromCatalog(const std::string& conten
     
     ERPL_TRACE_INFO("ODP_ODATA_SHOW", "Parsed " + std::to_string(odp_service_data.size()) + " ODP services from XML");
 }
+
+// -------------------------------------------------------------------------------------------------
+// Function registration
+// -------------------------------------------------------------------------------------------------
+
+duckdb::TableFunctionSet CreateSapODataShowFunction() {
+    duckdb::TableFunctionSet function_set("sap_odata_show");
+    
+    duckdb::TableFunction sap_odata_show(
+        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
+        SapODataShowScan, 
+        SapODataShowBind
+    );
+    
+    // Add named parameters for optional configuration
+    sap_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    
+    function_set.AddFunction(sap_odata_show);
+    
+    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING SAP_ODATA_SHOW FUNCTION ===");
+    return function_set;
+}
+
+duckdb::TableFunctionSet CreateOdpODataShowFunction() {
+    duckdb::TableFunctionSet function_set("sap_odp_odata_show");
+    
+    duckdb::TableFunction odp_odata_show(
+        {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
+        OdpODataShowScan, 
+        OdpODataShowBind
+    );
+    
+    // Add named parameters for optional configuration
+    odp_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    
+    function_set.AddFunction(odp_odata_show);
+    
+    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING SAP_ODP_ODATA_SHOW FUNCTION ===");
+    return function_set;
+}
+
 
 } // namespace erpl_web

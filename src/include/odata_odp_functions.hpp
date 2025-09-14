@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/function/function_set.hpp"
+#include "yyjson.hpp"
 // Forward declarations
 namespace erpl_web {
     class HttpClient;
@@ -60,7 +61,11 @@ public:
     
 private:
     void ParseOdpServicesFromCatalog(const std::string& content);
+    void ParseOdpServicesFromV2Response(std::shared_ptr<ODataEntitySetResponse> response);
 };
+
+// Helper function declarations
+std::string ExtractOdpEntitySetsFromJson(duckdb_yyjson::yyjson_val* service_entry);
 
 // Function declarations
 duckdb::TableFunctionSet CreateSapODataShowFunction();

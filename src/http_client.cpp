@@ -535,7 +535,11 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
         std::string out;
         out.reserve(s.size() + 8);
         for (char c : s) {
-            if (c == '\'') out += "''"; else out += c;
+            if (c == '\'') {
+                out += "''";
+            } else {
+                out += c;
+            }
         }
         return out;
     };
@@ -543,7 +547,9 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     std::string headers_map = "MAP{";
     bool first_hdr = true;
     for (const auto &h : headers) {
-        if (!first_hdr) headers_map += ", ";
+        if (!first_hdr) {
+            headers_map += ", ";
+        }
         first_hdr = false;
         headers_map += "'" + escape_sql(h.first) + "': '" + escape_sql(h.second) + "'";
     }

@@ -427,8 +427,12 @@ EntityType ODataEntitySetClient::GetCurrentEntityType()
     {
         auto p = url.Path();
         if (!p.empty()) {
-            if (p.size() >= 4 && p.substr(p.size() - 4) == "/Set") path_has_set = true;
-            if (p.find(")/Set") != std::string::npos) path_has_set = true;
+            if (p.size() >= 4 && p.substr(p.size() - 4) == "/Set") {
+                path_has_set = true;
+            }
+            if (p.find(")/Set") != std::string::npos) {
+                path_has_set = true;
+            }
         }
     }
 
@@ -664,12 +668,24 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
                 if (!decoded_key.empty() && decoded_key.rfind("%24", 0) == 0) {
                     decoded_key = std::string("$") + decoded_key.substr(3);
                 }
-                if (decoded_key == "filter") decoded_key = "$filter";
-                if (decoded_key == "expand") decoded_key = "$expand";
-                if (decoded_key == "select") decoded_key = "$select";
-                if (decoded_key == "top") decoded_key = "$top";
-                if (decoded_key == "skip") decoded_key = "$skip";
-                if (decoded_key == "format") decoded_key = "$format";
+                if (decoded_key == "filter") {
+                    decoded_key = "$filter";
+                }
+                if (decoded_key == "expand") {
+                    decoded_key = "$expand";
+                }
+                if (decoded_key == "select") {
+                    decoded_key = "$select";
+                }
+                if (decoded_key == "top") {
+                    decoded_key = "$top";
+                }
+                if (decoded_key == "skip") {
+                    decoded_key = "$skip";
+                }
+                if (decoded_key == "format") {
+                    decoded_key = "$format";
+                }
 
                 // Decode value for inspection, and ensure $filter value is encoded as a single query value
                 std::string decoded_value = ODataUrlCodec::decodeQueryValue(raw_value);
@@ -687,7 +703,9 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
                 std::ostringstream rebuilt;
                 rebuilt << "?";
                 for (size_t i = 0; i < kv_pairs.size(); ++i) {
-                    if (i > 0) rebuilt << "&";
+                    if (i > 0) {
+                        rebuilt << "&";
+                    }
                     rebuilt << kv_pairs[i].first << "=" << kv_pairs[i].second;
                 }
                 normalized_url.Query(rebuilt.str());

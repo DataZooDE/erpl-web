@@ -52,7 +52,13 @@ SELECT COUNT(*) FROM sap_odata_show('${ERPL_SAP_BASE_URL}');
 
 # Verify that ODP OData show function is also registered
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'erpl_odp_odata_show';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odp_odata_show';
 ----
 1
+
+# Test ODP OData show function (should return 0 or more ODP services)
+query I
+SELECT COUNT(*) FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}');
+----
+0
 

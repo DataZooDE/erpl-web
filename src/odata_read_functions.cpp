@@ -1569,7 +1569,6 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromServiceRoot(
   }
   // Try to detect/fetch
   auto response = svc_client->Get();
-  (void)response;
 
   // Build an entity-set client wrapper so we can reuse existing bind flow but
   // override names/types via extracted list We'll populate
