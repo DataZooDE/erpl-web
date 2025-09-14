@@ -64,7 +64,8 @@ private:
     void ParseOdpServicesFromV2Response(std::shared_ptr<ODataEntitySetResponse> response);
     void ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val* service_entry, 
                                    const std::string& service_id, 
-                                   const std::string& service_description);
+                                   const std::string& service_description,
+                                   const std::string& service_url);
 };
 
 // Helper function declarations

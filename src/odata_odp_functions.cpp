@@ -218,10 +218,11 @@ static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientC
         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // service_description
         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_set_id
         duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_set_description
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),  // entity_set_url
         duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN)   // change_tracking
     };
     
-    names = {"service_id", "service_description", "entity_set_id", "entity_set_description", "change_tracking"};
+    names = {"service_id", "service_description", "entity_set_id", "entity_set_description", "entity_set_url", "change_tracking"};
     
     return std::move(bind_data);
 }
@@ -270,7 +271,8 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
         output.data[1].SetValue(i, odp_service_row[1]); // service_description
         output.data[2].SetValue(i, odp_service_row[2]); // entity_set_id
         output.data[3].SetValue(i, odp_service_row[3]); // entity_set_description
-        output.data[4].SetValue(i, odp_service_row[4]); // change_tracking
+        output.data[4].SetValue(i, odp_service_row[4]); // entity_set_url
+        output.data[5].SetValue(i, odp_service_row[5]); // change_tracking
     }
     
     output.SetCardinality(count);
@@ -316,7 +318,8 @@ std::string ExtractJsonString(duckdb_yyjson::yyjson_val* obj, const std::string&
 // Helper function to extract and add ODP entity sets as individual rows
 void OdpODataShowBindData::ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val* service_entry, 
                                                       const std::string& service_id, 
-                                                      const std::string& service_description) {
+                                                      const std::string& service_description,
+                                                      const std::string& service_url) {
     // Look for EntitySets in the expanded data
     auto entity_sets_obj = duckdb_yyjson::yyjson_obj_get(service_entry, "EntitySets");
     if (!entity_sets_obj) {
@@ -361,16 +364,25 @@ void OdpODataShowBindData::ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val*
                 if (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0) {
                     ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found ODP entity set: " + entity_set_id);
                     
+                    // Construct the entity set URL for direct use with odata_read
+                    // Use the entity_set_description (proper case) instead of entity_set_id (all caps)
+                    std::string entity_set_url = service_url;
+                    if (!entity_set_url.empty() && entity_set_url.back() != '/') {
+                        entity_set_url += "/";
+                    }
+                    entity_set_url += entity_set_description;
+                    
                     // Create a row for this ODP entity set
                     std::vector<duckdb::Value> odp_entity_row;
                     odp_entity_row.push_back(duckdb::Value(service_id));           // service_id
                     odp_entity_row.push_back(duckdb::Value(service_description));  // service_description
                     odp_entity_row.push_back(duckdb::Value(entity_set_id));        // entity_set_id
                     odp_entity_row.push_back(duckdb::Value(entity_set_description)); // entity_set_description
+                    odp_entity_row.push_back(duckdb::Value(entity_set_url));       // entity_set_url
                     odp_entity_row.push_back(duckdb::Value(true));                 // change_tracking
                     
                     odp_service_data.push_back(odp_entity_row);
-                    ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Added ODP entity set: " + entity_set_id + " from service: " + service_id);
+                    ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Added ODP entity set: " + entity_set_id + " from service: " + service_id + " with URL: " + entity_set_url);
                 }
             }
         }
@@ -761,7 +773,7 @@ void OdpODataShowBindData::ParseOdpServicesFromV2Response(std::shared_ptr<ODataE
                         
                         // Extract and process each ODP entity set individually
                         if (!service_id.empty()) {
-                            ExtractAndAddOdpEntitySets(service_entry, service_id, description);
+                            ExtractAndAddOdpEntitySets(service_entry, service_id, description, service_url);
                         }
                     }
                 }
