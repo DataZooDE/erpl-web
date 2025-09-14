@@ -11,11 +11,6 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
-statement ok
-SET erpl_trace_enabled=false;
-
-statement ok
-SET erpl_trace_level='INFO';
 
 # Skip this test in CI unless ERPL_SAP_BASE_URL is provided
 require-env ERPL_SAP_BASE_URL
@@ -23,11 +18,11 @@ require-env ERPL_SAP_BASE_URL
 require-env ERPL_SAP_PASSWORD
 
 statement ok
-CREATE SECRET (
+CREATE SECRET odata_show_secret (
 	TYPE http_basic,
 	USERNAME 'DEVELOPER',
 	PASSWORD '${ERPL_SAP_PASSWORD}',
-    SCOPE '${ERPL_SAP_BASE_URL}/sap/'
+    SCOPE '${ERPL_SAP_BASE_URL}'
 );
 
 # ============================================================================
@@ -36,29 +31,14 @@ CREATE SECRET (
 
 # Verify that SAP OData show function is registered
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odata_show';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'odata_sap_show';
 ----
 1
 
 # Final verification that both functions are properly registered
 query I
-SELECT COUNT(*) FROM sap_odata_show('${ERPL_SAP_BASE_URL}');
+SELECT COUNT(*) FROM odata_sap_show('${ERPL_SAP_BASE_URL}', secret='odata_show_secret');
 ----
 1003
 
-# ============================================================================
-# SECTION 2: SAP ODP Enpoint discovery
-# ============================================================================
-
-# Verify that ODP OData show function is also registered
-query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'sap_odp_odata_show';
-----
-1
-
-# Test ODP OData show function (should return 0 or more ODP services)
-query I
-SELECT COUNT(*) FROM sap_odp_odata_show('${ERPL_SAP_BASE_URL}');
-----
-0
 

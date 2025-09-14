@@ -176,7 +176,7 @@ void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
 std::string ODataUrlCodec::encodeFilterExpression(const std::string &filter_expr) {
     // Encode the entire filter expression as a query value so that spaces and quotes are percent-encoded
     // This avoids 400s on services that require strict URL encoding of the $filter value
-    return encodeQueryValue(filter_expr);
+    return duckdb_httplib_openssl::detail::encode_url(filter_expr);
 }
 
 // Normalize $expand syntax:

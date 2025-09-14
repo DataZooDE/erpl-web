@@ -19,6 +19,10 @@ set(TEST_SOURCES
     test_odata_content.cpp
     test_odata_url_helpers.cpp
     test_odp_parsing.cpp
+    test_odp_http_request_factory.cpp
+    test_odp_subscription_repository.cpp
+    test_odp_subscription_state_manager.cpp
+    test_odp_request_orchestrator.cpp
     test_datasphere_integration.cpp
     test_datasphere_oauth2_consolidated.cpp
     test_datasphere_discovery.cpp

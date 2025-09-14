@@ -30,7 +30,7 @@ TEST_CASE("InputParametersFormatter formats params and inserts before /Set", "[o
 TEST_CASE("ODataUrlCodec encodes and decodes using httplib", "[odata_url]") {
     // Spaces, quotes, semicolon, unicode
     std::string raw = "Country eq 'Ger many';v=2 ";
-    auto enc = ODataUrlCodec::encodeQueryValue(raw);
+    auto enc = ODataUrlCodec::encodeFilterExpression(raw);
     // Expect %20, %27, %3B etc.
     REQUIRE(enc.find("%20") != std::string::npos);
     REQUIRE(enc.find("%27") != std::string::npos);

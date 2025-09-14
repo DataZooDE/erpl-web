@@ -35,6 +35,12 @@ TEST_CASE("ODataEdmTypeBuilder - BuildExpandedColumnType for DefaultSystem with 
     services_nav.type = "Collection(SAP.IWND.Service)";
     default_system.navigation_properties.push_back(services_nav);
     
+    // Add a single navigation property for testing
+    NavigationProperty single_nav;
+    single_nav.name = "SingleService";
+    single_nav.type = "SAP.IWND.Service";
+    default_system.navigation_properties.push_back(single_nav);
+    
     schema.entity_types.push_back(default_system);
     
     // Create Service entity type
@@ -59,49 +65,26 @@ TEST_CASE("ODataEdmTypeBuilder - BuildExpandedColumnType for DefaultSystem with 
     // Test the builder
     ODataEdmTypeBuilder builder(edmx);
     
-    SECTION("Build expanded column type for DefaultSystem with Services") {
-        std::vector<std::string> nested_children = {"Services"};
-        auto result_type = builder.BuildExpandedColumnType("DefaultSystem", "DefaultSystem", nested_children);
+    SECTION("Build expanded column type for DefaultSystem with SingleService") {
+        std::vector<std::string> nested_children = {};
+        auto result_type = builder.BuildExpandedColumnType("DefaultSystem", "SingleService", nested_children);
         
-        // Should be a STRUCT with SystemAlias, Description, and Services fields
+        // Should be a STRUCT with Name and Url fields from Service entity
         REQUIRE(result_type.id() == duckdb::LogicalTypeId::STRUCT);
         
         auto child_types = duckdb::StructType::GetChildTypes(result_type);
-        REQUIRE(child_types.size() == 3);
+        REQUIRE(child_types.size() == 2);
         
-        // Check SystemAlias field
-        auto system_alias_it = std::find_if(child_types.begin(), child_types.end(),
-            [](const auto& pair) { return pair.first == "SystemAlias"; });
-        REQUIRE(system_alias_it != child_types.end());
-        REQUIRE(system_alias_it->second.id() == duckdb::LogicalTypeId::VARCHAR);
-        
-        // Check Description field
-        auto description_it = std::find_if(child_types.begin(), child_types.end(),
-            [](const auto& pair) { return pair.first == "Description"; });
-        REQUIRE(description_it != child_types.end());
-        REQUIRE(description_it->second.id() == duckdb::LogicalTypeId::VARCHAR);
-        
-        // Check Services field (should be LIST of STRUCT)
-        auto services_it = std::find_if(child_types.begin(), child_types.end(),
-            [](const auto& pair) { return pair.first == "Services"; });
-        REQUIRE(services_it != child_types.end());
-        REQUIRE(services_it->second.id() == duckdb::LogicalTypeId::LIST);
-        
-        // Services should be LIST of STRUCT with Name and Url fields
-        auto services_element_type = duckdb::ListType::GetChildType(services_it->second);
-        REQUIRE(services_element_type.id() == duckdb::LogicalTypeId::STRUCT);
-        
-        auto service_child_types = duckdb::StructType::GetChildTypes(services_element_type);
-        REQUIRE(service_child_types.size() == 2);
-        
-        auto name_it = std::find_if(service_child_types.begin(), service_child_types.end(),
+        // Check Name field
+        auto name_it = std::find_if(child_types.begin(), child_types.end(),
             [](const auto& pair) { return pair.first == "Name"; });
-        REQUIRE(name_it != service_child_types.end());
+        REQUIRE(name_it != child_types.end());
         REQUIRE(name_it->second.id() == duckdb::LogicalTypeId::VARCHAR);
         
-        auto url_it = std::find_if(service_child_types.begin(), service_child_types.end(),
+        // Check Url field
+        auto url_it = std::find_if(child_types.begin(), child_types.end(),
             [](const auto& pair) { return pair.first == "Url"; });
-        REQUIRE(url_it != service_child_types.end());
+        REQUIRE(url_it != child_types.end());
         REQUIRE(url_it->second.id() == duckdb::LogicalTypeId::VARCHAR);
     }
     

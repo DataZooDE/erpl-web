@@ -89,6 +89,14 @@ set(EXTENSION_SOURCES
     src/oauth2_server.cpp
     src/timeout_http_client.cpp
     src/odata_url_helpers.cpp
+    src/odp_http_request_factory.cpp
+    src/odp_client_integration.cpp
+    src/odp_subscription_repository.cpp
+    src/odp_subscription_state_manager.cpp
+    src/odp_request_orchestrator.cpp
+    src/odp_odata_read_bind_data.cpp
+    src/odp_odata_read_functions.cpp
+    src/odp_pragma_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

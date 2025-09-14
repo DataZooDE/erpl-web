@@ -21,7 +21,7 @@ CREATE SECRET (
 	TYPE http_basic,
 	USERNAME 'DEVELOPER',
 	PASSWORD '${ERPL_SAP_PASSWORD}',
-    SCOPE '${ERPL_SAP_BASE_URL}/sap/'
+    SCOPE '${ERPL_SAP_BASE_URL}'
 );
 
 # Attach OData service to database

@@ -1,0 +1,33 @@
+# name: test/sql/erpl_web_odp_odata_show.test
+# description: Test erpl_web extension SAP ODP OData service discovery functionality
+# group: [erpl_web_odp_odata]
+
+# Require statement will ensure this test is run with this extension loaded
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+
+# Skip this test in CI unless ERPL_SAP_BASE_URL is provided
+require-env ERPL_SAP_BASE_URL
+
+require-env ERPL_SAP_PASSWORD
+
+statement ok
+CREATE SECRET odp_odata_show_secret (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD '${ERPL_SAP_PASSWORD}',
+  SCOPE '${ERPL_SAP_BASE_URL}'
+);
+
+query III
+select service_id, entity_set_id, entity_set_url from odp_odata_show('${ERPL_SAP_BASE_URL}', secret='odp_odata_show_secret');
+----
+Z_ODP_BW_SRV_0001
+FACTSOF0D_NW_C01
+http://localhost:50000/sap/opu/odata/sap/Z_ODP_BW_1_SRV/FactsOf0D_NW_C01

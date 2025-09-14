@@ -72,7 +72,7 @@ private:
 std::string ExtractOdpEntitySetsFromJson(duckdb_yyjson::yyjson_val* service_entry);
 
 // Function declarations
-duckdb::TableFunctionSet CreateSapODataShowFunction();
+duckdb::TableFunctionSet CreateODataSapShowFunction();
 duckdb::TableFunctionSet CreateOdpODataShowFunction();
 
 } // namespace erpl_web

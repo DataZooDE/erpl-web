@@ -16,6 +16,8 @@
 #include "datasphere_read.hpp"
 #include "datasphere_secret.hpp"
 #include "odata_odp_functions.hpp"
+#include "odp_odata_read_functions.hpp"
+#include "odp_pragma_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -265,7 +267,10 @@ static void RegisterDatasphereFunctions(DatabaseInstance &instance)
 
 static void RegisterOdpFunctions(DatabaseInstance &instance)
 {
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());// ODP functions are now registered in RegisterODataFunctions
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataReadFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpListSubscriptionsFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpRemoveSubscriptionFunction());
 }
 
 static void RegisterTracingPragmas(DatabaseInstance &instance)

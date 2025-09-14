@@ -73,15 +73,15 @@ void OdpODataShowBindData::LoadOdpServiceData() {
     ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Loading ODP services from: " + base_url);
     
     try {
-        // Use the same approach as sap_odata_show to ensure consistency
+        // Use the same approach as odata_sap_show to ensure consistency
         std::string v2_catalog_url = base_url + "/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection";
         
-        // Create OData V2 client using the same approach as sap_odata_show
+        // Create OData V2 client using the same approach as odata_sap_show
         HttpParams http_params;
         http_params.url_encode = false;  // Disable URL encoding for OData V2
         auto odata_http_client = std::make_shared<HttpClient>(http_params);
         
-        // Ensure $format=json and $expand=EntitySets just like sap_odata_show
+        // Ensure $format=json and $expand=EntitySets just like odata_sap_show
         HttpUrl v2_url(v2_catalog_url);
         ODataUrlCodec::ensureJsonFormat(v2_url);
         v2_url.Query("?$expand=EntitySets");
@@ -853,8 +853,8 @@ void OdpODataShowBindData::ParseOdpServicesFromCatalog(const std::string& conten
 // Function registration
 // -------------------------------------------------------------------------------------------------
 
-duckdb::TableFunctionSet CreateSapODataShowFunction() {
-    duckdb::TableFunctionSet function_set("sap_odata_show");
+duckdb::TableFunctionSet CreateODataSapShowFunction() {
+    duckdb::TableFunctionSet function_set("odata_sap_show");
     
     duckdb::TableFunction sap_odata_show(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
@@ -867,12 +867,12 @@ duckdb::TableFunctionSet CreateSapODataShowFunction() {
     
     function_set.AddFunction(sap_odata_show);
     
-    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING SAP_ODATA_SHOW FUNCTION ===");
+    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING ODATA_SAP_SHOW FUNCTION ===");
     return function_set;
 }
 
 duckdb::TableFunctionSet CreateOdpODataShowFunction() {
-    duckdb::TableFunctionSet function_set("sap_odp_odata_show");
+    duckdb::TableFunctionSet function_set("odp_odata_show");
     
     duckdb::TableFunction odp_odata_show(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // base_url parameter
@@ -885,7 +885,7 @@ duckdb::TableFunctionSet CreateOdpODataShowFunction() {
     
     function_set.AddFunction(odp_odata_show);
     
-    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING SAP_ODP_ODATA_SHOW FUNCTION ===");
+    ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING ODP_ODATA_SHOW FUNCTION ===");
     return function_set;
 }
 

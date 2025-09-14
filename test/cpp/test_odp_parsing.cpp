@@ -92,14 +92,17 @@ TEST_CASE("ODP Entity Set Pattern Matching", "[odp]") {
         "RegularEntity",         // Should not match
         "EntityOfSomething",     // Should match
         "FactsOfSomething",      // Should match
-        "entityof",              // Should not match (case sensitive)
-        "factsOf",               // Should not match (case sensitive)
+        "entityof",              // Should match (case insensitive)
+        "factsOf",               // Should match (case insensitive)
         "OtherEntityOf",         // Should not match (doesn't start with pattern)
         "OtherFactsOf"           // Should not match (doesn't start with pattern)
     };
     
     for (const auto& entity_name : test_cases) {
-        bool should_match = (entity_name.find("EntityOf") == 0 || entity_name.find("FactsOf") == 0);
+        // Convert to uppercase for case-insensitive matching (matches implementation)
+        std::string entity_name_upper = entity_name;
+        std::transform(entity_name_upper.begin(), entity_name_upper.end(), entity_name_upper.begin(), ::toupper);
+        bool should_match = (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0);
         
         // Create a mock JSON structure
         std::string mock_json = R"({
