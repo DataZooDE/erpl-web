@@ -239,7 +239,7 @@ static void RegisterODataFunctions(DatabaseInstance &instance)
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataReadFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataDescribeFunction());
     ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataAttachFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateSapODataShowFunction());
+    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataSapShowFunction());
     
 
     auto &config = DBConfig::GetConfig(instance);
