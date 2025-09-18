@@ -7,14 +7,14 @@ namespace erpl_web {
 
 // -------------------------------------------------------------------------------------------------
 
-static duckdb::unique_ptr<duckdb::Catalog> ODataAttach(duckdb::StorageExtensionInfo *storage_info, 
+static duckdb::unique_ptr<duckdb::Catalog> ODataAttach(duckdb::optional_ptr<duckdb::StorageExtensionInfo> storage_info, 
                                                        duckdb::ClientContext &context,
                                                        duckdb::AttachedDatabase &db, 
                                                        const std::string &name, 
                                                        duckdb::AttachInfo &info,
-                                                       duckdb::AccessMode access_mode) 
+                                                       duckdb::AttachOptions &options) 
 {
-    if (access_mode != duckdb::AccessMode::READ_ONLY) {
+    if (options.access_mode != duckdb::AccessMode::READ_ONLY) {
         throw duckdb::BinderException("ODATA storage extension does not support write access");
     }
 
@@ -34,7 +34,7 @@ static duckdb::unique_ptr<duckdb::Catalog> ODataAttach(duckdb::StorageExtensionI
     return duckdb::make_uniq<ODataCatalog>(db, info.path, auth_params, ignore_pattern);
 }
 
-static duckdb::unique_ptr<duckdb::TransactionManager> ODataCreateTransactionManager(duckdb::StorageExtensionInfo *storage_info,
+static duckdb::unique_ptr<duckdb::TransactionManager> ODataCreateTransactionManager(duckdb::optional_ptr<duckdb::StorageExtensionInfo> storage_info,
                                                                                     duckdb::AttachedDatabase &db, 
                                                                                     duckdb::Catalog &catalog) 
 {

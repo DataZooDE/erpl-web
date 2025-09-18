@@ -1,10 +1,7 @@
-#define DUCKDB_EXTENSION_MAIN
-
-// #include "duckdb.hpp"
-
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "duckdb/function/pragma_function.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 #include "erpl_web_extension.hpp"
 #include "web_functions.hpp"
@@ -220,105 +217,103 @@ static void RegisterConfiguration(DatabaseInstance &instance)
                                   LogicalTypeId::BOOLEAN, Value(true), OnTraceRotation);
 }
 
-static void RegisterWebFunctions(DatabaseInstance &instance)
+static void RegisterWebFunctions(ExtensionLoader &loader)
 {
-    ExtensionUtil::RegisterType(instance, "HTTP_HEADER", erpl_web::CreateHttpHeaderType());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpGetFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpPostFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpPutFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpPatchFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpDeleteFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateHttpHeadFunction());
+    loader.RegisterType("HTTP_HEADER", erpl_web::CreateHttpHeaderType());
+    loader.RegisterFunction(erpl_web::CreateHttpGetFunction());
+    loader.RegisterFunction(erpl_web::CreateHttpPostFunction());
+    loader.RegisterFunction(erpl_web::CreateHttpPutFunction());
+    loader.RegisterFunction(erpl_web::CreateHttpPatchFunction());
+    loader.RegisterFunction(erpl_web::CreateHttpDeleteFunction());
+    loader.RegisterFunction(erpl_web::CreateHttpHeadFunction());
 
-    erpl::CreateBasicSecretFunctions::Register(instance);
-    erpl::CreateBearerTokenSecretFunctions::Register(instance);
+    erpl::CreateBasicSecretFunctions::Register(loader);
+    erpl::CreateBearerTokenSecretFunctions::Register(loader);
 }
 
-static void RegisterODataFunctions(DatabaseInstance &instance)
+static void RegisterODataFunctions(ExtensionLoader &loader)
 {
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataReadFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataDescribeFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataAttachFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateODataSapShowFunction());
+    loader.RegisterFunction(erpl_web::CreateODataReadFunction());
+    loader.RegisterFunction(erpl_web::CreateODataDescribeFunction());
+    loader.RegisterFunction(erpl_web::CreateODataAttachFunction());
+    loader.RegisterFunction(erpl_web::CreateODataSapShowFunction());
     
 
-    auto &config = DBConfig::GetConfig(instance);
+    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
     config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
-
-    duckdb::ExtensionInstallInfo extension_install_info;
-    instance.SetExtensionLoaded("odata", extension_install_info);
 }
 
-static void RegisterDatasphereFunctions(DatabaseInstance &instance)
+static void RegisterDatasphereFunctions(ExtensionLoader &loader)
 {
     // Register catalog discovery functions
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereShowSpacesFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereShowAssetsFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereDescribeSpaceFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereDescribeAssetFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereShowSpacesFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereShowAssetsFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereDescribeSpaceFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereDescribeAssetFunction());
     
     // Register asset consumption functions
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereReadRelationalFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateDatasphereReadAnalyticalFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereReadRelationalFunction());
+    loader.RegisterFunction(erpl_web::CreateDatasphereReadAnalyticalFunction());
     
     // Register Datasphere secret management functions
-    erpl_web::CreateDatasphereSecretFunctions::Register(instance);
+    erpl_web::CreateDatasphereSecretFunctions::Register(loader);
 }
 
-static void RegisterOdpFunctions(DatabaseInstance &instance)
+static void RegisterOdpFunctions(ExtensionLoader &loader)
 {
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataShowFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpODataReadFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpListSubscriptionsFunction());
-    ExtensionUtil::RegisterFunction(instance, erpl_web::CreateOdpRemoveSubscriptionFunction());
+    loader.RegisterFunction(erpl_web::CreateOdpODataShowFunction());
+    loader.RegisterFunction(erpl_web::CreateOdpODataReadFunction());
+    loader.RegisterFunction(erpl_web::CreateOdpListSubscriptionsFunction());
+    loader.RegisterFunction(erpl_web::CreateOdpRemoveSubscriptionFunction());
 }
 
-static void RegisterTracingPragmas(DatabaseInstance &instance)
+static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
-    ExtensionUtil::RegisterFunction(instance, PragmaFunctionSet(PragmaFunction::PragmaCall(
+    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
         "erpl_trace_enable", EnableTracingPragmaFunction, {LogicalType::BOOLEAN})));
     
-    ExtensionUtil::RegisterFunction(instance, PragmaFunctionSet(PragmaFunction::PragmaCall(
+    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
         "erpl_trace_level", SetTraceLevelPragmaFunction, {LogicalType::VARCHAR})));
     
-    ExtensionUtil::RegisterFunction(instance, PragmaFunctionSet(PragmaFunction::PragmaCall(
+    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
         "erpl_trace_directory", SetTraceDirectoryPragmaFunction, {LogicalType::VARCHAR})));
     
-    ExtensionUtil::RegisterFunction(instance, PragmaFunctionSet(PragmaFunction::PragmaCall(
+    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
         "erpl_trace_status", GetTracingStatusPragmaFunction, {})));
 }
 
-void ErplWebExtension::Load(DuckDB &db) 
-{
+static void LoadInternal(ExtensionLoader &loader) {
+    auto &instance = loader.GetDatabaseInstance();
     PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web");
 
-	RegisterConfiguration(*db.instance);
-    RegisterWebFunctions(*db.instance);
-    RegisterODataFunctions(*db.instance);
-    RegisterDatasphereFunctions(*db.instance);
-    RegisterOdpFunctions(*db.instance);
-    RegisterTracingPragmas(*db.instance);
+    RegisterConfiguration(instance);
+    RegisterWebFunctions(loader);
+    RegisterODataFunctions(loader);
+    RegisterDatasphereFunctions(loader);
+    RegisterOdpFunctions(loader);
+    RegisterTracingPragmas(loader);
 }
-std::string ErplWebExtension::Name() 
-{
-	return "erpl_web";
+
+void ErplWebExtension::Load(ExtensionLoader &loader) {
+    LoadInternal(loader);
+}
+
+std::string ErplWebExtension::Name() {
+    return "erpl_web";
+}
+
+std::string ErplWebExtension::Version() {
+    return "be623fc";
 }
 
 } // namespace duckdb
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void erpl_web_init(duckdb::DatabaseInstance &db) {
-    duckdb::DuckDB db_wrapper(db);
-    db_wrapper.LoadExtension<duckdb::ErplWebExtension>();
+DUCKDB_CPP_EXTENSION_ENTRY(erpl_web, loader) {
+    LoadInternal(loader);
 }
 
-DUCKDB_EXTENSION_API const char *erpl_web_version() {
-	return duckdb::DuckDB::LibraryVersion();
-}
 }
 
-#ifndef DUCKDB_EXTENSION_MAIN
-#error DUCKDB_EXTENSION_MAIN not defined
-#endif

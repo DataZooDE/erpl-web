@@ -898,7 +898,7 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
                         
                         // Parse using DuckDB's timestamp constructor
             auto timestamp_value = duckdb::Value::TIMESTAMP(
-                duckdb::Timestamp::FromString(duckdb_format));
+                duckdb::Timestamp::FromString(duckdb_format, false));
             ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
                              "Successfully parsed timestamp: '" +
                                  timestamp_str + "' -> '" + duckdb_format +

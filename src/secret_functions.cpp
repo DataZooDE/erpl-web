@@ -5,7 +5,7 @@ using namespace duckdb;
 
 namespace erpl {
 
-void CreateBasicSecretFunctions::Register(duckdb::DatabaseInstance &instance) 
+void CreateBasicSecretFunctions::Register(duckdb::ExtensionLoader &loader) 
 {
     ERPL_TRACE_INFO("SECRET_FUNCTIONS", "Registering HTTP Basic authentication secret functions");
     
@@ -15,12 +15,12 @@ void CreateBasicSecretFunctions::Register(duckdb::DatabaseInstance &instance)
 	secret_type.deserializer = KeyValueSecret::Deserialize<duckdb::KeyValueSecret>;
 	secret_type.default_provider = "config";
 
-	ExtensionUtil::RegisterSecretType(instance, secret_type);
+	loader.RegisterSecretType(secret_type);
 
 	CreateSecretFunction secret_fun = {type, "config", CreateBasicSecretFromConfig};
 	secret_fun.named_parameters["username"] = LogicalType::VARCHAR;
     secret_fun.named_parameters["password"] = LogicalType::VARCHAR;
-	ExtensionUtil::RegisterFunction(instance, secret_fun);
+	loader.RegisterFunction(secret_fun);
     
     ERPL_TRACE_INFO("SECRET_FUNCTIONS", "Successfully registered HTTP Basic authentication secret functions");
 }
@@ -63,7 +63,7 @@ unique_ptr<BaseSecret> CreateBasicSecretFunctions::CreateBasicSecretFromConfig(C
 
 // ----------------------------------------------------------------------
 
-void CreateBearerTokenSecretFunctions::Register(duckdb::DatabaseInstance &instance) {   
+void CreateBearerTokenSecretFunctions::Register(duckdb::ExtensionLoader &loader) {   
     ERPL_TRACE_INFO("SECRET_FUNCTIONS", "Registering HTTP Bearer token secret functions");
     
     std::string type = "http_bearer";
@@ -72,11 +72,11 @@ void CreateBearerTokenSecretFunctions::Register(duckdb::DatabaseInstance &instan
 	secret_type.deserializer = KeyValueSecret::Deserialize<duckdb::KeyValueSecret>;
 	secret_type.default_provider = "config";
 
-	ExtensionUtil::RegisterSecretType(instance, secret_type);
+	loader.RegisterSecretType(secret_type);
 
 	CreateSecretFunction secret_fun = {type, "config", CreateBearerSecretFromConfig};
 	secret_fun.named_parameters["token"] = LogicalType::VARCHAR;
-	ExtensionUtil::RegisterFunction(instance, secret_fun);
+	loader.RegisterFunction(secret_fun);
     
     ERPL_TRACE_INFO("SECRET_FUNCTIONS", "Successfully registered HTTP Bearer token secret functions");
 }

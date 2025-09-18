@@ -1,7 +1,6 @@
 #pragma once
 
 #include "duckdb/main/secret/secret_manager.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "oauth2_flow_v2.hpp"
 #include "http_client.hpp"
 
@@ -33,7 +32,7 @@ struct DatasphereSecretData {
 // Secret creation functions (matching gsheets pattern)
 class CreateDatasphereSecretFunctions {
 public:
-    static void Register(duckdb::DatabaseInstance &db);
+    static void Register(duckdb::ExtensionLoader &loader);
     
 private:
     // Secret creation from different providers

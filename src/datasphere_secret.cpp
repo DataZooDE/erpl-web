@@ -64,7 +64,7 @@ std::chrono::time_point<std::chrono::system_clock> DatasphereSecretData::GetExpi
 
 // Secret creation functions implementation
 
-void CreateDatasphereSecretFunctions::Register(duckdb::DatabaseInstance &db) {
+void CreateDatasphereSecretFunctions::Register(duckdb::ExtensionLoader &loader) {
     std::string type = "datasphere";
     
     // Register the new type
@@ -96,10 +96,10 @@ void CreateDatasphereSecretFunctions::Register(duckdb::DatabaseInstance &db) {
     file_function.named_parameters["filepath"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(file_function);
     
-    duckdb::ExtensionUtil::RegisterSecretType(db, secret_type);
-    duckdb::ExtensionUtil::RegisterFunction(db, oauth2_function);
-    duckdb::ExtensionUtil::RegisterFunction(db, config_function);
-    duckdb::ExtensionUtil::RegisterFunction(db, file_function);
+    loader.RegisterSecretType(secret_type);
+    loader.RegisterFunction(oauth2_function);
+    loader.RegisterFunction(config_function);
+    loader.RegisterFunction(file_function);
 }
 
 duckdb::unique_ptr<duckdb::BaseSecret> CreateDatasphereSecretFunctions::CreateDatasphereSecretFromOAuth2(
