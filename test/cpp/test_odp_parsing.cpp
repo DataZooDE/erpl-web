@@ -19,13 +19,13 @@ TEST_CASE("ODP Entity Set Parsing", "[odp]") {
                     "EntitySets": {
                         "results": [
                             {
-                                "Name": "EntityOfSEPM_ISO"
+                                "ID": "EntityOfSEPM_ISO"
                             },
                             {
-                                "Name": "FactsOf0D_NW_C01"
+                                "ID": "FactsOf0D_NW_C01"
                             },
                             {
-                                "Name": "RegularEntity"
+                                "ID": "RegularEntity"
                             }
                         ]
                     }
@@ -37,7 +37,7 @@ TEST_CASE("ODP Entity Set Parsing", "[odp]") {
                     "EntitySets": {
                         "results": [
                             {
-                                "Name": "RegularEntity"
+                                "ID": "RegularEntity"
                             }
                         ]
                     }
@@ -109,7 +109,7 @@ TEST_CASE("ODP Entity Set Pattern Matching", "[odp]") {
             "EntitySets": {
                 "results": [
                     {
-                        "Name": ")" + entity_name + R"("
+                        "ID": ")" + entity_name + R"("
                     }
                 ]
             }

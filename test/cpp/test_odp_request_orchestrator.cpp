@@ -56,9 +56,9 @@ TEST_CASE("OdpRequestOrchestrator - URL Manipulation", "[odp_url_manipulation]")
         REQUIRE(delta_url.find("!deltatoken=" + delta_token) != std::string::npos);
         REQUIRE(delta_url.find("$format=json") != std::string::npos);
         
-        // Should not contain original query parameters
-        REQUIRE(delta_url.find("$top=100") == std::string::npos);
-        REQUIRE(delta_url.find("$skip=50") == std::string::npos);
+        // Should keep original query parameters
+        REQUIRE(delta_url.find("$top=100") != std::string::npos);
+        REQUIRE(delta_url.find("$skip=50") != std::string::npos);
     }
 }
 

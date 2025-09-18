@@ -361,7 +361,7 @@ void OdpODataShowBindData::ExtractAndAddOdpEntitySets(duckdb_yyjson::yyjson_val*
                 std::string entity_name_upper = entity_set_id;
                 std::transform(entity_name_upper.begin(), entity_name_upper.end(), entity_name_upper.begin(), ::toupper);
                 
-                if (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0) {
+                if (entity_name_upper.find("ENTITYOF") == 0 || entity_name_upper.find("FACTSOF") == 0 || entity_name_upper.find("ATTROF") == 0) {
                     ERPL_TRACE_DEBUG("ODP_ENTITY_EXTRACT", "Found ODP entity set: " + entity_set_id);
                     
                     // Construct the entity set URL for direct use with odata_read

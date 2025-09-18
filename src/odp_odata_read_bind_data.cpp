@@ -76,6 +76,12 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
         if (!first_fetch_completed_) {
             bool success = false;
             
+            // Diagnostic: log current phase and token before request
+            ERPL_TRACE_INFO("ODP_BIND_DATA", duckdb::StringUtil::Format(
+                "Pre-request state: Phase=%s, Token=%s",
+                OdpSubscriptionStateManager::PhaseToString(state_manager_->GetCurrentPhase()),
+                state_manager_->GetCurrentDeltaToken().empty() ? "<EMPTY>" : state_manager_->GetCurrentDeltaToken().substr(0, 64)));
+
             if (state_manager_->ShouldPerformInitialLoad()) {
                 ERPL_TRACE_INFO("ODP_BIND_DATA", "Performing initial load");
                 success = HandleInitialLoad();
@@ -280,11 +286,11 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         // Process the result
         ProcessRequestResult(result, "initial_load");
         
-        // Update OData client with the response
+        // Update OData client with pre-fetched initial response
         if (result.response) {
-            // For initial load, we use the original URL
-            // The delta token will be used for subsequent requests
-            UpdateODataClient(entity_set_url_);
+            // For initial load, we use the original URL with pre-fetched content
+            std::string response_content = result.response->RawContent();
+            UpdateODataClientWithResponse(entity_set_url_, response_content);
             return true;
         }
         
@@ -312,15 +318,21 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
         current_audit_id_ = state_manager_->CreateAuditEntry("delta_fetch", entity_set_url_);
         
         // Execute delta fetch request
+        ERPL_TRACE_INFO("ODP_BIND_DATA", duckdb::StringUtil::Format(
+            "Delta fetch with token: %s", current_token.substr(0, 64)));
         auto result = request_orchestrator_->ExecuteDeltaFetch(entity_set_url_, current_token, max_page_size_);
         
         // Process the result
         ProcessRequestResult(result, "delta_fetch");
         
-        // Update OData client with delta URL
+        // Update OData client with pre-fetched delta response
         if (result.response) {
-            std::string delta_url = OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
-            UpdateODataClient(delta_url);
+            std::string delta_url = !result.extracted_delta_url.empty()
+                ? result.extracted_delta_url
+                : OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
+            std::string response_content = result.response->RawContent();
+            ERPL_TRACE_INFO("ODP_BIND_DATA", "Using constructed delta URL for response injection: " + delta_url);
+            UpdateODataClientWithResponse(delta_url, response_content);
             return true;
         }
         
@@ -387,6 +399,36 @@ void OdpODataReadBindData::UpdateODataClient(const std::string& url) {
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_BIND_DATA", "Failed to update OData client: " + std::string(e.what()));
+        throw;
+    }
+}
+
+void OdpODataReadBindData::UpdateODataClientWithResponse(const std::string& url, const std::string& response_content) {
+    ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Updating OData client with pre-fetched response for URL: " + url);
+    
+    try {
+        // Create OData client factory probe result
+        ODataClientFactory::ProbeResult probe_result;
+        probe_result.normalized_url = HttpUrl(url);
+        probe_result.auth_params = auth_params_;
+        probe_result.initial_content = response_content;
+        probe_result.version = ODataVersion::V2; // ODP is always OData v2
+        probe_result.is_service_root = false;
+        
+        // Create entity set client
+        auto client = ODataClientFactory::CreateEntitySetClient(probe_result);
+        
+        // Create bind data with pre-fetched content
+        odata_bind_data_ = ODataReadBindData::FromEntitySetClient(client, response_content);
+        
+        if (!odata_bind_data_) {
+            throw duckdb::InternalException("Failed to update OData client with response");
+        }
+        
+        ERPL_TRACE_DEBUG("ODP_BIND_DATA", "OData client updated successfully with pre-fetched response");
+        
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("ODP_BIND_DATA", "Failed to update OData client with response: " + std::string(e.what()));
         throw;
     }
 }

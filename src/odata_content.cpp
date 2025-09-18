@@ -136,6 +136,9 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val* json_value
             case duckdb::LogicalTypeId::DATE: {
                 return DeserializeJsonDate(json_value);
             }
+            case duckdb::LogicalTypeId::TIME: {
+                return DeserializeJsonTime(json_value);
+            }
             case duckdb::LogicalTypeId::TIMESTAMP: {
                 return DeserializeJsonTimestamp(json_value);
             }
@@ -617,6 +620,36 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonDate(yyjson_val* json_value)
     }
     ThrowTypeError(json_value, "date (string 'YYYY-MM-DD' or integer/real days)");
     return duckdb::Value::DATE(duckdb::date_t(0));
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonTime(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+    if (yyjson_is_null(json_value)) {
+        return duckdb::Value();
+    }
+    if (yyjson_is_str(json_value)) {
+        std::string s = yyjson_get_str(json_value);
+        // OData V2 Edm.Time is xs:time, typically HH:MM(:SS[.fffffff])
+        // Delegate parsing to DuckDB cast from VARCHAR -> TIME
+        return duckdb::Value(s).DefaultCastAs(duckdb::LogicalType(duckdb::LogicalTypeId::TIME));
+    }
+    if (yyjson_is_int(json_value)) {
+        // Interpret as seconds since midnight
+        int64_t seconds = yyjson_get_int(json_value);
+        int64_t micros = seconds * 1000000LL;
+        return duckdb::Value::TIME(duckdb::dtime_t(micros));
+    }
+    if (yyjson_is_real(json_value)) {
+        // Interpret as seconds since midnight (fractional)
+        double seconds = yyjson_get_real(json_value);
+        int64_t micros = static_cast<int64_t>(seconds * 1000000.0);
+        return duckdb::Value::TIME(duckdb::dtime_t(micros));
+    }
+    ThrowTypeError(json_value, "time (string 'HH:MM[:SS[.fffffff]]' or number seconds)");
+    return duckdb::Value::TIME(duckdb::dtime_t(0));
 }
 
 duckdb::Value ODataJsonContentMixin::DeserializeJsonTimestamp(yyjson_val* json_value)

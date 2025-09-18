@@ -10,27 +10,7 @@
 
 namespace erpl_web {
 
-// Helper function to convert OData types to DuckDB logical types
-duckdb::LogicalType ConvertODataTypeToLogicalType(const std::string& odata_type) {
-    if (odata_type == "Edm.String") {
-        return duckdb::LogicalType::VARCHAR;
-    } else if (odata_type == "Edm.Int32") {
-        return duckdb::LogicalType::INTEGER;
-    } else if (odata_type == "Edm.Int64") {
-        return duckdb::LogicalType::BIGINT;
-    } else if (odata_type == "Edm.Double") {
-        return duckdb::LogicalType::DOUBLE;
-    } else if (odata_type == "Edm.Boolean") {
-        return duckdb::LogicalType::BOOLEAN;
-    } else if (odata_type == "Edm.DateTime" || odata_type == "Edm.DateTimeOffset") {
-        return duckdb::LogicalType::TIMESTAMP;
-    } else if (odata_type == "Edm.Decimal") {
-        return duckdb::LogicalType::DECIMAL(18, 2); // Default precision and scale
-    } else {
-        // Default to VARCHAR for unknown types
-        return duckdb::LogicalType::VARCHAR;
-    }
-}
+// Deprecated legacy helper removed in favor of DuckTypeConverter central API
 
 // -------------------------------------------------------------------------------------------------
 // ODataSchemaEntry Implementation
@@ -164,7 +144,8 @@ void ODataSchemaEntry::LoadTables() {
                 if (std::holds_alternative<EntityType>(type_variant)) {
                     auto entity_type = std::get<EntityType>(type_variant);
                     for (const auto& property : entity_type.properties) {
-                        auto logical_type = ConvertODataTypeToLogicalType(property.type_name);
+                        // Prefer property-aware central mapping (precision/scale + collection)
+                        auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
                         table_info.columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
                     }
                 } else {
@@ -383,7 +364,7 @@ void ODataCatalog::GetTableInfo(const std::string &table_name,
                     if (std::holds_alternative<EntityType>(type_variant)) {
                         auto entity_type = std::get<EntityType>(type_variant);
                         for (const auto& property : entity_type.properties) {
-                            auto logical_type = ConvertODataTypeToLogicalType(property.type_name);
+                            auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
                             columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
                         }
                         return;

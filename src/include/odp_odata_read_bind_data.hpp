@@ -241,6 +241,13 @@ private:
      */
     void UpdateODataClient(const std::string& url);
 
+    /**
+     * @brief Update OData client with pre-fetched response content
+     * @param url URL that was used to fetch the response
+     * @param response_content Pre-fetched JSON response content
+     */
+    void UpdateODataClientWithResponse(const std::string& url, const std::string& response_content);
+
     // ========================================================================
     // Error Handling and Recovery
     // ========================================================================

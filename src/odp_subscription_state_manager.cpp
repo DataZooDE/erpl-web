@@ -290,6 +290,10 @@ void OdpSubscriptionStateManager::CreateNewSubscription() {
 void OdpSubscriptionStateManager::DetermineInitialPhase() {
     ERPL_TRACE_DEBUG("ODP_STATE_MANAGER", "Determining initial phase");
     
+    ERPL_TRACE_INFO("ODP_STATE_MANAGER", duckdb::StringUtil::Format(
+        "Existing token on load: %s",
+        current_subscription_.delta_token.empty() ? "<EMPTY>" : current_subscription_.delta_token.substr(0, 64)));
+
     if (force_full_load_ || current_subscription_.delta_token.empty()) {
         current_phase_ = SubscriptionPhase::INITIAL_LOAD;
         ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Initial phase: INITIAL_LOAD");

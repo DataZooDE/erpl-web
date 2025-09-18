@@ -85,6 +85,7 @@ protected:
     duckdb::Value DeserializeJsonString(yyjson_val *json_value);
     duckdb::Value DeserializeJsonDecimal(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
     duckdb::Value DeserializeJsonDate(yyjson_val *json_value);
+    duckdb::Value DeserializeJsonTime(yyjson_val *json_value);
     duckdb::Value DeserializeJsonTimestamp(yyjson_val *json_value);
     duckdb::Value DeserializeJsonEnum(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
     duckdb::Value DeserializeJsonArray(yyjson_val *json_value, const duckdb::LogicalType &duck_type);

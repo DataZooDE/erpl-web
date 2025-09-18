@@ -25,6 +25,7 @@ public:
     struct OdpRequestResult {
         std::shared_ptr<ODataEntitySetResponse> response;
         std::string extracted_delta_token;
+        std::string extracted_delta_url;
         bool preference_applied;
         bool has_more_pages;
         int http_status_code;
@@ -88,6 +89,10 @@ public:
      * @return Extracted delta token or empty string if not found
      */
     static std::string ExtractDeltaToken(const ODataEntitySetResponse& response);
+    /**
+     * @brief Extract delta link URL from OData response
+     */
+    static std::string ExtractDeltaUrl(const ODataEntitySetResponse& response);
 
     /**
      * @brief Build delta URL by appending delta token to base URL
@@ -96,6 +101,10 @@ public:
      * @return Complete delta URL
      */
     static std::string BuildDeltaUrl(const std::string& base_url, const std::string& delta_token);
+    /**
+     * @brief Normalize delta URL (remove quoted token patterns, ensure $format=json)
+     */
+    static std::string NormalizeDeltaUrl(const std::string& delta_url);
 
     /**
      * @brief Set default page size for requests

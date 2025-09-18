@@ -9,6 +9,45 @@
 using namespace erpl_web;
 using namespace std;
 
+// Forward declaration for helper used in tests below
+static std::string LoadTestFile(const std::string& filePath);
+TEST_CASE("Central EDM primitive mapping helper", "[odata_edm_mapping]")
+{
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.String") == duckdb::LogicalTypeId::VARCHAR);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Int32") == duckdb::LogicalTypeId::INTEGER);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Date") == duckdb::LogicalTypeId::DATE);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Time") == duckdb::LogicalTypeId::TIME);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.TimeOfDay") == duckdb::LogicalTypeId::TIME);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.DateTime") == duckdb::LogicalTypeId::TIMESTAMP);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Decimal") == duckdb::LogicalTypeId::DECIMAL);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Guid") == duckdb::LogicalTypeId::VARCHAR);
+}
+
+TEST_CASE("Property-aware mapping honors DECIMAL p/s and Collection", "[odata_edm_mapping]")
+{
+    // Build minimal Edmx from sample metadata
+    auto xml = LoadTestFile("./test/cpp/edm_trippin.xml");
+    auto edmx = Edmx::FromXml(xml);
+
+    // Decimal precision/scale
+    Property p_dec;
+    p_dec.name = "UnitPrice";
+    p_dec.type_name = "Edm.Decimal";
+    p_dec.precision = 20;
+    p_dec.scale = 6;
+    auto dec_type = DuckTypeConverter::BuildLogicalTypeForProperty(p_dec, edmx);
+    REQUIRE(dec_type.id() == duckdb::LogicalTypeId::DECIMAL);
+    REQUIRE(dec_type.ToString() == "DECIMAL(20,6)");
+
+    // Collection of primitive
+    Property p_list_str;
+    p_list_str.name = "Tags";
+    p_list_str.type_name = "Collection(Edm.String)";
+    auto list_type = DuckTypeConverter::BuildLogicalTypeForProperty(p_list_str, edmx);
+    REQUIRE(list_type.id() == duckdb::LogicalTypeId::LIST);
+    REQUIRE(duckdb::ListType::GetChildType(list_type).id() == duckdb::LogicalTypeId::VARCHAR);
+}
+
 static std::string LoadTestFile(const std::string& filePath) {
     std::ifstream file(filePath);
     if (!file.is_open()) {

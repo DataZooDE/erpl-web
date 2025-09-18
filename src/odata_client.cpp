@@ -730,7 +730,36 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     
     if (http_response == nullptr || http_response->Code() != 200) {
         std::stringstream ss;
-        ss << "Failed to probe OData URL: " << url << " (HTTP " << (http_response ? http_response->Code() : 0) << ")";
+        int status_code = http_response ? http_response->Code() : 0;
+        
+        // Provide more specific error messages based on HTTP status code
+        switch (status_code) {
+            case 0:
+                ss << "Failed to connect to OData service at: " << url 
+                   << " (Connection failed - check if the server is running and accessible)";
+                break;
+            case 401:
+                ss << "Authentication failed for OData service at: " << url 
+                   << " (HTTP 401 - check your credentials in the secret)";
+                break;
+            case 403:
+                ss << "Access forbidden to OData service at: " << url 
+                   << " (HTTP 403 - check if your user has permission to access this service)";
+                break;
+            case 404:
+                ss << "OData service not found at: " << url 
+                   << " (HTTP 404 - check if the URL path is correct, especially the entity set name)";
+                break;
+            case 500:
+                ss << "Internal server error from OData service at: " << url 
+                   << " (HTTP 500 - the SAP system encountered an error)";
+                break;
+            default:
+                ss << "Failed to access OData service at: " << url 
+                   << " (HTTP " << status_code << " - unexpected server response)";
+                break;
+        }
+        
         throw std::runtime_error(ss.str());
     }
     

@@ -67,9 +67,18 @@ duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext 
         
         return std::move(odp_bind_data);
         
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_ODATA_READ_BIND", "Binding failed: " + std::string(e.what()));
+    } catch (const duckdb::InvalidInputException& e) {
+        // Re-throw DuckDB exceptions as-is (these are already well-formatted)
         throw;
+    } catch (const std::runtime_error& e) {
+        // Use shared error handling utility for HTTP errors
+        ERPL_TRACE_ERROR("ODP_ODATA_READ_BIND", "Binding failed: " + std::string(e.what()));
+        throw ODataErrorHandling::ConvertHttpErrorToUserFriendly(e, entity_set_url, "ODP OData", "sap_odp_odata_show()");
+    } catch (const std::exception& e) {
+        // Handle other exceptions with context
+        ERPL_TRACE_ERROR("ODP_ODATA_READ_BIND", "Binding failed: " + std::string(e.what()));
+        throw duckdb::InvalidInputException("Failed to bind ODP OData function for URL: " + entity_set_url + 
+            ". Error: " + std::string(e.what()));
     }
 }
 

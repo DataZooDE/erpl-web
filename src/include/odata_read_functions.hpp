@@ -373,4 +373,26 @@ TableFunctionSet CreateODataReadFunction();
 // OData Describe function
 TableFunctionSet CreateODataDescribeFunction();
 
+// ============================================================================
+// Shared Error Handling Utilities
+// ============================================================================
+
+namespace ODataErrorHandling {
+
+/**
+ * @brief Convert runtime errors (especially HTTP errors) to user-friendly InvalidInputException
+ * 
+ * @param e The runtime error to convert
+ * @param url The URL that caused the error
+ * @param service_type Type of service ("OData" or "ODP OData") for error messages
+ * @param discovery_function Name of discovery function to suggest (e.g., "sap_odata_show()" or "sap_odp_odata_show()")
+ * @return InvalidInputException with user-friendly error message
+ */
+duckdb::InvalidInputException ConvertHttpErrorToUserFriendly(const std::runtime_error& e, 
+                                                           const std::string& url,
+                                                           const std::string& service_type,
+                                                           const std::string& discovery_function);
+
+} // namespace ODataErrorHandling
+
 } // namespace erpl_web

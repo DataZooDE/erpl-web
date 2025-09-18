@@ -253,46 +253,7 @@ duckdb::LogicalType ODataTypeResolver::ResolveNavigationOnEntity(
 
 duckdb::LogicalType ODataTypeResolver::ConvertPrimitiveTypeString(
     const std::string &type_name) const {
-    if (type_name == "Edm.Binary") {
-        return duckdb::LogicalTypeId::BLOB;
-    } else if (type_name == "Edm.Boolean") {
-        return duckdb::LogicalTypeId::BOOLEAN;
-    } else if (type_name == "Edm.Byte" || type_name == "Edm.SByte") {
-        return duckdb::LogicalTypeId::TINYINT;
-    } else if (type_name == "Edm.Date") {
-        return duckdb::LogicalTypeId::DATE;
-    } else if (type_name == "Edm.DateTime" || type_name == "Edm.DateTimeOffset") {
-        return duckdb::LogicalTypeId::TIMESTAMP;
-    } else if (type_name == "Edm.Decimal") {
-        return duckdb::LogicalTypeId::DECIMAL;
-    } else if (type_name == "Edm.Double") {
-        return duckdb::LogicalTypeId::DOUBLE;
-    } else if (type_name == "Edm.Duration") {
-        return duckdb::LogicalTypeId::INTERVAL;
-    } else if (type_name == "Edm.Guid") {
-        return duckdb::LogicalTypeId::VARCHAR;
-    } else if (type_name == "Edm.Int16") {
-        return duckdb::LogicalTypeId::SMALLINT;
-    } else if (type_name == "Edm.Int32") {
-        return duckdb::LogicalTypeId::INTEGER;
-    } else if (type_name == "Edm.Int64") {
-        return duckdb::LogicalTypeId::BIGINT;
-    } else if (type_name == "Edm.Single") {
-        return duckdb::LogicalTypeId::FLOAT;
-    } else if (type_name == "Edm.Stream") {
-        return duckdb::LogicalTypeId::BLOB;
-    } else if (type_name == "Edm.String") {
-        return duckdb::LogicalTypeId::VARCHAR;
-    } else if (type_name == "Edm.TimeOfDay") {
-        return duckdb::LogicalTypeId::TIME;
-  } else if (type_name.find("Edm.Geography") == 0 ||
-             type_name.find("Edm.Geometry") == 0) {
-    return duckdb::LogicalTypeId::VARCHAR; // Geography/Geometry types as
-                                           // VARCHAR for now
-    } else {
-        // Fallback for unknown types - treat as VARCHAR
-        return duckdb::LogicalTypeId::VARCHAR;
-    }
+    return DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType(type_name);
 }
 
 std::tuple<bool, std::string>
@@ -3019,6 +2980,49 @@ void SetupSchemaFromProbeResult(
 
 } // namespace ODataReadBindHelpers
 
+// ============================================================================
+// Shared Error Handling Utilities
+// ============================================================================
+
+namespace ODataErrorHandling {
+
+/**
+ * @brief Convert runtime errors (especially HTTP errors) to user-friendly InvalidInputException
+ * 
+ * @param e The runtime error to convert
+ * @param url The URL that caused the error
+ * @param service_type Type of service ("OData" or "ODP OData") for error messages
+ * @param discovery_function Name of discovery function to suggest (e.g., "sap_odata_show()" or "sap_odp_odata_show()")
+ * @return InvalidInputException with user-friendly error message
+ */
+duckdb::InvalidInputException ConvertHttpErrorToUserFriendly(const std::runtime_error& e, 
+                                                           const std::string& url,
+                                                           const std::string& service_type,
+                                                           const std::string& discovery_function) {
+    std::string error_msg = e.what();
+    
+    if (error_msg.find("HTTP 404") != std::string::npos) {
+        return duckdb::InvalidInputException(service_type + " service not found at URL: " + url + 
+            ". Please check if the URL path is correct, especially the entity set name. " +
+            "Use " + discovery_function + " to discover available entity sets.");
+    } else if (error_msg.find("HTTP 401") != std::string::npos) {
+        return duckdb::InvalidInputException("Authentication failed for " + service_type + " service at: " + url + 
+            ". Please check your credentials in the secret.");
+    } else if (error_msg.find("HTTP 403") != std::string::npos) {
+        return duckdb::InvalidInputException("Access forbidden to " + service_type + " service at: " + url + 
+            ". Please check if your user has permission to access this service.");
+    } else if (error_msg.find("Connection failed") != std::string::npos) {
+        return duckdb::InvalidInputException("Failed to connect to " + service_type + " service at: " + url + 
+            ". Please check if the server is running and accessible.");
+    } else {
+        // Re-throw with additional context
+        return duckdb::InvalidInputException("Failed to access " + service_type + " service at: " + url + 
+            ". Error: " + error_msg);
+    }
+}
+
+} // namespace ODataErrorHandling
+
 duckdb::unique_ptr<FunctionData>
 ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
               vector<LogicalType> &return_types, vector<string> &names) {
@@ -3029,8 +3033,9 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
                   duckdb::StringUtil::Format(
                       "Binding OData read function for URL: %s", url.c_str()));
 
-  // Single probe to determine content type and version
-  auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
+  try {
+    // Single probe to determine content type and version
+    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
 
   // Create appropriate bind data based on probe result with fallback heuristic
   duckdb::unique_ptr<ODataReadBindData> bind_data;
@@ -3086,6 +3091,18 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
     }
     
     return std::move(bind_data);
+    
+  } catch (const duckdb::InvalidInputException& e) {
+    // Re-throw DuckDB exceptions as-is (these are already well-formatted)
+    throw;
+  } catch (const std::runtime_error& e) {
+    // Use shared error handling utility
+    throw ODataErrorHandling::ConvertHttpErrorToUserFriendly(e, url, "OData", "sap_odata_show()");
+  } catch (const std::exception& e) {
+    // Handle other exceptions with context
+    throw duckdb::InvalidInputException("Failed to bind OData function for URL: " + url + 
+      ". Error: " + std::string(e.what()));
+  }
 }
 
 unique_ptr<GlobalTableFunctionState>

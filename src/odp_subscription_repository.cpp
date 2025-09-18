@@ -158,6 +158,10 @@ std::optional<OdpSubscription> OdpSubscriptionRepository::GetSubscription(const 
         subscription.entity_set_name = result->GetValue(2, 0).ToString();
         subscription.secret_name = result->GetValue(3, 0).ToString();
         subscription.delta_token = result->GetValue(4, 0).ToString();
+        ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format(
+            "Loaded subscription %s with token: %s",
+            subscription_id,
+            subscription.delta_token.empty() ? "<EMPTY>" : subscription.delta_token.substr(0, 64)));
         subscription.created_at = StringToTimestamp(result->GetValue(5, 0).ToString());
         subscription.last_updated = StringToTimestamp(result->GetValue(6, 0).ToString());
         subscription.subscription_status = result->GetValue(7, 0).ToString();
@@ -562,8 +566,8 @@ std::string OdpSubscriptionRepository::CleanUrlForId(const std::string& url) {
 }
 
 bool OdpSubscriptionRepository::IsValidOdpUrl(const std::string& url) {
-    // Check for ODP naming patterns: EntityOf* or FactsOf*
-    std::regex odp_pattern(".*/(EntityOf|FactsOf)[^/]*$", std::regex_constants::icase);
+    // Check for ODP naming patterns: EntityOf* or FactsOf* or AttrOf*
+    std::regex odp_pattern(".*/(EntityOf|FactsOf|AttrOf)[^/]*$", std::regex_constants::icase);
     bool is_odp = std::regex_search(url, odp_pattern);
     
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(

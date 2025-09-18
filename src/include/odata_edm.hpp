@@ -64,6 +64,7 @@ public:
             "Edm.Single",
             "Edm.Stream",
             "Edm.String",
+            "Edm.Time",
             "Edm.TimeOfDay",
             "Edm.Geography",
             "Edm.GeographyPoint",
@@ -116,6 +117,7 @@ const PrimitiveType SByte("Edm.SByte");
 const PrimitiveType Single("Edm.Single");
 const PrimitiveType Stream("Edm.Stream");
 const PrimitiveType String("Edm.String");
+const PrimitiveType Time("Edm.Time");
 const PrimitiveType TimeOfDay("Edm.TimeOfDay");
 const PrimitiveType Geography("Edm.Geography");
 const PrimitiveType GeographyPoint("Edm.GeographyPoint");
@@ -2051,6 +2053,85 @@ class DuckTypeConverter
     public:
         DuckTypeConverter(Edmx &edmx) : edmx(edmx) {}
 
+        // Central primitive EDM->DuckDB LogicalType mapping
+        static duckdb::LogicalType ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name) {
+            if (type_name == "Edm.Binary") {
+                return duckdb::LogicalTypeId::BLOB;
+            } else if (type_name == "Edm.Boolean") {
+                return duckdb::LogicalTypeId::BOOLEAN;
+            } else if (type_name == "Edm.Byte" || type_name == "Edm.SByte") {
+                return duckdb::LogicalTypeId::TINYINT;
+            } else if (type_name == "Edm.Date") {
+                return duckdb::LogicalTypeId::DATE;
+            } else if (type_name == "Edm.DateTime" || type_name == "Edm.DateTimeOffset") {
+                return duckdb::LogicalTypeId::TIMESTAMP;
+            } else if (type_name == "Edm.Decimal") {
+                return duckdb::LogicalTypeId::DECIMAL;
+            } else if (type_name == "Edm.Double") {
+                return duckdb::LogicalTypeId::DOUBLE;
+            } else if (type_name == "Edm.Duration") {
+                return duckdb::LogicalTypeId::INTERVAL;
+            } else if (type_name == "Edm.Guid") {
+                return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type_name == "Edm.Int16") {
+                return duckdb::LogicalTypeId::SMALLINT;
+            } else if (type_name == "Edm.Int32") {
+                return duckdb::LogicalTypeId::INTEGER;
+            } else if (type_name == "Edm.Int64") {
+                return duckdb::LogicalTypeId::BIGINT;
+            } else if (type_name == "Edm.Single") {
+                return duckdb::LogicalTypeId::FLOAT;
+            } else if (type_name == "Edm.Stream") {
+                return duckdb::LogicalTypeId::BLOB;
+            } else if (type_name == "Edm.String") {
+                return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type_name == "Edm.Time" || type_name == "Edm.TimeOfDay") {
+                return duckdb::LogicalTypeId::TIME;
+            } else if (type_name.find("Edm.Geography") == 0 || type_name.find("Edm.Geometry") == 0) {
+                return duckdb::LogicalTypeId::VARCHAR; // Geography/Geometry types as VARCHAR for now
+            } else {
+                // Fallback for unknown types - treat as VARCHAR
+                return duckdb::LogicalTypeId::VARCHAR;
+            }
+        }
+
+        // Central property-aware mapping (handles Decimal p/s and Collection(...))
+        static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, Edmx &edmx) {
+            // Detect Collection(T)
+            std::regex collection_regex("Collection\\(([^\\)]+)\\)");
+            std::smatch match;
+            bool is_collection = false;
+            std::string type_name = property.type_name;
+            if (std::regex_search(type_name, match, collection_regex)) {
+                is_collection = true;
+                type_name = match[1];
+            }
+
+            duckdb::LogicalType duck_type;
+            if (type_name == "Edm.Decimal") {
+                int precision = property.precision > 0 ? property.precision : 18;
+                int scale = property.scale >= 0 ? property.scale : 0;
+                if (precision < 1) precision = 18;
+                if (precision > 38) precision = 38;
+                if (scale < 0) scale = 0;
+                if (scale > precision) scale = precision;
+                duck_type = duckdb::LogicalType::DECIMAL(precision, scale);
+            } else if (type_name.rfind("Edm.", 0) == 0) {
+                // Primitive
+                duck_type = ConvertEdmPrimitiveStringToLogicalType(type_name);
+            } else {
+                // Complex/Entity: visit via converter
+                DuckTypeConverter converter(edmx);
+                auto field_type = edmx.FindType(type_name);
+                duck_type = std::visit(converter, field_type);
+            }
+
+            if (is_collection) {
+                duck_type = duckdb::LogicalType::LIST(duck_type);
+            }
+            return duck_type;
+        }
+
         // Static method to convert EDM type string to DuckDB type string (for catalog functions)
         static std::string ConvertEdmTypeStringToDuckDbTypeString(const std::string& edm_type) {
             if (edm_type == "Edm.Binary") {
@@ -2083,6 +2164,8 @@ class DuckTypeConverter
                 return "BLOB";
             } else if (edm_type == "Edm.String") {
                 return "VARCHAR";
+            } else if (edm_type == "Edm.Time") {
+                return "TIME";
             } else if (edm_type == "Edm.TimeOfDay") {
                 return "TIME";
             } else if (edm_type.find("Edm.Geography") == 0 || edm_type.find("Edm.Geometry") == 0) {
@@ -2129,6 +2212,8 @@ class DuckTypeConverter
                 return duckdb::LogicalTypeId::BLOB;
             } else if (type == erpl_web::String) {
                 return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type == erpl_web::Time) {
+                return duckdb::LogicalTypeId::TIME;
             } else if (type == erpl_web::TimeOfDay) {
                 return duckdb::LogicalTypeId::TIME;
             } else if (type == erpl_web::GeographyPoint) {
@@ -2334,6 +2419,8 @@ class DuckTypeConverter
                 return duckdb::LogicalTypeId::BLOB;
             } else if (type_name == "Edm.String") {
                 return duckdb::LogicalTypeId::VARCHAR;
+            } else if (type_name == "Edm.Time") {
+                return duckdb::LogicalTypeId::TIME;
             } else if (type_name == "Edm.TimeOfDay") {
                 return duckdb::LogicalTypeId::TIME;
             } else if (type_name.find("Edm.Geography") == 0 || type_name.find("Edm.Geometry") == 0) {

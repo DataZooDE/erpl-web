@@ -14,13 +14,12 @@
 
 ## What is ODP OData?
 
-**ODP (Operational Data Provisioning)** is SAP's framework for extracting data from various SAP systems with support for **delta replication** (incremental updates). **OData (Open Data Protocol)** is a web-based protocol that allows you to query and access this data.
+**ODP (Operational Data Provisioning)** is SAP's framework for extracting data from various SAP systems with support for **delta replication** (incremental updates). **OData (Open Data Protocol)** is a web-based protocol that allows you to query and access this data. Since SAP notified customers in SAP OSS Note 3255746 that use of SAP RFCs for extraction of ABAP data from sources external to SAP (On premise and Cloud) is banned for customers and third-party tools, we are left with using ODP OData for extraction. 
 
 ### Why Use ODP OData?
 
 - **🔄 Delta Replication**: Get only changed data since your last extraction
 - **📊 Real-time Analytics**: Keep your data warehouse up-to-date automatically
-- **🚀 Performance**: Efficient data transfer with built-in pagination
 - **🔒 Security**: Secure authentication via DuckDB secrets
 - **📈 Scalability**: Handle large datasets with automatic chunking
 
@@ -64,7 +63,7 @@ SELECT
     entity_set_name,
     full_entity_set_url,
     description
-FROM sap_odp_odata_show('http://your-sap-server:port', secret='sap_system')
+FROM odp_odata_show('https://your-sap-server:port', secret='sap_system')
 WHERE entity_set_name LIKE '%SALES%'  -- Filter for sales data
 LIMIT 10;
 ```
@@ -74,8 +73,8 @@ LIMIT 10;
 ┌─────────────────────┬──────────────────┬────────────────────────────────┬─────────────────────┐
 │    service_name     │ entity_set_name  │      full_entity_set_url       │    description      │
 ├─────────────────────┼──────────────────┼────────────────────────────────┼─────────────────────┤
-│ Z_ODP_BW_1_SRV      │ FactsOf0D_NW_C01 │ http://server/sap/opu/odata... │ Sales Facts Data    │
-│ Z_ODP_FINANCE_SRV   │ GLAccountData    │ http://server/sap/opu/odata... │ GL Account Master   │
+│ Z_ODP_BW_1_SRV      │ FactsOf0D_NW_C01 │ https://server/sap/opu/odata...│ Sales Facts Data    │
+│ Z_ODP_FINANCE_SRV   │ GLAccountData    │ https://server/sap/opu/odata...│ GL Account Master   │
 └─────────────────────┴──────────────────┴────────────────────────────────┴─────────────────────┘
 ```
 
@@ -95,7 +94,7 @@ The first time you call `odp_odata_read()`, it automatically:
 -- This will load ALL data and create a subscription
 SELECT COUNT(*) as total_records
 FROM odp_odata_read(
-    'http://your-sap-server:port/sap/opu/odata/sap/Z_ODP_BW_1_SRV/FactsOf0D_NW_C01',
+    'https://your-sap-server:port/sap/opu/odata/sap/Z_ODP_BW_1_SRV/FactsOf0D_NW_C01',
     secret='sap_system'
 );
 ```

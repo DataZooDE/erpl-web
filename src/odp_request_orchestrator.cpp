@@ -32,7 +32,60 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteInitialL
     // Create initial load request with change tracking
     HttpRequest request = http_factory_->CreateInitialLoadRequest(url, max_page_size);
     
-    return ExecuteRequest(request, "initial_load");
+    auto result = ExecuteRequest(request, "initial_load");
+
+    // Diagnostic: follow pagination to last page to ensure we see the final delta link
+    try {
+        if (result.response) {
+            std::optional<std::string> next_url = result.response->NextUrl();
+            idx_t pages_followed = 0;
+            while (next_url.has_value() && !next_url->empty() && pages_followed < 1000) {
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Following next page: " + next_url.value());
+                auto next_res = ExecuteNextPage(next_url.value());
+                if (!next_res.response) {
+                    break;
+                }
+                // Replace with the latest page so that token extraction uses the last page
+                result.response = next_res.response;
+                result.http_status_code = next_res.http_status_code;
+                result.response_size_bytes += next_res.response_size_bytes;
+                result.has_more_pages = next_res.has_more_pages;
+
+                next_url = next_res.response->NextUrl();
+                pages_followed++;
+            }
+
+            // Re-extract token and delta link from the last page
+            auto raw_token = ExtractDeltaToken(*result.response);
+            auto delta_link_url = ExtractDeltaUrl(*result.response);
+            if (!raw_token.empty()) {
+                // Log raw token and normalized token (strip surrounding quotes if present)
+                std::string normalized = raw_token;
+                if (!normalized.empty() && (normalized.front() == '\'' || normalized.front() == '"') &&
+                    normalized.back() == normalized.front()) {
+                    normalized = normalized.substr(1, normalized.size() - 2);
+                }
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+                    "Delta token (raw): %s | (normalized): %s",
+                    raw_token.substr(0, 64), normalized.substr(0, 64)));
+                result.extracted_delta_token = normalized;
+            }
+            if (!delta_link_url.empty()) {
+                auto normalized_url = NormalizeDeltaUrl(delta_link_url);
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Found v2 delta link URL: " + delta_link_url);
+                if (normalized_url != delta_link_url) {
+                    ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Normalized delta link URL: " + normalized_url);
+                }
+                result.extracted_delta_url = normalized_url;
+            } else {
+                ERPL_TRACE_WARN("ODP_ORCHESTRATOR", "No delta token found after following pagination to last page");
+            }
+        }
+    } catch (const std::exception &e) {
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", std::string("Pagination diagnostic failed: ") + e.what());
+    }
+
+    return result;
 }
 
 OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFetch(
@@ -41,8 +94,19 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFet
     ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
         "Executing delta fetch for URL: %s, Token: %s", url, delta_token.substr(0, 20) + "..."));
     
-    // Build delta URL
-    std::string delta_url = BuildDeltaUrl(url, delta_token);
+    // Normalize token (strip surrounding quotes) and build delta URL
+    std::string normalized_token = delta_token;
+    if (!normalized_token.empty() && (normalized_token.front() == '\'' || normalized_token.front() == '"') &&
+        normalized_token.back() == normalized_token.front()) {
+        normalized_token = normalized_token.substr(1, normalized_token.size() - 2);
+    }
+    if (normalized_token != delta_token) {
+        ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+            "Normalized delta token from '%s' to '%s",
+            delta_token.substr(0, 64), normalized_token.substr(0, 64)));
+    }
+    std::string delta_url = BuildDeltaUrl(url, normalized_token);
+    ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Constructed delta URL: " + delta_url);
     
     // Create delta fetch request
     HttpRequest request = http_factory_->CreateDeltaFetchRequest(delta_url, max_page_size);
@@ -112,20 +176,21 @@ std::string OdpRequestOrchestrator::BuildDeltaUrl(const std::string& base_url, c
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
         "Building delta URL from base: %s, token: %s", base_url, delta_token.substr(0, 20) + "..."));
     
-    // For OData v2, delta tokens are appended with !deltatoken= format
+    // For OData v2, the delta link uses a query param syntax: ?$format=json&!deltatoken=TOKEN
     std::string delta_url = base_url;
+    bool has_query = (delta_url.find('?') != std::string::npos);
     
-    // Remove any existing query parameters for delta URL
-    size_t query_pos = delta_url.find('?');
-    if (query_pos != std::string::npos) {
-        delta_url = delta_url.substr(0, query_pos);
+    // Ensure $format=json present first
+    if (delta_url.find("$format=json") == std::string::npos) {
+        delta_url += has_query ? '&' : '?';
+        delta_url += "$format=json";
+        has_query = true;
     }
     
-    // Append delta token in OData v2 format
-    delta_url += "!deltatoken=" + delta_token;
-    
-    // Ensure JSON format
-    delta_url = EnsureJsonFormat(delta_url);
+    // Append &!deltatoken=TOKEN
+    delta_url += has_query ? '&' : '?';
+    delta_url += "!deltatoken=";
+    delta_url += delta_token;
     
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", "Built delta URL: " + delta_url);
     return delta_url;
@@ -262,7 +327,11 @@ std::string OdpRequestOrchestrator::ExtractDeltaTokenFromV2Response(const std::s
                 duckdb_yyjson::yyjson_doc_free(doc);
                 
                 // Extract token from delta URL
-                return ExtractTokenFromDeltaUrl(delta_url);
+                auto token = ExtractTokenFromDeltaUrl(delta_url);
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Found v2 delta link: " + delta_url);
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+                    "Extracted token from v2 delta link: %s", token.substr(0, 64)));
+                return token;
             }
         }
         
@@ -320,6 +389,11 @@ std::string OdpRequestOrchestrator::ExtractTokenFromDeltaUrl(const std::string& 
     
     if (std::regex_search(delta_url, match, v2_pattern)) {
         std::string token = match[1].str();
+        // Normalize: strip surrounding single/double quotes if present
+        if (!token.empty() && (token.front() == '\'' || token.front() == '"') &&
+            token.back() == token.front()) {
+            token = token.substr(1, token.size() - 2);
+        }
         ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", "Extracted v2 delta token: " + token.substr(0, 20) + "...");
         return token;
     }
@@ -336,6 +410,57 @@ std::string OdpRequestOrchestrator::ExtractTokenFromDeltaUrl(const std::string& 
     return "";
 }
 
+std::string OdpRequestOrchestrator::ExtractDeltaUrl(const ODataEntitySetResponse& response) {
+    try {
+        auto content = response.RawContent();
+        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.length(), 0);
+        if (!doc) {
+            return "";
+        }
+        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        if (!root) {
+            duckdb_yyjson::yyjson_doc_free(doc);
+            return "";
+        }
+        auto d_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+        if (d_obj) {
+            auto delta_val = duckdb_yyjson::yyjson_obj_get(d_obj, "__delta");
+            if (delta_val && duckdb_yyjson::yyjson_is_str(delta_val)) {
+                std::string delta_url = duckdb_yyjson::yyjson_get_str(delta_val);
+                duckdb_yyjson::yyjson_doc_free(doc);
+                return delta_url;
+            }
+        }
+        duckdb_yyjson::yyjson_doc_free(doc);
+    } catch (...) {
+    }
+    return "";
+}
+
+std::string OdpRequestOrchestrator::NormalizeDeltaUrl(const std::string& delta_url) {
+    // Ensure $format=json present and unquote token if quoted in URL
+    std::string url = delta_url;
+    // Strip quotes around token manually if present
+    size_t pos = url.find("!deltatoken=");
+    if (pos != std::string::npos) {
+        size_t start = pos + std::string("!deltatoken=").size();
+        if (start < url.size() && (url[start] == '\'' || url[start] == '"')) {
+            char q = url[start];
+            size_t end = url.find(q, start + 1);
+            if (end != std::string::npos) {
+                url.erase(end, 1);
+                url.erase(start, 1);
+            }
+        }
+    }
+    // Ensure $format=json
+    if (url.find("$format=json") == std::string::npos) {
+        char sep = (url.find('?') == std::string::npos) ? '?' : '&';
+        url += sep;
+        url += "$format=json";
+    }
+    return url;
+}
 std::string OdpRequestOrchestrator::EnsureJsonFormat(const std::string& url) {
     if (HasJsonFormat(url)) {
         return url;
