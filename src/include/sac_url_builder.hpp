@@ -125,7 +125,7 @@ private:
     SacUrlBuilder() = delete;
 
     // Known SAC regions
-    static constexpr std::array KNOWN_REGIONS = std::to_array({
+    static constexpr const char* const KNOWN_REGIONS[] = {
         "us10",  // US (US East)
         "eu10",  // EU
         "ap10",  // APAC
@@ -134,7 +134,7 @@ private:
         "au10",  // Australia
         "br10",  // Brazil
         "ch10"   // Switzerland
-    });
+    };
 };
 
 } // namespace erpl_web
