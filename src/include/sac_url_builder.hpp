@@ -125,7 +125,7 @@ private:
     SacUrlBuilder() = delete;
 
     // Known SAC regions
-    static constexpr std::array<const char*, 8> KNOWN_REGIONS = {
+    static inline constexpr std::array<const char*, 8> KNOWN_REGIONS = {
         "us10",  // US (US East)
         "eu10",  // EU
         "ap10",  // APAC
