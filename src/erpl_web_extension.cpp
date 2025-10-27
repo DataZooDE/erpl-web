@@ -337,7 +337,7 @@ std::string ErplWebExtension::Version() {
 extern "C" {
 
 DUCKDB_CPP_EXTENSION_ENTRY(erpl_web, loader) {
-    LoadInternal(loader);
+    // The C++ Load() method calls LoadInternal, so don't call it again here
 }
 
 }
