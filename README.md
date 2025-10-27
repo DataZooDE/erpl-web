@@ -1,16 +1,17 @@
 <a name="top"></a>
 
-# ERPL Web — DuckDB HTTP + OData + SAP Datasphere Extension
+# ERPL Web — DuckDB HTTP + OData + SAP Datasphere + SAP Analytics Cloud Extension
 
-ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, and work with SAP Datasphere assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
+ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, and work with SAP Datasphere and SAP Analytics Cloud assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
 
-- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB SAP Datasphere, OAuth2 for DuckDB, OData ATTACH, query APIs from SQL.
+- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB SAP Datasphere, DuckDB SAP Analytics Cloud, OAuth2 for DuckDB, OData ATTACH, query APIs from SQL.
 
 ## ✨ Highlights
 
 - HTTP from SQL: GET, HEAD, POST, PUT, PATCH, DELETE with headers, auth, and body
 - OData v2/v4: Universal reader with automatic version handling and pushdown
 - SAP Datasphere: List spaces/assets, describe assets, and read relational/analytical data
+- SAP Analytics Cloud: Query models, stories, discover dimensions/measures with automatic schema
 - OAuth2 + Secrets: Secure flows with refresh, client credentials, and secret providers
 - Tracing: Deep, configurable tracing for debugging and performance tuning
 - Caching + Resilience: Response caching, metadata caching, and retry logic
@@ -399,6 +400,112 @@ If you need to run the C++ unit tests binary directly, use your build folder pat
 
 - `datasphere_read_analytical(space_id, asset_id [, secret])`
   - Named: `top`, `skip`, `params` MAP<VARCHAR,VARCHAR>, `metrics` LIST<VARCHAR>, `dimensions` LIST<VARCHAR>, `secret`
+
+---
+
+## ☁️ SAP Analytics Cloud (SAC)
+
+Query planning models, analytics models, and stories from SAP Analytics Cloud directly in SQL with automatic schema discovery and predicate pushdown.
+
+### Setup SAC Secret
+
+```sql
+-- Create SAC OAuth2 secret
+CREATE SECRET my_sac (
+  TYPE sac,
+  PROVIDER oauth2,
+  TENANT_NAME 'your-tenant',
+  REGION 'eu10',                    -- eu10, us10, ap10, ca10, jp10, au10, br10, ch10
+  CLIENT_ID 'your-client-id',
+  CLIENT_SECRET 'your-client-secret',
+  SCOPE 'openid'
+);
+```
+
+### SAC Discovery Functions
+
+Discover available models and stories:
+
+```sql
+-- List all accessible planning and analytics models
+SELECT id, name, type, owner FROM sac_list_models(secret := 'my_sac');
+
+-- Get model metadata (dimensions, measures, timestamps)
+SELECT * FROM sac_get_model_info('REVENUE_MODEL', secret := 'my_sac');
+
+-- List all accessible stories
+SELECT id, name, owner, status FROM sac_list_stories(secret := 'my_sac');
+
+-- Get story metadata
+SELECT * FROM sac_get_story_info('EXECUTIVE_DASHBOARD', secret := 'my_sac');
+```
+
+### SAC Data Reading
+
+Query data directly from SAC models:
+
+```sql
+-- Read planning model data
+SELECT *
+FROM sac_read_planning_data('REVENUE_MODEL', secret := 'my_sac', top := 1000);
+
+-- Read analytics model with dimension/measure filtering
+SELECT *
+FROM sac_read_analytical(
+  'SALES_CUBE',
+  secret := 'my_sac',
+  dimensions := 'Territory,Product,Quarter',
+  measures := 'SalesAmount,UnitsShipped',
+  top := 5000
+);
+
+-- Extract data from stories
+SELECT * FROM sac_read_story_data('DASHBOARD_001', secret := 'my_sac');
+```
+
+### SAC ATTACH (Direct SQL Access)
+
+For direct SQL access to SAC OData services:
+
+```sql
+-- Attach SAC instance
+ATTACH 'https://your-tenant.eu10.sapanalytics.cloud' AS sac (
+  TYPE sac,
+  SECRET my_sac
+);
+
+-- Query attached models
+SELECT * FROM sac.Planning_Models WHERE ID = 'REVENUE_MODEL';
+SELECT * FROM sac.Stories WHERE Owner = 'john.doe@company.com';
+```
+
+### SAC Functions Reference
+
+**Discovery Functions:**
+- `sac_list_models([secret])`
+  - Returns: id, name, description, type, owner, created_at, last_modified_at
+
+- `sac_list_stories([secret])`
+  - Returns: id, name, description, owner, created_at, last_modified_at, status
+
+- `sac_get_model_info(model_id [, secret])`
+  - Returns: id, name, description, type, dimensions (comma-separated), created_at
+
+- `sac_get_story_info(story_id [, secret])`
+  - Returns: id, name, description, owner, status, created_at, last_modified_at
+
+**Data Reading Functions:**
+- `sac_read_planning_data(model_id [, secret], [top], [skip])`
+  - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT
+  - Returns: All columns from the planning model (auto-detected schema)
+
+- `sac_read_analytical(model_id [, secret], [top], [skip], [dimensions], [measures])`
+  - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT, `dimensions` VARCHAR, `measures` VARCHAR
+  - Returns: Selected dimensions and measures with aggregated data
+
+- `sac_read_story_data(story_id [, secret])`
+  - Named parameters: `secret` VARCHAR
+  - Returns: Data used in story visualizations
 
 ---
 
