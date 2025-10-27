@@ -15,6 +15,9 @@
 #include "odata_odp_functions.hpp"
 #include "odp_odata_read_functions.hpp"
 #include "odp_pragma_functions.hpp"
+#include "sac_catalog.hpp"
+#include "sac_attach_functions.hpp"
+#include "sac_read_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -267,6 +270,27 @@ static void RegisterOdpFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateOdpRemoveSubscriptionFunction());
 }
 
+static void RegisterSacFunctions(ExtensionLoader &loader)
+{
+    // Register catalog discovery functions
+    loader.RegisterFunction(erpl_web::CreateSacListModelsFunction());
+    loader.RegisterFunction(erpl_web::CreateSacListStoriesFunction());
+    loader.RegisterFunction(erpl_web::CreateSacGetModelInfoFunction());
+    loader.RegisterFunction(erpl_web::CreateSacGetStoryInfoFunction());
+
+    // Register data consumption functions
+    loader.RegisterFunction(erpl_web::CreateSacReadPlanningDataFunction());
+    loader.RegisterFunction(erpl_web::CreateSacReadAnalyticalFunction());
+    loader.RegisterFunction(erpl_web::CreateSacReadStoryDataFunction());
+
+    // Register ATTACH support
+    loader.RegisterFunction(erpl_web::CreateSacAttachFunction());
+
+    // Register SAC storage extension
+    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+    config.storage_extensions["sac"] = erpl_web::CreateSacStorageExtension();
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -291,6 +315,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterWebFunctions(loader);
     RegisterODataFunctions(loader);
     RegisterDatasphereFunctions(loader);
+    RegisterSacFunctions(loader);
     RegisterOdpFunctions(loader);
     RegisterTracingPragmas(loader);
 }

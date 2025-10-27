@@ -97,6 +97,11 @@ set(EXTENSION_SOURCES
     src/odp_odata_read_bind_data.cpp
     src/odp_odata_read_functions.cpp
     src/odp_pragma_functions.cpp
+    src/sac_url_builder.cpp
+    src/sac_client.cpp
+    src/sac_catalog.cpp
+    src/sac_attach_functions.cpp
+    src/sac_read_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
