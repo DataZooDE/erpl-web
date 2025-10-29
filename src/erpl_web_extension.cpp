@@ -283,10 +283,7 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateSacReadAnalyticalFunction());
     loader.RegisterFunction(erpl_web::CreateSacReadStoryDataFunction());
 
-    // Register ATTACH support
-    loader.RegisterFunction(erpl_web::CreateSacAttachFunction());
-
-    // Register SAC storage extension
+    // Register SAC storage extension (handles ATTACH support)
     auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
     config.storage_extensions["sac"] = erpl_web::CreateSacStorageExtension();
 }
@@ -337,7 +334,7 @@ std::string ErplWebExtension::Version() {
 extern "C" {
 
 DUCKDB_CPP_EXTENSION_ENTRY(erpl_web, loader) {
-    LoadInternal(loader);
+    duckdb::ErplWebExtension::Load(loader);
 }
 
 }
