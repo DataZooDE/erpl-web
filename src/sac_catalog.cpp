@@ -317,7 +317,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacListModelsBind(
     return std::move(bind);
 }
 
-duckdb::TableFunction CreateSacListModelsFunction() {
+duckdb::TableFunctionSet CreateSacListModelsFunction() {
+    duckdb::TableFunctionSet function_set("sac_list_models");
+    
     duckdb::TableFunction func(
         {},  // No parameters
         SacListModelsScan,
@@ -327,7 +329,8 @@ duckdb::TableFunction CreateSacListModelsFunction() {
     // Add optional named parameter for secret name
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
-    return func;
+    function_set.AddFunction(func);
+    return function_set;
 }
 
 // ===== sac_list_stories =====
@@ -405,7 +408,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacListStoriesBind(
     return std::move(bind);
 }
 
-duckdb::TableFunction CreateSacListStoriesFunction() {
+duckdb::TableFunctionSet CreateSacListStoriesFunction() {
+    duckdb::TableFunctionSet function_set("sac_list_stories");
+    
     duckdb::TableFunction func(
         {},  // No parameters
         SacListStoriesScan,
@@ -414,7 +419,8 @@ duckdb::TableFunction CreateSacListStoriesFunction() {
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
-    return func;
+    function_set.AddFunction(func);
+    return function_set;
 }
 
 // ===== sac_get_model_info =====
@@ -517,7 +523,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetModelInfoBind(
     return std::move(bind);
 }
 
-duckdb::TableFunction CreateSacGetModelInfoFunction() {
+duckdb::TableFunctionSet CreateSacGetModelInfoFunction() {
+    duckdb::TableFunctionSet function_set("sac_get_model_info");
+    
     duckdb::TableFunction func(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // model_id
         SacGetModelInfoScan,
@@ -526,7 +534,8 @@ duckdb::TableFunction CreateSacGetModelInfoFunction() {
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
-    return func;
+    function_set.AddFunction(func);
+    return function_set;
 }
 
 // ===== sac_get_story_info =====
@@ -621,7 +630,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetStoryInfoBind(
     return std::move(bind);
 }
 
-duckdb::TableFunction CreateSacGetStoryInfoFunction() {
+duckdb::TableFunctionSet CreateSacGetStoryInfoFunction() {
+    duckdb::TableFunctionSet function_set("sac_get_story_info");
+    
     duckdb::TableFunction func(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // story_id
         SacGetStoryInfoScan,
@@ -630,7 +641,8 @@ duckdb::TableFunction CreateSacGetStoryInfoFunction() {
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
-    return func;
+    function_set.AddFunction(func);
+    return function_set;
 }
 
 } // namespace erpl_web

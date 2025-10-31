@@ -314,9 +314,9 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterDatasphereFunctions(loader);
     RegisterSacFunctions(loader);
     RegisterOdpFunctions(loader);
-    // TODO: RegisterTracingPragmas(loader); - Temporarily disabled to debug extension initialization
+    RegisterTracingPragmas(loader);
 }
-
+    
 void ErplWebExtension::Load(ExtensionLoader &loader) {
     LoadInternal(loader);
 }

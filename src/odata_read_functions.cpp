@@ -3148,8 +3148,7 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
 TableFunctionSet CreateODataReadFunction() {
     TableFunctionSet function_set("odata_read");
     
-  TableFunction read_entity_set({LogicalTypeId::VARCHAR}, ODataReadScan,
-                                ODataReadBind, ODataReadTableInitGlobalState);
+    TableFunction read_entity_set({LogicalTypeId::VARCHAR}, ODataReadScan, ODataReadBind, ODataReadTableInitGlobalState);
     read_entity_set.filter_pushdown = true;
     read_entity_set.projection_pushdown = true;
     read_entity_set.table_scan_progress = ODataReadTableProgress;

@@ -117,15 +117,15 @@ private:
  */
 
 // sac_list_models() -> Lists all accessible models
-duckdb::TableFunction CreateSacListModelsFunction();
+duckdb::TableFunctionSet CreateSacListModelsFunction();
 
 // sac_list_stories() -> Lists all accessible stories
-duckdb::TableFunction CreateSacListStoriesFunction();
+duckdb::TableFunctionSet CreateSacListStoriesFunction();
 
 // sac_get_model_info(model_id) -> Get model metadata and dimensions
-duckdb::TableFunction CreateSacGetModelInfoFunction();
+duckdb::TableFunctionSet CreateSacGetModelInfoFunction();
 
 // sac_get_story_info(story_id) -> Get story metadata
-duckdb::TableFunction CreateSacGetStoryInfoFunction();
+duckdb::TableFunctionSet CreateSacGetStoryInfoFunction();
 
 } // namespace erpl_web
