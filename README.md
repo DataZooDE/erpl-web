@@ -21,13 +21,22 @@ ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST API
 
 ## 🚀 Install
 
+You can either install it from the DuckDB community repository
+
+```sql
+INSTALL erpl_web FROM community;
+LOAD erpl_web;
+```
+
+or using our source
+
 ```sql
 -- Install (DuckDB requires -unsigned when installing from a custom URL)
 INSTALL 'erpl_web' FROM 'http://get.erpl.io';
 LOAD 'erpl_web';
 ```
 
-Build from source (developers):
+or build from source (developers):
 
 ```bash
 make debug
@@ -525,7 +534,7 @@ Data collected: extension/DuckDB version, OS/arch, anonymized function usage. No
 
 ## 🤝 Contributing
 
-Issues and PRs are welcome! Please see CONTRIBUTING.md for guidance.
+Issues and PRs are welcome! Please refer to CONTRIBUTING.md for guidance.
 
 ---
 
