@@ -1,15 +1,16 @@
 <a name="top"></a>
 
-# ERPL Web — DuckDB HTTP + OData + SAP Datasphere + SAP Analytics Cloud Extension
+# ERPL Web — DuckDB HTTP + OData + Delta Sharing + SAP Datasphere + SAP Analytics Cloud Extension
 
-ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, and work with SAP Datasphere and SAP Analytics Cloud assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
+ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, read Delta Sharing tables, and work with SAP Datasphere and SAP Analytics Cloud assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
 
-- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB SAP Datasphere, DuckDB SAP Analytics Cloud, OAuth2 for DuckDB, OData ATTACH, query APIs from SQL.
+- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB Delta Sharing, DuckDB Delta Lake, Databricks Delta, DuckDB SAP Datasphere, DuckDB SAP Analytics Cloud, OAuth2 for DuckDB, OData ATTACH, Delta Sharing ATTACH, query APIs from SQL.
 
 ## ✨ Highlights
 
 - HTTP from SQL: GET, HEAD, POST, PUT, PATCH, DELETE with headers, auth, and body
 - OData v2/v4: Universal reader with automatic version handling and pushdown
+- Delta Sharing: Query Databricks, SAP, and other Delta Sharing protocol-compliant services via Parquet files
 - SAP Datasphere: List spaces/assets, describe assets, and read relational/analytical data
 - SAP Analytics Cloud: Query models, stories, discover dimensions/measures with automatic schema
 - OAuth2 + Secrets: Secure flows with refresh, client credentials, and secret providers
@@ -87,6 +88,62 @@ SELECT UserName, AddressInfo[1].City."Name" AS city
 FROM odata_read('https://services.odata.org/TripPinRESTierService/People')
 WHERE UserName='angelhuffman';
 ```
+
+### Delta Sharing (Databricks, SAP, others)
+
+Query Delta Sharing repositories with profile files from **local paths, HTTP URLs, or S3 URIs**:
+
+```sql
+-- Local profile file
+SELECT url, size FROM delta_share_scan(
+  './profile.json',
+  'share_name',
+  'schema_name',
+  'table_name'
+) LIMIT 10;
+
+-- HTTP URL (remote profile)
+SELECT url, size FROM delta_share_scan(
+  'https://databricks-datasets-oregon.s3-us-west-2.amazonaws.com/delta-sharing/share/open-datasets.share',
+  'share_name',
+  'schema_name',
+  'table_name'
+) LIMIT 10;
+
+-- S3 URI (requires S3 credentials via CREATE SECRET)
+SELECT url, size FROM delta_share_scan(
+  's3://my-bucket/profiles/delta.share',
+  'share_name',
+  'schema_name',
+  'table_name'
+) LIMIT 10;
+
+-- Read data from shared Parquet files (using parquet_scan):
+SELECT * FROM read_parquet(
+  'https://presigned-url-from-delta-share.s3.amazonaws.com/...'
+);
+```
+
+**Profile Format (JSON):**
+```json
+{
+  "shareCredentialsVersion": 1,
+  "endpoint": "https://sharing.databricks.com",
+  "bearerToken": "YOUR_TOKEN"
+}
+```
+
+**Features:**
+- ✅ Local file paths: `./profile.json`, `/path/to/profile.share`
+- ✅ HTTP URLs: `https://example.com/profile.share` (auto-downloaded)
+- ✅ S3 URIs: `s3://bucket/profile.share` (requires S3 secrets)
+- ✅ Azure URLs: `azure://container/profile.share`
+- ✅ Bearer token authentication
+- ✅ NDJSON response parsing
+- ✅ Pre-signed URLs to cloud storage
+- ✅ Works with Databricks, SAP, and any Delta Sharing protocol-compliant service
+- ✅ Remote profiles transparently loaded via DuckDB's FileSystem API
+- Full documentation in `DELTA_SHARE_TESTING.md`
 
 ### SAP Datasphere in minutes
 

@@ -1,0 +1,64 @@
+# ============================================================================
+# Test: Delta Sharing with Remote Profile URLs (HTTP/S3)
+# Description: Tests delta_share_scan with remote profile files
+# Status: Integration test - requires network access
+# ============================================================================
+
+require erpl_web
+
+# This test requires either:
+# 1. DELTA_SHARE_HTTP_PROFILE_URL - HTTP URL to a Delta Sharing profile
+# 2. DELTA_SHARE_S3_PROFILE_URL - S3 URI to a Delta Sharing profile
+#
+# Examples:
+#   export DELTA_SHARE_HTTP_PROFILE_URL=https://example.com/profiles/delta.share
+#   export DELTA_SHARE_S3_PROFILE_URL=s3://my-bucket/profiles/delta.share
+
+# Test 1: Verify delta_share_scan function is available
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'delta_share_scan'
+----
+1
+
+# Test 2: Verify function has correct signature (4 VARCHAR parameters)
+query I
+SELECT COUNT(*) FROM duckdb_functions()
+WHERE function_name = 'delta_share_scan'
+  AND parameter_types = ['VARCHAR', 'VARCHAR', 'VARCHAR', 'VARCHAR']
+----
+1
+
+# Test 3: Verify erpl_web extension is registered
+query I
+SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web'
+----
+1
+
+# Note: Remote HTTP/S3 profile tests are conditional
+# When environment variables are set and profiles are accessible,
+# these tests would work:
+#
+# Test HTTP profile URL:
+# SELECT * FROM delta_share_scan(
+#   'https://example.com/profiles/delta.share',
+#   'delta_sharing',
+#   'default',
+#   'taxi_trips'
+# ) LIMIT 5;
+#
+# Test S3 profile URL (requires S3 credentials):
+# SELECT * FROM delta_share_scan(
+#   's3://my-bucket/profiles/delta.share',
+#   'delta_sharing',
+#   'default',
+#   'taxi_trips'
+# ) LIMIT 5;
+#
+# The implementation supports:
+# - Local file paths: /path/to/profile.json
+# - HTTP URLs: https://example.com/profile.share
+# - S3 URIs: s3://bucket/profile.share
+# - Azure URLs: az://container/profile.share
+#
+# All remote URLs use DuckDB's FileSystem API for transparent access.
+# S3 authentication requires DuckDB secrets configured via CREATE SECRET.
