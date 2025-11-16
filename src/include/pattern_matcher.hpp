@@ -4,6 +4,7 @@
 #include <vector>
 #include <optional>
 #include <regex>
+#include <cstdint>
 
 namespace erpl_web {
 

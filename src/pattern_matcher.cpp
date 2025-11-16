@@ -1,6 +1,7 @@
 #include "pattern_matcher.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <sstream>
 
 namespace erpl_web {
