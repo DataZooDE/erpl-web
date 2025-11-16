@@ -36,7 +36,7 @@ public:
 	/**
 	 * Detect if content type is JSON
 	 *
-	 * Matches: application/json, application/*+json, text/json, etc.
+	 * Matches: application/json, application/ *+json, text/json, etc.
 	 *
 	 * @param content_type The Content-Type header value
 	 * @return true if content type indicates JSON, false otherwise
@@ -46,7 +46,7 @@ public:
 	/**
 	 * Detect if content type is XML
 	 *
-	 * Matches: application/xml, text/xml, application/*+xml, etc.
+	 * Matches: application/xml, text/xml, application/ *+xml, etc.
 	 *
 	 * @param content_type The Content-Type header value
 	 * @return true if content type indicates XML, false otherwise
