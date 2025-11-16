@@ -89,6 +89,11 @@ set(EXTENSION_SOURCES
     src/oauth2_server.cpp
     src/timeout_http_client.cpp
     src/odata_url_helpers.cpp
+    src/odata_query_builder.cpp
+    src/parameter_validation.cpp
+    src/error_context.cpp
+    src/url_parser.cpp
+    src/pattern_matcher.cpp
     src/odp_http_request_factory.cpp
     src/odp_client_integration.cpp
     src/odp_subscription_repository.cpp
@@ -100,8 +105,15 @@ set(EXTENSION_SOURCES
     src/sac_url_builder.cpp
     src/sac_client.cpp
     src/sac_catalog.cpp
+    src/sac_catalog_bind_helper.cpp
     src/sac_attach_functions.cpp
+    src/sac_secret_helper.cpp
+    src/sac_http_pool.cpp
     src/sac_read_functions.cpp
+    src/delta_share_client.cpp
+    src/delta_share_scan.cpp
+    src/delta_share_catalog.cpp
+    src/delta_share_storage.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

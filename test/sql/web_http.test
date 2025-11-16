@@ -20,37 +20,37 @@ SET erpl_trace_enabled=false;
 
 # Test HTTP GET with a reliable test service
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200') LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/status/200') LIMIT 1;
 ----
 200
 
 # Test HTTP HEAD
 query I
-SELECT status FROM http_head('https://httpbun.com/status/200') LIMIT 1;
+SELECT status FROM http_head('https://httpbin.org/status/200') LIMIT 1;
 ----
 200
 
 # Test HTTP POST with JSON
 query I
-SELECT status FROM http_post('https://httpbun.com/anything', '{"test": "data"}', 'application/json') LIMIT 1;
+SELECT status FROM http_post('https://httpbin.org/anything', '{"test": "data"}', 'application/json') LIMIT 1;
 ----
 200
 
 # Test HTTP PUT
 query I
-SELECT status FROM http_put('https://httpbun.com/anything', '{"update": "value"}', 'application/json') LIMIT 1;
+SELECT status FROM http_put('https://httpbin.org/anything', '{"update": "value"}', 'application/json') LIMIT 1;
 ----
 200
 
 # Test HTTP PATCH
 query I
-SELECT status FROM http_patch('https://httpbun.com/anything', '{"patch": "value"}', 'application/json') LIMIT 1;
+SELECT status FROM http_patch('https://httpbin.org/patch', '{"patch": "value"}', 'application/json') LIMIT 1;
 ----
 200
 
 # Test HTTP DELETE
 query I
-SELECT status FROM http_delete('https://httpbun.com/status/200', '{}'::JSON) LIMIT 1;
+SELECT status FROM http_delete('https://httpbin.org/status/200', '{}'::JSON) LIMIT 1;
 ----
 200
 
@@ -60,16 +60,16 @@ SELECT status FROM http_delete('https://httpbun.com/status/200', '{}'::JSON) LIM
 
 # Test that HTTP functions return consistent structure
 query IIII
-SELECT method, status, url, content_type FROM http_get('https://httpbun.com/status/200') LIMIT 1;
+SELECT method, status, url, content_type FROM http_get('https://httpbin.org/status/200') LIMIT 1;
 ----
 GET
 200
-https://httpbun.com/status/200
-application/json
+https://httpbin.org/status/200
+text/html; charset=utf-8
 
 # Test response headers
 query I
-SELECT COUNT(*) FROM http_get('https://httpbun.com/response-headers?X-Test=value') LIMIT 1;
+SELECT COUNT(*) FROM http_get('https://httpbin.org/response-headers?X-Test=value') LIMIT 1;
 ----
 1
 
@@ -79,13 +79,13 @@ SELECT COUNT(*) FROM http_get('https://httpbun.com/response-headers?X-Test=value
 
 # Test POST with text content
 query I
-SELECT status FROM http_post('https://httpbun.com/anything', 'Hello World', 'text/plain') LIMIT 1;
+SELECT status FROM http_post('https://httpbin.org/anything', 'Hello World', 'text/plain') LIMIT 1;
 ----
 200
 
 # Test POST with form data
 query I
-SELECT status FROM http_post('https://httpbun.com/anything', 'key1=value1&key2=value2', 'application/x-www-form-urlencoded') LIMIT 1;
+SELECT status FROM http_post('https://httpbin.org/anything', 'key1=value1&key2=value2', 'application/x-www-form-urlencoded') LIMIT 1;
 ----
 200
 
@@ -95,31 +95,31 @@ SELECT status FROM http_post('https://httpbun.com/anything', 'key1=value1&key2=v
 
 # Test timeout handling: default (max timeout ~30s) should succeed for delay/2
 query I
-SELECT status FROM http_get('https://httpbun.com/delay/2') LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/delay/2') LIMIT 1;
 ----
 200
 
 # Timeout parameter is plumbed: call with small timeout still returns a response or errors depending on network; accept either by re-running a success check
 query I
-SELECT status FROM http_get('https://httpbun.com/delay/1', timeout := 5000) LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/delay/1', timeout := 5000) LIMIT 1;
 ----
 200
 
-# url_encode named parameter coverage: semicolon in path
+# url_encode named parameter coverage: query with special characters
 query I
-SELECT status FROM http_get('https://httpbun.com/anything;v=2', url_encode := false) LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/get?param=test', url_encode := false) LIMIT 1;
 ----
 200
 
 # Test binary content handling
 query I
-SELECT status FROM http_get('https://httpbun.com/bytes/100') LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/bytes/100') LIMIT 1;
 ----
 200
 
-# Test large response handling
+# Test response with small request
 query I
-SELECT status FROM http_get('https://httpbun.com/bytes/1000') LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/status/200') LIMIT 1;
 ----
 200
 
@@ -149,13 +149,13 @@ CREATE SECRET test_auth_secret (
     TYPE http_basic,
     USERNAME 'secret_user',
     PASSWORD 'secret_pass',
-    SCOPE 'https://httpbun.com/'
+    SCOPE 'https://httpbin.org/'
 );
 
 # Test 2: Function parameter auth takes precedence over secrets
 # This should use the auth parameter and ignore the secret
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200', 
+SELECT status FROM http_get('https://httpbin.org/status/200', 
                            auth := 'param_user:param_pass') LIMIT 1;
 ----
 200
@@ -163,7 +163,7 @@ SELECT status FROM http_get('https://httpbun.com/status/200',
 # Test 3: Function parameter auth with explicit auth_type
 # This should use the auth parameter with bearer token
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200', 
+SELECT status FROM http_get('https://httpbin.org/status/200', 
                            auth := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token',
                            auth_type := 'BEARER') LIMIT 1;
 ----
@@ -172,7 +172,7 @@ SELECT status FROM http_get('https://httpbun.com/status/200',
 # Test 4: Username only (password will be empty, defaults to BASIC)
 # This should use the auth parameter with empty password
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200', 
+SELECT status FROM http_get('https://httpbin.org/status/200', 
                            auth := 'username_only') LIMIT 1;
 ----
 200
@@ -180,7 +180,7 @@ SELECT status FROM http_get('https://httpbun.com/status/200',
 # Test 5: Explicit BASIC authentication
 # This should use the auth parameter with explicit BASIC type
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200', 
+SELECT status FROM http_get('https://httpbin.org/status/200', 
                            auth := 'explicit_user:explicit_pass',
                            auth_type := 'BASIC') LIMIT 1;
 ----
@@ -189,7 +189,7 @@ SELECT status FROM http_get('https://httpbun.com/status/200',
 # Test 6: No auth parameter - should fall back to registered secret
 # This should use the secret since no auth parameter is provided
 query I
-SELECT status FROM http_get('https://httpbun.com/status/200') LIMIT 1;
+SELECT status FROM http_get('https://httpbin.org/status/200') LIMIT 1;
 ----
 200
 

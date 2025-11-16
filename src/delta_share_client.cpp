@@ -162,8 +162,8 @@ DeltaShareClient::DeltaShareClient(ClientContext& context, const DeltaShareProfi
     ValidateProfile();
 
     // Create HTTP client with 30-second default timeout
-    http_client_ = shared_ptr<TimeoutHttpClient>(
-        new TimeoutHttpClient(std::chrono::milliseconds(30000))
+    http_client_ = duckdb::make_shared_ptr<TimeoutHttpClient>(
+        std::chrono::milliseconds(30000)
     );
 
     ERPL_TRACE_INFO("DELTA_SHARE", "Initialized Delta Sharing client: " + profile_.ToDebugString());
@@ -282,7 +282,7 @@ void DeltaShareClient::HandleApiError(int32_t status_code, const string& error_b
 vector<DeltaShareInfo> DeltaShareClient::ListShares() {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Listing shares from: " + profile_.endpoint);
 
-    DeltaShareResponse response = ExecuteGet("/v1/shares");
+    DeltaShareResponse response = ExecuteGet("/shares");
 
     if (response.http_status != 200) {
         HandleApiError(response.http_status, response.content);
@@ -294,7 +294,7 @@ vector<DeltaShareInfo> DeltaShareClient::ListShares() {
 vector<DeltaSchemaInfo> DeltaShareClient::ListSchemas(const string& share) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Listing schemas for share: " + share);
 
-    string endpoint = "/v1/shares/" + share + "/schemas";
+    string endpoint = "/shares/" + share + "/schemas";
     DeltaShareResponse response = ExecuteGet(endpoint);
 
     if (response.http_status != 200) {
@@ -307,7 +307,7 @@ vector<DeltaSchemaInfo> DeltaShareClient::ListSchemas(const string& share) {
 vector<DeltaTableInfo> DeltaShareClient::ListTables(const string& share, const string& schema) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Listing tables for share: " + share + ", schema: " + schema);
 
-    string endpoint = "/v1/shares/" + share + "/schemas/" + schema + "/tables";
+    string endpoint = "/shares/" + share + "/schemas/" + schema + "/tables";
     DeltaShareResponse response = ExecuteGet(endpoint);
 
     if (response.http_status != 200) {
@@ -320,7 +320,7 @@ vector<DeltaTableInfo> DeltaShareClient::ListTables(const string& share, const s
 DeltaTableMetadata DeltaShareClient::GetTableMetadata(const string& share, const string& schema, const string& table) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Fetching metadata for: " + share + "." + schema + "." + table);
 
-    string endpoint = "/v1/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/metadata";
+    string endpoint = "/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/metadata";
     DeltaShareResponse response = ExecuteGet(endpoint);
 
     if (response.http_status != 200) {
@@ -334,7 +334,7 @@ std::vector<DeltaFileReference> DeltaShareClient::QueryTable(const std::string& 
                                                        const std::optional<DeltaShareQueryRequest>& query_request) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Querying table: " + share + "." + schema + "." + table);
 
-    string endpoint = "/v1/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/query";
+    string endpoint = "/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/query";
     string body = "{}";  // Empty query
 
     if (query_request.has_value()) {
@@ -353,7 +353,7 @@ std::vector<DeltaFileReference> DeltaShareClient::QueryTable(const std::string& 
 int64_t DeltaShareClient::GetTableVersion(const string& share, const string& schema, const string& table) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Getting table version for: " + share + "." + schema + "." + table);
 
-    string endpoint = "/v1/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/version";
+    string endpoint = "/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/version";
     DeltaShareResponse response = ExecuteGet(endpoint);
 
     if (response.http_status != 200) {
@@ -384,7 +384,7 @@ std::vector<DeltaFileReference> DeltaShareClient::GetTableChanges(const std::str
                                                             int64_t starting_version, std::optional<int64_t> ending_version) {
     ERPL_TRACE_DEBUG("DELTA_SHARE", "Getting table changes for: " + share + "." + schema + "." + table);
 
-    string endpoint = "/v1/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/changes";
+    string endpoint = "/shares/" + share + "/schemas/" + schema + "/tables/" + table + "/changes";
 
     // Build request with starting version
     string body = "{\"startingVersion\": " + std::to_string(starting_version);
@@ -400,6 +400,63 @@ std::vector<DeltaFileReference> DeltaShareClient::GetTableChanges(const std::str
     }
 
     return ParseQueryResponse(response.content);
+}
+
+// =====================================================================
+// File Reference Parsing (Consolidates duplicate extraction logic)
+// =====================================================================
+
+DeltaFileReference DeltaShareClient::ParseFileReference(yyjson_val* file_obj) const {
+    DeltaFileReference file_ref;
+
+    // Extract URL
+    auto url_val = yyjson_obj_get(file_obj, "url");
+    if (url_val) {
+        file_ref.url = yyjson_get_str(url_val);
+    }
+
+    // Extract size
+    auto size_val = yyjson_obj_get(file_obj, "size");
+    if (size_val) {
+        file_ref.size = yyjson_get_uint(size_val);
+    }
+
+    // Extract id
+    auto id_val = yyjson_obj_get(file_obj, "id");
+    if (id_val) {
+        file_ref.id = yyjson_get_str(id_val);
+    }
+
+    // Extract partition values if present
+    auto partition_vals = yyjson_obj_get(file_obj, "partition_values");
+    if (partition_vals && yyjson_is_obj(partition_vals)) {
+        yyjson_obj_iter iter = yyjson_obj_iter_with(partition_vals);
+        yyjson_val* key;
+        yyjson_val* val;
+        while ((key = yyjson_obj_iter_next(&iter))) {
+            val = yyjson_obj_iter_get_val(key);
+            if (yyjson_is_str(key) && yyjson_is_str(val)) {
+                file_ref.partition_values[yyjson_get_str(key)] = yyjson_get_str(val);
+            }
+        }
+    }
+
+    // Extract stats if present
+    auto stats_val = yyjson_obj_get(file_obj, "stats");
+    if (stats_val) {
+        char* stats_str = yyjson_val_write(stats_val, 0, NULL);
+        if (stats_str) {
+            try {
+                file_ref.stats = string(stats_str);
+            } catch (...) {
+                free(stats_str);
+                throw;
+            }
+            free(stats_str);
+        }
+    }
+
+    return file_ref;
 }
 
 // =====================================================================
@@ -453,23 +510,19 @@ DeltaTableMetadata DeltaShareClient::ParseMetadataResponse(const string& ndjson_
                     ERPL_TRACE_DEBUG("DELTA_SHARE", "Found protocol metadata line");
                 }
 
-                // Check if this is a metadata line
-                auto metadata_val = yyjson_obj_get(root, "metadata");
+                // Check if this is a metadata line (Delta Sharing uses camelCase "metaData")
+                auto metadata_val = yyjson_obj_get(root, "metaData");
                 if (metadata_val) {
-                    // Extract schema from metadata
-                    auto schema_val = yyjson_obj_get(metadata_val, "schema");
-                    if (schema_val) {
-                        // Convert yyjson_val back to string for storage
-                        char* schema_str = yyjson_val_write(schema_val, 0, NULL);
-                        if (schema_str) {
-                            metadata.schema_json = string(schema_str);
-                            free(schema_str);
-                            ERPL_TRACE_DEBUG("DELTA_SHARE", "Extracted schema: " + metadata.schema_json.substr(0, 100));
-                        }
+                    // Extract schema from metadata (stored as "schemaString" in Delta Sharing Protocol)
+                    auto schema_val = yyjson_obj_get(metadata_val, "schemaString");
+                    if (schema_val && yyjson_is_str(schema_val)) {
+                        // schemaString is already a JSON string, extract it directly
+                        metadata.schema_json = string(yyjson_get_str(schema_val));
+                        ERPL_TRACE_DEBUG("DELTA_SHARE", "Extracted schema: " + metadata.schema_json.substr(0, 100));
                     }
 
-                    // Extract partition columns if present
-                    auto partition_cols_val = yyjson_obj_get(metadata_val, "partition_columns");
+                    // Extract partition columns if present (also using camelCase)
+                    auto partition_cols_val = yyjson_obj_get(metadata_val, "partitionColumns");
                     if (partition_cols_val && yyjson_is_arr(partition_cols_val)) {
                         size_t idx, max;
                         yyjson_val* col_item;
@@ -548,50 +601,7 @@ vector<DeltaFileReference> DeltaShareClient::ParseQueryResponse(const string& nd
                 // Check if this is a file reference line (Delta format: {"file": {...}})
                 auto file_val = yyjson_obj_get(root, "file");
                 if (file_val && yyjson_is_obj(file_val)) {
-                    DeltaFileReference file_ref;
-
-                    // Extract URL
-                    auto url_val = yyjson_obj_get(file_val, "url");
-                    if (url_val) {
-                        file_ref.url = yyjson_get_str(url_val);
-                    }
-
-                    // Extract size
-                    auto size_val = yyjson_obj_get(file_val, "size");
-                    if (size_val) {
-                        file_ref.size = yyjson_get_uint(size_val);
-                    }
-
-                    // Extract id
-                    auto id_val = yyjson_obj_get(file_val, "id");
-                    if (id_val) {
-                        file_ref.id = yyjson_get_str(id_val);
-                    }
-
-                    // Extract partition values if present
-                    auto partition_vals = yyjson_obj_get(file_val, "partition_values");
-                    if (partition_vals && yyjson_is_obj(partition_vals)) {
-                        yyjson_obj_iter iter = yyjson_obj_iter_with(partition_vals);
-                        yyjson_val* key;
-                        yyjson_val* val;
-                        while ((key = yyjson_obj_iter_next(&iter))) {
-                            val = yyjson_obj_iter_get_val(key);
-                            if (yyjson_is_str(key) && yyjson_is_str(val)) {
-                                file_ref.partition_values[yyjson_get_str(key)] = yyjson_get_str(val);
-                            }
-                        }
-                    }
-
-                    // Extract stats if present
-                    auto stats_val = yyjson_obj_get(file_val, "stats");
-                    if (stats_val) {
-                        char* stats_str = yyjson_val_write(stats_val, 0, NULL);
-                        if (stats_str) {
-                            file_ref.stats = string(stats_str);
-                            free(stats_str);
-                        }
-                    }
-
+                    auto file_ref = ParseFileReference(file_val);
                     files.push_back(file_ref);
                     ERPL_TRACE_DEBUG("DELTA_SHARE", "Extracted file reference: " + file_ref.url.substr(0, 60) + "...");
                 }
@@ -599,40 +609,7 @@ vector<DeltaFileReference> DeltaShareClient::ParseQueryResponse(const string& nd
                 // Check if this is an add action line (Delta format: {"add": {...}})
                 auto add_val = yyjson_obj_get(root, "add");
                 if (add_val && yyjson_is_obj(add_val)) {
-                    DeltaFileReference file_ref;
-
-                    // Extract URL
-                    auto url_val = yyjson_obj_get(add_val, "url");
-                    if (url_val) {
-                        file_ref.url = yyjson_get_str(url_val);
-                    }
-
-                    // Extract size
-                    auto size_val = yyjson_obj_get(add_val, "size");
-                    if (size_val) {
-                        file_ref.size = yyjson_get_uint(size_val);
-                    }
-
-                    // Extract id
-                    auto id_val = yyjson_obj_get(add_val, "id");
-                    if (id_val) {
-                        file_ref.id = yyjson_get_str(id_val);
-                    }
-
-                    // Extract partition values if present
-                    auto partition_vals = yyjson_obj_get(add_val, "partition_values");
-                    if (partition_vals && yyjson_is_obj(partition_vals)) {
-                        yyjson_obj_iter iter = yyjson_obj_iter_with(partition_vals);
-                        yyjson_val* key;
-                        yyjson_val* val;
-                        while ((key = yyjson_obj_iter_next(&iter))) {
-                            val = yyjson_obj_iter_get_val(key);
-                            if (yyjson_is_str(key) && yyjson_is_str(val)) {
-                                file_ref.partition_values[yyjson_get_str(key)] = yyjson_get_str(val);
-                            }
-                        }
-                    }
-
+                    auto file_ref = ParseFileReference(add_val);
                     files.push_back(file_ref);
                     ERPL_TRACE_DEBUG("DELTA_SHARE", "Extracted add action file reference: " + file_ref.url.substr(0, 60) + "...");
                 }
@@ -779,17 +756,6 @@ vector<DeltaTableInfo> DeltaShareClient::ParseTablesResponse(const string& json_
     return tables;
 }
 
-vector<LogicalType> DeltaShareClient::ConvertDeltaSchema(const string& schema_json) {
-    ERPL_TRACE_DEBUG("DELTA_SHARE", "Converting Delta schema to DuckDB types");
-
-    vector<LogicalType> types;
-
-    // TODO: Parse Delta Lake schema JSON and convert to DuckDB LogicalTypes
-    // Delta types: long, integer, string, boolean, float, double, date, timestamp, etc.
-
-    return types;
-}
-
 // =====================================================================
 // DeltaShareQueryRequest Implementation
 // =====================================================================
@@ -847,6 +813,38 @@ string DeltaShareQueryRequest::ToJson() const {
 
     json += "}";
     return json;
+}
+
+// =====================================================================
+// Utility Functions
+// =====================================================================
+
+LogicalType ConvertDeltaTypeToLogicalType(const string& delta_type) {
+	// Map Delta types to DuckDB types
+	if (delta_type == "string" || delta_type == "String") {
+		return LogicalType::VARCHAR;
+	} else if (delta_type == "integer" || delta_type == "int") {
+		return LogicalType::INTEGER;
+	} else if (delta_type == "long") {
+		return LogicalType::BIGINT;
+	} else if (delta_type == "short") {
+		return LogicalType::SMALLINT;
+	} else if (delta_type == "byte") {
+		return LogicalType::TINYINT;
+	} else if (delta_type == "double") {
+		return LogicalType::DOUBLE;
+	} else if (delta_type == "float") {
+		return LogicalType::FLOAT;
+	} else if (delta_type == "boolean") {
+		return LogicalType::BOOLEAN;
+	} else if (delta_type == "date") {
+		return LogicalType::DATE;
+	} else if (delta_type == "timestamp") {
+		return LogicalType::TIMESTAMP;
+	} else {
+		// Unknown type - default to VARCHAR
+		return LogicalType::VARCHAR;
+	}
 }
 
 } // namespace erpl_web

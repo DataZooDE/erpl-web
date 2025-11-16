@@ -3,10 +3,12 @@
 #include "delta_share_types.hpp"
 #include "http_client.hpp"
 #include "timeout_http_client.hpp"
+#include "yyjson.hpp"
 #include <memory>
 #include <vector>
 
 using namespace duckdb;
+using namespace duckdb_yyjson;
 
 namespace erpl_web {
 
@@ -56,8 +58,8 @@ private:
     vector<DeltaSchemaInfo> ParseSchemasResponse(const string& json_content, const string& share_name);
     vector<DeltaTableInfo> ParseTablesResponse(const string& json_content, const string& share_name, const string& schema_name);
 
-    // Schema conversion helper
-    vector<LogicalType> ConvertDeltaSchema(const string& schema_json);
+    // Internal NDJSON and file reference parsing
+    DeltaFileReference ParseFileReference(yyjson_val* file_obj) const;
 
     // Validation and error handling
     void ValidateProfile() const;

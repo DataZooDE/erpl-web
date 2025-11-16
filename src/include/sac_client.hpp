@@ -17,21 +17,16 @@ class SacUrlBuilder;
 struct SacAuthParams : public HttpAuthParams {
     std::string tenant;
     std::string region;
-    std::string client_id;
-    std::string client_secret;
-    std::string scope;
+};
 
-    // OAuth2 token management
-    std::optional<std::string> access_token;
-    std::optional<std::string> refresh_token;
-    std::optional<std::chrono::time_point<std::chrono::system_clock>> token_expiry;
-
-    bool IsTokenExpired() const;
-    bool NeedsRefresh() const;
-
-    // OAuth2 endpoints for SAC
-    std::string GetAuthorizationUrl() const;
-    std::string GetTokenUrl() const;
+// Service type enumeration for factory consolidation
+// Identifies which SAC service endpoint to connect to
+enum class SacServiceType {
+    PlanningData,   // Planning Data Service (OData v4) - requires model_id
+    StoryService,   // Story Service (OData v4)
+    ModelService,   // Model Service (OData v4)
+    DataExport,     // Data Export Service (OData v4)
+    Catalog         // Catalog Service (OData v4)
 };
 
 // SAC client factory for creating appropriate OData clients
@@ -85,6 +80,10 @@ public:
         std::shared_ptr<HttpAuthParams> auth_params);
 
 private:
+    // Consolidated URL builder - replaces 5 separate BuildXxxUrl methods
+    // Reduces duplication by using SacUrlBuilder directly in public methods
+    // These methods are now thin wrappers to SacUrlBuilder
+
     static std::string BuildPlanningDataUrl(
         const std::string& tenant,
         const std::string& region,
@@ -105,27 +104,6 @@ private:
     static std::string BuildCatalogUrl(
         const std::string& tenant,
         const std::string& region);
-};
-
-// SAC OData client wrapper for managing dual-endpoint pattern if needed
-// Similar to DatasphereODataClient
-class SacODataClient {
-public:
-    SacODataClient(
-        const std::string& base_url,
-        const std::string& access_token);
-
-    // Get metadata from base URL
-    std::unique_ptr<ODataEntitySetResponse> GetMetadata();
-
-    // Get data from service
-    std::unique_ptr<ODataEntitySetResponse> GetData();
-
-private:
-    std::string base_url_;
-    std::string access_token_;
-    std::unique_ptr<ODataEntitySetClient> metadata_client_;
-    std::unique_ptr<ODataEntitySetClient> data_client_;
 };
 
 } // namespace erpl_web

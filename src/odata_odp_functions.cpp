@@ -7,11 +7,14 @@
 #include "duckdb_argument_helper.hpp"
 #include "yyjson.hpp"
 #include "duckdb/common/vector_size.hpp"
+#include "telemetry.hpp"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
 
 // -------------------------------------------------------------------------------------------------
 // SapODataShowBindData implementation
@@ -115,12 +118,13 @@ void OdpODataShowBindData::LoadOdpServiceData() {
 // Function implementations
 // -------------------------------------------------------------------------------------------------
 
-static duckdb::unique_ptr<duckdb::FunctionData> SapODataShowBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> SapODataShowBind(duckdb::ClientContext &context,
                                                                  duckdb::TableFunctionBindInput &input,
                                                                  duckdb::vector<duckdb::LogicalType> &return_types,
                                                                  duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_sap_show");
     auto base_url = input.inputs[0].GetValue<std::string>();
-    
+
     // Get HTTP client and auth params from DuckDB secrets
     auto auth_params = HttpAuthParams::FromDuckDbSecrets(context, base_url);
     ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Auth params type: " + std::to_string(static_cast<int>(auth_params->AuthType())));
@@ -195,12 +199,13 @@ static void SapODataShowScan(duckdb::ClientContext &context,
     }
 }
 
-static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientContext &context,
                                                                  duckdb::TableFunctionBindInput &input,
                                                                  duckdb::vector<duckdb::LogicalType> &return_types,
                                                                  duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_odata_show");
     auto base_url = input.inputs[0].GetValue<std::string>();
-    
+
     // Get HTTP client and auth params from DuckDB secrets
     auto auth_params = HttpAuthParams::FromDuckDbSecrets(context, base_url);
     ERPL_TRACE_DEBUG("ODP_ODATA_SHOW", "Auth params type: " + std::to_string(static_cast<int>(auth_params->AuthType())));

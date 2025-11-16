@@ -1,0 +1,10 @@
+# Delta Sharing test profiles containing credentials
+# These files should never be committed to the repository
+
+*.json
+!README.md
+!.gitignore
+
+# Temporary files
+*.tmp
+*.bak

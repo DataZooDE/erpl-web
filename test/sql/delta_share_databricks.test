@@ -1,0 +1,61 @@
+# ============================================================================
+# Test: Delta Sharing Integration with Databricks Public Server
+# Description: Tests delta_share_scan with live Databricks public server
+# Status: Integration test - requires network access to Databricks
+# ============================================================================
+
+require erpl_web
+
+# This test requires the DELTA_SHARE_PROFILE_PATH environment variable to be set
+# to the path of a valid Delta Sharing profile file.
+#
+# To enable this test:
+#   export DELTA_SHARE_PROFILE_PATH=/path/to/profile.json
+#   make test_debug
+#
+# Or use the interactive demo:
+#   ./test_databricks_demo.sh
+#
+# Without DELTA_SHARE_PROFILE_PATH set, this test will be skipped.
+require-env DELTA_SHARE_PROFILE_PATH
+
+# Test 1: Verify delta_share_scan function is available
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'delta_share_scan'
+----
+1
+
+# Test 2: Verify function has correct signature (4 VARCHAR parameters)
+query I
+SELECT COUNT(*) FROM duckdb_functions()
+WHERE function_name = 'delta_share_scan'
+  AND parameter_types = ['VARCHAR', 'VARCHAR', 'VARCHAR', 'VARCHAR']
+----
+1
+
+# Test 3: Verify erpl_web extension is registered
+query I
+SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web'
+----
+1
+
+# Note: Live endpoint testing would require:
+# 1. Valid Databricks Delta Sharing credentials (stored in profile.json)
+# 2. Network access to Databricks servers
+# 3. Known table names in the shared database
+#
+# The following tests are disabled by default as they require live credentials
+# and may fail due to API rate limiting or credential expiration.
+#
+# To test with Databricks (after setting DELTA_SHARE_PROFILE_PATH):
+# 1. Create a profile with valid credentials
+# 2. Set: export DELTA_SHARE_PROFILE_PATH=/path/to/profile.json
+# 3. Run: ./build/debug/test/unittest test/sql/delta_share_databricks.test
+#
+# Example test (currently commented, requires live Databricks access):
+# SELECT * FROM delta_share_scan(
+#   '<PROFILE_PATH>',
+#   'delta_sharing',
+#   'default',
+#   'taxi_trips'
+# ) LIMIT 10;

@@ -5,8 +5,11 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 #include "odata_attach_functions.hpp"
+#include "telemetry.hpp"
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
 
 duckdb::unique_ptr<ODataAttachBindData> ODataAttachBindData::FromUrl(const std::string& url, 
                                                                      std::shared_ptr<HttpAuthParams> auth_params)
@@ -127,11 +130,12 @@ static void ParseNamedParameters(TableFunctionBindInput &input, duckdb::unique_p
 	}
 }
 
-static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context, 
+static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
                                                TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, 
-                                               vector<string> &names) 
+                                               vector<LogicalType> &return_types,
+                                               vector<string> &names)
 {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_attach");
     auto auth_params = AuthParamsFromInput(context, input);
     auto url = input.inputs[0].GetValue<std::string>();
     auto bind_data = ODataAttachBindData::FromUrl(url, auth_params);

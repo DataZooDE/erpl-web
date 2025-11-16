@@ -1,0 +1,44 @@
+# Test for Delta Sharing client implementation
+
+require erpl_web
+
+# Test 1: Check if delta_share_scan function is registered
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'delta_share_scan'
+----
+1
+
+# Test 2: Verify function signature (4 VARCHAR parameters)
+query I
+SELECT COUNT(*) FROM duckdb_functions() 
+WHERE function_name = 'delta_share_scan' 
+  AND parameter_types = ['VARCHAR', 'VARCHAR', 'VARCHAR', 'VARCHAR']
+----
+1
+
+# Test 3: Verify function type is table function
+query I
+SELECT COUNT(*) FROM duckdb_functions() 
+WHERE function_name = 'delta_share_scan' 
+  AND function_type = 'table'
+----
+1
+
+# Test 4: List all delta_share related functions
+query I
+SELECT COUNT(*) FROM duckdb_functions()
+WHERE function_name LIKE 'delta_share%'
+----
+4
+
+# Test 5: Verify erpl_web extension is registered
+query I
+SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web'
+----
+1
+
+# Note: Storage extension ATTACH functionality requires full Catalog implementation
+# Current MVP implementation focuses on the delta_share_scan table function
+# ATTACH support will be implemented in a future phase after Phase 2 completion
+# See: Phase 2 Week 3 implementation notes in docs
+

@@ -6,9 +6,12 @@
 #include "duckdb/function/table_function.hpp"
 // #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
+#include "telemetry.hpp"
 #include <sstream>
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
 
 namespace {
     // Small helper: ensure trailing asset segment and Datasphere double-segment pattern
@@ -113,10 +116,11 @@ namespace {
     }
 }
 
-static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duckdb::ClientContext &context,
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_read_relational");
     ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "=== DATASPHERE_RELATIONAL_BIND CALLED ===");
     
     // Extract basic parameters
@@ -254,10 +258,11 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
 
 namespace { }
 
-static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duckdb::ClientContext &context,
                                                                              duckdb::TableFunctionBindInput &input,
                                                                              duckdb::vector<duckdb::LogicalType> &return_types,
                                                                              duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_read_analytical");
     ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_BIND", "=== DATASPHERE_ANALYTICAL_BIND CALLED ===");
 
     // Extract basic parameters

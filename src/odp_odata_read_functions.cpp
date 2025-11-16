@@ -3,17 +3,21 @@
 #include "odata_read_functions.hpp"
 #include "tracing.hpp"
 #include "duckdb_argument_helper.hpp"
+#include "telemetry.hpp"
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
 
 // ============================================================================
 // ODP OData Read Function Implementation
 // ============================================================================
 
-duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext &context, 
+duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext &context,
                                                           duckdb::TableFunctionBindInput &input,
                                                           duckdb::vector<duckdb::LogicalType> &return_types,
                                                           duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_odata_read");
     ERPL_TRACE_DEBUG("ODP_ODATA_READ_BIND", "=== BINDING ODP_ODATA_READ FUNCTION ===");
     
     // Extract required parameter: entity_set_url

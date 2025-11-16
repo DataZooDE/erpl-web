@@ -102,20 +102,20 @@ SELECT url, size FROM delta_share_scan(
   'table_name'
 ) LIMIT 10;
 
--- HTTP URL (remote profile)
+-- HTTP URL (remote profile) - Example with public Delta Sharing server
 SELECT url, size FROM delta_share_scan(
   'https://databricks-datasets-oregon.s3-us-west-2.amazonaws.com/delta-sharing/share/open-datasets.share',
-  'share_name',
-  'schema_name',
-  'table_name'
+  'delta_sharing',
+  'default',
+  'owid-covid-data'
 ) LIMIT 10;
 
 -- S3 URI (requires S3 credentials via CREATE SECRET)
 SELECT url, size FROM delta_share_scan(
   's3://my-bucket/profiles/delta.share',
-  'share_name',
-  'schema_name',
-  'table_name'
+  'delta_sharing',
+  'default',
+  'your_table_name'
 ) LIMIT 10;
 
 -- Read data from shared Parquet files (using parquet_scan):
@@ -144,6 +144,30 @@ SELECT * FROM read_parquet(
 - ✅ Works with Databricks, SAP, and any Delta Sharing protocol-compliant service
 - ✅ Remote profiles transparently loaded via DuckDB's FileSystem API
 - Full documentation in `DELTA_SHARE_TESTING.md`
+
+### Delta Sharing Discovery (Catalog Functions)
+
+Discover available shares, schemas, and tables before reading data:
+
+```sql
+-- List all shares in a Delta Sharing profile
+SELECT share_name, share_id
+FROM delta_share_show_shares('./profile.json');
+
+-- List schemas in a specific share
+SELECT schema_name, schema_id
+FROM delta_share_show_schemas('./profile.json', 'delta_sharing');
+
+-- List tables in a schema
+SELECT name, share_name, schema_name
+FROM delta_share_show_tables('./profile.json', 'delta_sharing', 'default');
+```
+
+**Features:**
+- ✅ Discover share structures before querying
+- ✅ Works with all profile types (local, HTTP, S3)
+- ✅ Helps explore available data
+- ⚠️ ATTACH support for Delta Sharing (`ATTACH ... TYPE delta_share`) is planned but not yet implemented
 
 ### SAP Datasphere in minutes
 
@@ -208,7 +232,7 @@ Functions return rows with consistent columns: `method`, `status`, `url`, `heade
 - `http_post(url, body, [content_type], [headers], [accept], [auth], [auth_type], [timeout])`
 - `http_put(url, body, [content_type], [headers], [accept], [auth], [auth_type], [timeout])`
 - `http_patch(url, body, [content_type], [headers], [accept], [auth], [auth_type], [timeout])`
-- `http_delete(url, [headers], [accept], [auth], [auth_type], [timeout])`
+- `http_delete(url, body, [content_type], [headers], [accept], [auth], [auth_type], [timeout])`
 
 ### Authentication Precedence
 
@@ -461,11 +485,11 @@ If you need to run the C++ unit tests binary directly, use your build folder pat
 
 ### Datasphere readers
 
-- `datasphere_read_relational(space_id, asset_id [, secret])`
-  - Named: `top`, `skip`, `params` MAP<VARCHAR,VARCHAR>, `secret`
+- `datasphere_read_relational(space_id, asset_id)`
+  - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT, `params` MAP<VARCHAR,VARCHAR>
 
-- `datasphere_read_analytical(space_id, asset_id [, secret])`
-  - Named: `top`, `skip`, `params` MAP<VARCHAR,VARCHAR>, `metrics` LIST<VARCHAR>, `dimensions` LIST<VARCHAR>, `secret`
+- `datasphere_read_analytical(space_id, asset_id)`
+  - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT, `params` MAP<VARCHAR,VARCHAR>, `metrics` LIST<VARCHAR>, `dimensions` LIST<VARCHAR>
 
 ---
 
@@ -492,18 +516,13 @@ CREATE SECRET my_sac (
 
 Discover available models and stories:
 
+⚠️ **Implementation Note:** SAC catalog discovery functions (`sac_show_models`, `sac_show_stories`, `sac_get_model_info`, `sac_get_story_info`) are **stub implementations** and currently return empty results. For querying SAC data, use the fully functional data reading functions listed below instead.
+
 ```sql
--- List all accessible planning and analytics models
-SELECT id, name, type, owner FROM sac_list_models(secret := 'my_sac');
-
--- Get model metadata (dimensions, measures, timestamps)
-SELECT * FROM sac_get_model_info('REVENUE_MODEL', secret := 'my_sac');
-
--- List all accessible stories
-SELECT id, name, owner, status FROM sac_list_stories(secret := 'my_sac');
-
--- Get story metadata
-SELECT * FROM sac_get_story_info('EXECUTIVE_DASHBOARD', secret := 'my_sac');
+-- For data reading (fully functional):
+SELECT * FROM sac_read_planning_data('REVENUE_MODEL', secret := 'my_sac', top := 1000);
+SELECT * FROM sac_read_analytical('SALES_CUBE', secret := 'my_sac', dimensions := 'Territory', measures := 'SalesAmount');
+SELECT * FROM sac_read_story_data('DASHBOARD_001', secret := 'my_sac');
 ```
 
 ### SAC Data Reading
@@ -547,29 +566,33 @@ SELECT * FROM sac.Stories WHERE Owner = 'john.doe@company.com';
 
 ### SAC Functions Reference
 
-**Discovery Functions:**
-- `sac_list_models([secret])`
+**Discovery Functions (⚠️ Stub Implementations - Return Empty Results):**
+- `sac_show_models()`
+  - Named parameters: `secret` VARCHAR
   - Returns: id, name, description, type, owner, created_at, last_modified_at
 
-- `sac_list_stories([secret])`
+- `sac_show_stories()`
+  - Named parameters: `secret` VARCHAR
   - Returns: id, name, description, owner, created_at, last_modified_at, status
 
-- `sac_get_model_info(model_id [, secret])`
+- `sac_get_model_info(model_id)`
+  - Named parameters: `secret` VARCHAR
   - Returns: id, name, description, type, dimensions (comma-separated), created_at
 
-- `sac_get_story_info(story_id [, secret])`
+- `sac_get_story_info(story_id)`
+  - Named parameters: `secret` VARCHAR
   - Returns: id, name, description, owner, status, created_at, last_modified_at
 
-**Data Reading Functions:**
-- `sac_read_planning_data(model_id [, secret], [top], [skip])`
+**Data Reading Functions (✅ Fully Functional):**
+- `sac_read_planning_data(model_id)`
   - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT
   - Returns: All columns from the planning model (auto-detected schema)
 
-- `sac_read_analytical(model_id [, secret], [top], [skip], [dimensions], [measures])`
+- `sac_read_analytical(model_id)`
   - Named parameters: `secret` VARCHAR, `top` UBIGINT, `skip` UBIGINT, `dimensions` VARCHAR, `measures` VARCHAR
   - Returns: Selected dimensions and measures with aggregated data
 
-- `sac_read_story_data(story_id [, secret])`
+- `sac_read_story_data(story_id)`
   - Named parameters: `secret` VARCHAR
   - Returns: Data used in story visualizations
 

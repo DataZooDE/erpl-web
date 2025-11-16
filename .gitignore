@@ -9,5 +9,15 @@ test/python/__pycache__/
 .Rhistory
 vcpkg_installed/
 erpl_web_trace.log
-.ai
 test/wasm
+.ai
+
+# Delta Sharing test profiles with credentials
+test/fixtures/delta_share/*.json
+!/test/fixtures/delta_share/.gitignore
+!/test/fixtures/delta_share/README.md
+
+# Temporary files and debug logs
+*.tmp
+*.log.*
+debug.log

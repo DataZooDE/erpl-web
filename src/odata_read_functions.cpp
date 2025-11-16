@@ -8,10 +8,14 @@
 #include "yyjson.hpp"
 
 #include "tracing.hpp"
+#include "telemetry.hpp"
 #include <set>
 #include <unordered_map>
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
+
 void ODataReadBindData::SetNestedExpandPaths(
     const std::vector<std::string> &nested_paths) {
   if (data_extractor) {
@@ -3026,6 +3030,7 @@ duckdb::InvalidInputException ConvertHttpErrorToUserFriendly(const std::runtime_
 duckdb::unique_ptr<FunctionData>
 ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
               vector<LogicalType> &return_types, vector<string> &names) {
+  PostHogTelemetry::Instance().CaptureFunctionExecution("odata_read");
   auto auth_params = AuthParamsFromInput(context, input);
   auto url = input.inputs[0].GetValue<std::string>();
 
@@ -3330,8 +3335,9 @@ static unique_ptr<FunctionData> ODataDescribeBind(
     vector<LogicalType> &return_types,
     vector<string> &names
 ) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_describe");
     ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Starting OData describe bind");
-    
+
     // Reuse authentication handling from ODataReadBind
     auto auth_params = AuthParamsFromInput(context, input);
     

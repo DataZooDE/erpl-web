@@ -18,6 +18,9 @@
 #include "sac_catalog.hpp"
 #include "sac_attach_functions.hpp"
 #include "sac_read_functions.hpp"
+#include "delta_share_scan.hpp"
+#include "delta_share_storage.hpp"
+#include "delta_share_catalog.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -244,6 +247,7 @@ static void RegisterODataFunctions(ExtensionLoader &loader)
 
     auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
     config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
+    config.storage_extensions["delta_share"] = erpl_web::CreateDeltaShareStorageExtension();
 }
 
 static void RegisterDatasphereFunctions(ExtensionLoader &loader)
@@ -273,8 +277,8 @@ static void RegisterOdpFunctions(ExtensionLoader &loader)
 static void RegisterSacFunctions(ExtensionLoader &loader)
 {
     // Register catalog discovery functions
-    loader.RegisterFunction(erpl_web::CreateSacListModelsFunction());
-    loader.RegisterFunction(erpl_web::CreateSacListStoriesFunction());
+    loader.RegisterFunction(erpl_web::CreateSacShowModelsFunction());
+    loader.RegisterFunction(erpl_web::CreateSacShowStoriesFunction());
     loader.RegisterFunction(erpl_web::CreateSacGetModelInfoFunction());
     loader.RegisterFunction(erpl_web::CreateSacGetStoryInfoFunction());
 
@@ -286,6 +290,17 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
     // Register SAC storage extension (handles ATTACH support)
     auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
     config.storage_extensions["sac"] = erpl_web::CreateSacStorageExtension();
+}
+
+static void RegisterDeltaShareFunctions(ExtensionLoader &loader)
+{
+    // Register Delta Sharing table function
+    loader.RegisterFunction(erpl_web::CreateDeltaShareScanFunction());
+
+    // Register Delta Sharing discovery functions
+    loader.RegisterFunction(erpl_web::CreateDeltaShareShowSharesFunction());
+    loader.RegisterFunction(erpl_web::CreateDeltaShareShowSchemasFunction());
+    loader.RegisterFunction(erpl_web::CreateDeltaShareShowTablesFunction());
 }
 
 static void RegisterTracingPragmas(ExtensionLoader &loader)
@@ -314,6 +329,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterDatasphereFunctions(loader);
     RegisterSacFunctions(loader);
     RegisterOdpFunctions(loader);
+    RegisterDeltaShareFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     

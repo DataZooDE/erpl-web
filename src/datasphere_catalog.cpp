@@ -9,12 +9,13 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/secret/secret.hpp"
+#include "telemetry.hpp"
 #include <algorithm>
 #include <unordered_set>
 
 namespace erpl_web {
 
-
+using duckdb::PostHogTelemetry;
 
 // Centralized OAuth2 configuration holder (values will be populated from DuckDB secret)
 OAuth2Config GetDatasphereOAuth2Config() {
@@ -1019,10 +1020,11 @@ std::vector<duckdb::LogicalType> erpl_web::DatasphereDescribeBindData::GetColumn
 
 
 
-static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duckdb::ClientContext &context,
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_describe_space");
     // Extract space_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     
@@ -1064,10 +1066,11 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     return std::move(bind_data);
 }
 
-static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duckdb::ClientContext &context, 
+static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duckdb::ClientContext &context,
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_describe_asset");
     // Extract space_id and asset_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     auto asset_id = input.inputs[1].GetValue<std::string>();
@@ -1263,6 +1266,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
+            PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_show_spaces");
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name"};
 
@@ -1332,6 +1336,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
+            PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_show_assets");
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name"};
 

@@ -61,39 +61,39 @@ public:
     /**
      * List all accessible models
      */
-    std::vector<SacModel> ListModels();
+    std::vector<SacModel> ListModels() const;
 
     /**
      * Get model by ID
      */
-    std::optional<SacModel> GetModel(const std::string& model_id);
+    std::optional<SacModel> GetModel(const std::string& model_id) const;
 
     /**
      * List dimensions for a model
      */
-    std::vector<std::string> GetModelDimensions(const std::string& model_id);
+    std::vector<std::string> GetModelDimensions(const std::string& model_id) const;
 
     /**
      * List measures for an analytics model
      */
-    std::vector<std::string> GetModelMeasures(const std::string& model_id);
+    std::vector<std::string> GetModelMeasures(const std::string& model_id) const;
 
     // Story discovery
 
     /**
      * List all accessible stories
      */
-    std::vector<SacStory> ListStories();
+    std::vector<SacStory> ListStories() const;
 
     /**
      * Get story by ID
      */
-    std::optional<SacStory> GetStory(const std::string& story_id);
+    std::optional<SacStory> GetStory(const std::string& story_id) const;
 
     /**
      * List stories by owner
      */
-    std::vector<SacStory> ListStoriesByOwner(const std::string& owner);
+    std::vector<SacStory> ListStoriesByOwner(const std::string& owner) const;
 
 private:
     std::string tenant_;
@@ -103,24 +103,24 @@ private:
 
     // Helper methods for parsing OData responses
     std::vector<SacModel> ParseModelsResponse(
-        const std::string& odata_response);
+        const std::string& odata_response) const;
 
     std::vector<SacStory> ParseStoriesResponse(
-        const std::string& odata_response);
+        const std::string& odata_response) const;
 
-    SacModel ParseModelEntity(const std::string& entity_json);
-    SacStory ParseStoryEntity(const std::string& entity_json);
+    SacModel ParseModelEntity(const std::string& entity_json) const;
+    SacStory ParseStoryEntity(const std::string& entity_json) const;
 };
 
 /**
  * DuckDB Table Functions for SAC Catalog
  */
 
-// sac_list_models() -> Lists all accessible models
-duckdb::TableFunctionSet CreateSacListModelsFunction();
+// sac_show_models() -> Shows all accessible models
+duckdb::TableFunctionSet CreateSacShowModelsFunction();
 
-// sac_list_stories() -> Lists all accessible stories
-duckdb::TableFunctionSet CreateSacListStoriesFunction();
+// sac_show_stories() -> Shows all accessible stories
+duckdb::TableFunctionSet CreateSacShowStoriesFunction();
 
 // sac_get_model_info(model_id) -> Get model metadata and dimensions
 duckdb::TableFunctionSet CreateSacGetModelInfoFunction();

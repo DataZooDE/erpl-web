@@ -2,17 +2,21 @@
 #include "odp_subscription_repository.hpp"
 #include "tracing.hpp"
 #include "duckdb_argument_helper.hpp"
+#include "telemetry.hpp"
 
 namespace erpl_web {
+
+using duckdb::PostHogTelemetry;
 
 // ============================================================================
 // ODP List Subscriptions Table Function
 // ============================================================================
 
-duckdb::unique_ptr<duckdb::FunctionData> OdpListSubscriptionsBind(duckdb::ClientContext &context, 
+duckdb::unique_ptr<duckdb::FunctionData> OdpListSubscriptionsBind(duckdb::ClientContext &context,
                                                                   duckdb::TableFunctionBindInput &input,
                                                                   duckdb::vector<duckdb::LogicalType> &return_types,
                                                                   duckdb::vector<std::string> &names) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_list_subscriptions");
     ERPL_TRACE_DEBUG("ODP_LIST_SUBSCRIPTIONS_BIND", "=== BINDING ODP_LIST_SUBSCRIPTIONS FUNCTION ===");
     
     // Set up return schema
@@ -103,6 +107,7 @@ void OdpListSubscriptionsScan(duckdb::ClientContext &context, duckdb::TableFunct
 // ============================================================================
 
 void OdpRemoveSubscriptionPragma(duckdb::ClientContext &context, const duckdb::FunctionParameters &parameters) {
+    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_remove_subscription");
     ERPL_TRACE_DEBUG("ODP_REMOVE_SUBSCRIPTION", "=== EXECUTING ODP_REMOVE_SUBSCRIPTION PRAGMA ===");
     
     if (parameters.values.empty()) {
