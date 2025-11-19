@@ -1,5 +1,9 @@
 <a name="top"></a>
 
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
+[![DuckDB](https://img.shields.io/badge/DuckDB-1.4.2+-green.svg)](https://duckdb.org)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+
 # ERPL Web — DuckDB HTTP + OData + Delta Sharing + SAP Datasphere + SAP Analytics Cloud Extension
 
 ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, read Delta Sharing tables, and work with SAP Datasphere and SAP Analytics Cloud assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
