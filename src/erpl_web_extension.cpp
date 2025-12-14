@@ -321,7 +321,10 @@ static void RegisterTracingPragmas(ExtensionLoader &loader)
 
 static void LoadInternal(ExtensionLoader &loader) {
     auto &instance = loader.GetDatabaseInstance();
-    PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web");
+
+    // Initialize telemetry with API key before capturing extension load
+    PostHogTelemetry::Instance().SetAPIKey("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t");
+    PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web", "0.1.0");
 
     RegisterConfiguration(instance);
     RegisterWebFunctions(loader);

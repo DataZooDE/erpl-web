@@ -53,7 +53,11 @@ include_directories(
     ./duckdb/src/include
     ./duckdb/third_party/
     ./duckdb/third_party/httplib
+    posthog-telemetry/include
 )
+
+# Add PostHog telemetry library
+add_subdirectory(posthog-telemetry)
 
 set(EXTENSION_SOURCES
     src/tracing.cpp
@@ -74,7 +78,6 @@ set(EXTENSION_SOURCES
     src/secret_functions.cpp
     src/web_functions.cpp
     src/erpl_web_extension.cpp
-    src/telemetry.cpp
     src/datasphere_client.cpp
     src/datasphere_catalog.cpp
     src/datasphere_read.cpp
@@ -119,8 +122,8 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace)
+target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry)
 
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
@@ -151,7 +154,7 @@ if(${BUILD_UNITTESTS})
 endif()
 
 install(
-  TARGETS ${EXTENSION_NAME}
+  TARGETS ${EXTENSION_NAME} posthog_telemetry
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
