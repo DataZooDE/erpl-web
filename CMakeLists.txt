@@ -22,9 +22,6 @@ if(MSVC)
     add_compile_options(/wd4996)
     # Disable min/max macros to prevent conflicts with std::min/std::max
     add_compile_definitions(NOMINMAX)
-    # Match VCPKG's static CRT linkage (x64-windows-static-release triplet uses /MT)
-    # This prevents "RuntimeLibrary mismatch" linker errors
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # Try to find mold binary
