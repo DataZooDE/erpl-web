@@ -59,6 +59,9 @@ include_directories(
 # Add PostHog telemetry library
 add_subdirectory(posthog-telemetry)
 
+# Ensure posthog_telemetry has access to OpenSSL headers (required for httplib SSL support)
+target_link_libraries(posthog_telemetry PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+
 set(EXTENSION_SOURCES
     src/tracing.cpp
     src/duckdb_argument_helper.cpp
