@@ -445,7 +445,7 @@ DeltaFileReference DeltaShareClient::ParseFileReference(yyjson_val* file_obj) co
     // Extract stats if present
     auto stats_val = yyjson_obj_get(file_obj, "stats");
     if (stats_val) {
-        char* stats_str = yyjson_val_write(stats_val, 0, NULL);
+        char* stats_str = duckdb_yyjson::yyjson_val_write(stats_val, 0, nullptr);
         if (stats_str) {
             try {
                 file_ref.stats = string(stats_str);
