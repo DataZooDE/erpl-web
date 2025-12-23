@@ -180,11 +180,8 @@ HttpUrl HttpUrl::MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::
     // Handle path
     if (!rel_path.empty()) {
         if (rel_path[0] == '/') {
-            // Path starting with / should be treated as relative to base URL's root
-            // Remove the leading / and merge with base path
-            std::string rel_path_without_slash = rel_path.substr(1);
-            auto merged_path = MergePaths(base_url.Path(), rel_path_without_slash);
-            merged_url.Path(merged_path.string());
+            // Path starting with / is an absolute path from the root
+            merged_url.Path(rel_path);
         } else {
             // Relative path - merge with base path
             auto merged_path = MergePaths(base_url.Path(), rel_path);
@@ -223,6 +220,10 @@ std::string HttpUrl::Fragment() const { return fragment; }
 std::string HttpUrl::Username() const { return username; }
 std::string HttpUrl::Password() const { return password; }
 
+bool HttpUrl::IsSameDomain(const HttpUrl& other) const {
+    return ToLower(host) == ToLower(other.host);
+}
+
 // ----------------------------------------------------------------------
 
 HttpParams::HttpParams()
@@ -232,7 +233,8 @@ HttpParams::HttpParams()
       retry_backoff(DEFAULT_RETRY_BACKOFF),
       force_download(DEFAULT_FORCE_DOWNLOAD),
       keep_alive(DEFAULT_KEEP_ALIVE),
-      url_encode(DEFAULT_URL_ENCODE)
+      url_encode(DEFAULT_URL_ENCODE),
+      max_redirects(DEFAULT_MAX_REDIRECTS)
 {
 }
 
@@ -801,6 +803,7 @@ HttpClient::HttpClient()
 std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 {
     idx_t n_tries = 0;
+    idx_t redirect_count = 0;
     while (true)
     {
         std::exception_ptr caught_e = nullptr;
@@ -824,6 +827,44 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 
         if (err == duckdb_httplib_openssl::Error::Success)
         {
+            // Check for redirect status codes and handle manually to preserve auth headers
+            if (IsRedirectStatus(status) && redirect_count < http_params.max_redirects) {
+                auto location_it = response.headers.find("Location");
+                if (location_it != response.headers.end()) {
+                    std::string redirect_url = location_it->second;
+
+                    // Resolve relative URLs against the current request URL
+                    HttpUrl new_url = HttpUrl::MergeWithBaseUrlIfRelative(request.url, redirect_url);
+
+                    // Check if same domain - preserve auth headers only for same domain
+                    bool same_domain = request.url.IsSameDomain(new_url);
+
+                    ERPL_TRACE_DEBUG("HTTP_CLIENT", "Following redirect " + std::to_string(redirect_count + 1) +
+                                   " to: " + new_url.ToString() + (same_domain ? " (same domain)" : " (cross domain)"));
+
+                    // Update request URL
+                    request.url = new_url;
+
+                    // If cross-domain, clear auth headers for security
+                    if (!same_domain) {
+                        request.headers.erase("Authorization");
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "Cross-domain redirect - removing Authorization header");
+                    }
+
+                    // Handle 303 See Other: change method to GET (per HTTP spec)
+                    if (status == 303 && request.method != HttpMethod::GET && request.method != HttpMethod::HEAD) {
+                        request.method = HttpMethod::GET;
+                        request.content.clear();
+                        request.content_type.clear();
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "303 redirect - changing method to GET");
+                    }
+
+                    redirect_count++;
+                    n_tries = 0; // Reset retry counter for the new redirect request
+                    continue; // Follow the redirect
+                }
+            }
+
             switch (status) {
                 case 408: // Request Timeout
                 case 418: // Server is pretending to be a teapot
@@ -884,7 +925,8 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
                                                                                 const std::string &scheme_host_and_port)
 {
     auto c = std::make_unique<duckdb_httplib_openssl::Client>(scheme_host_and_port.c_str());
-    c->set_follow_location(true);
+    // We handle redirects manually to preserve auth headers on same-domain redirects
+    c->set_follow_location(false);
 	c->set_keep_alive(http_params.keep_alive);
 	c->enable_server_certificate_verification(false);
 	// Interpret timeout as a single max-time budget in milliseconds and
