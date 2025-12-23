@@ -70,7 +70,7 @@ public:
     static std::filesystem::path MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& relative_path);
     static std::string ToLower(const std::string& str);
 
-    bool IsSameDomain(const HttpUrl& other) const;
+    bool IsSameOrigin(const HttpUrl& other) const;
 
 private:
     std::string scheme;

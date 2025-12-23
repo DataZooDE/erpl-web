@@ -220,8 +220,20 @@ std::string HttpUrl::Fragment() const { return fragment; }
 std::string HttpUrl::Username() const { return username; }
 std::string HttpUrl::Password() const { return password; }
 
-bool HttpUrl::IsSameDomain(const HttpUrl& other) const {
-    return ToLower(host) == ToLower(other.host);
+bool HttpUrl::IsSameOrigin(const HttpUrl& other) const {
+    // Get effective port (default 443 for https, 80 for http)
+    auto effective_port = [](const std::string& url_scheme, const std::string& url_port) -> std::string {
+        if (!url_port.empty()) {
+            return url_port;
+        }
+        return (ToLower(url_scheme) == "https") ? "443" : "80";
+    };
+
+    // Origin = scheme + host + port (all must match for same-origin)
+    // This prevents HTTPS→HTTP downgrade attacks and port-based credential leakage
+    return ToLower(scheme) == ToLower(other.scheme) &&
+           ToLower(host) == ToLower(other.host) &&
+           effective_port(scheme, port) == effective_port(other.scheme, other.port);
 }
 
 // ----------------------------------------------------------------------
@@ -828,7 +840,14 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
         if (err == duckdb_httplib_openssl::Error::Success)
         {
             // Check for redirect status codes and handle manually to preserve auth headers
-            if (IsRedirectStatus(status) && redirect_count < http_params.max_redirects) {
+            if (IsRedirectStatus(status)) {
+                // Check if we've exceeded max redirects
+                if (redirect_count >= http_params.max_redirects) {
+                    ERPL_TRACE_WARN("HTTP_CLIENT", "Max redirects (" + std::to_string(http_params.max_redirects) +
+                                   ") reached, returning redirect response as-is");
+                    return HttpResponse::FromHttpLibResponse(request.method, request.url, response);
+                }
+
                 auto location_it = response.headers.find("Location");
                 if (location_it != response.headers.end()) {
                     std::string redirect_url = location_it->second;
@@ -836,27 +855,39 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
                     // Resolve relative URLs against the current request URL
                     HttpUrl new_url = HttpUrl::MergeWithBaseUrlIfRelative(request.url, redirect_url);
 
-                    // Check if same domain - preserve auth headers only for same domain
-                    bool same_domain = request.url.IsSameDomain(new_url);
+                    // Check if same origin (scheme + host + port) - preserve auth headers only for same origin
+                    bool same_origin = request.url.IsSameOrigin(new_url);
 
                     ERPL_TRACE_DEBUG("HTTP_CLIENT", "Following redirect " + std::to_string(redirect_count + 1) +
-                                   " to: " + new_url.ToString() + (same_domain ? " (same domain)" : " (cross domain)"));
+                                   " to: " + new_url.ToString() + (same_origin ? " (same origin)" : " (cross origin)"));
 
                     // Update request URL
                     request.url = new_url;
 
-                    // If cross-domain, clear auth headers for security
-                    if (!same_domain) {
-                        request.headers.erase("Authorization");
-                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "Cross-domain redirect - removing Authorization header");
+                    // If cross-origin, clear all sensitive headers for security
+                    // This prevents credential leakage on HTTPS→HTTP downgrades, port changes, or host changes
+                    if (!same_origin) {
+                        static const std::vector<std::string> sensitive_headers = {
+                            "Authorization",
+                            "Cookie",
+                            "Proxy-Authorization",
+                            "X-API-Key",
+                            "X-Auth-Token"
+                        };
+                        for (const auto& header : sensitive_headers) {
+                            request.headers.erase(header);
+                        }
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "Cross-origin redirect - removed sensitive headers");
                     }
 
-                    // Handle 303 See Other: change method to GET (per HTTP spec)
-                    if (status == 303 && request.method != HttpMethod::GET && request.method != HttpMethod::HEAD) {
+                    // 301/302/303 redirects change method to GET (per HTTP spec, historical browser behavior)
+                    // 307/308 preserve the original method
+                    if ((status == 301 || status == 302 || status == 303) &&
+                        request.method != HttpMethod::GET && request.method != HttpMethod::HEAD) {
                         request.method = HttpMethod::GET;
                         request.content.clear();
                         request.content_type.clear();
-                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "303 redirect - changing method to GET");
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", std::to_string(status) + " redirect - changing method to GET");
                     }
 
                     redirect_count++;
