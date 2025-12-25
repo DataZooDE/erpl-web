@@ -90,10 +90,10 @@ static void PopulateHeadersFromHeadersParam(duckdb::named_parameter_map_t &named
                     }
                 }
                 
-                if (!key.empty() && !value.empty()) {
+                if (!key.empty()) {
                     header_keys.emplace_back(Value(key));
                     header_vals.emplace_back(Value(value));
-                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Extracted header: " + key + " = " + value);
+                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Extracted header: " + key + " = " + (value.empty() ? "(empty)" : value));
                 }
             }
         }
@@ -114,11 +114,10 @@ static Value CreateHttpHeaderFromArgs(TableFunctionBindInput &input)
 
     PopulateHeadersFromHeadersParam(named_params, header_keys, header_vals);
 
-    // Only add Content-Type header if there's actual content
-    if (args.size() >= 2 && !args[1].IsNull() && args[1].ToString().length() > 0) {
-        header_keys.emplace_back(Value("Content-Type")); 
-        header_vals.emplace_back(args.size() < 3 ? Value("application/json") : args[2]);
-    }
+    // NOTE: Content-Type is NOT added here because it's handled separately via the content_type
+    // parameter passed to HttpRequest constructor and then to httplib. Adding it here would cause
+    // duplicate Content-Type headers which breaks some servers (e.g., GENESIS API returns 400).
+    // See GitHub issue #3.
 
     // Only add Accept header if user didn't provide one in custom headers
     bool has_accept_header = false;

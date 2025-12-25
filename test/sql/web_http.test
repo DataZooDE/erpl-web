@@ -66,14 +66,15 @@ FROM http_delete('https://httpbin.org/status/200', '{}'::JSON) LIMIT 1;
 # ============================================================================
 
 # Test that HTTP functions return consistent structure
+# Use split_part to extract base MIME type (ignore charset which varies)
 query IIII
-SELECT method, CASE WHEN status IN (200, 502) THEN 200 ELSE status END as status, url, content_type
+SELECT method, CASE WHEN status IN (200, 502) THEN 200 ELSE status END as status, url, split_part(content_type, ';', 1)
 FROM http_get('https://httpbin.org/status/200') LIMIT 1;
 ----
 GET
 200
 https://httpbin.org/status/200
-text/html; charset=utf-8
+text/html
 
 # Test response headers
 query I

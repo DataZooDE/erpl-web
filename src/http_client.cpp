@@ -23,6 +23,92 @@ using namespace duckdb;
 namespace erpl_web
 {
 
+// ----------------------------------------------------------------------
+// Wire-level debugging for HTTP requests
+// This captures the exact bytes being sent for comparison with working implementations
+// ----------------------------------------------------------------------
+
+namespace {
+
+// Convert bytes to hex dump format for debugging
+std::string ToHexDump(const std::string& data, size_t max_bytes = 500) {
+    std::ostringstream hex;
+    size_t bytes_to_show = std::min(data.size(), max_bytes);
+    for (size_t i = 0; i < bytes_to_show; i++) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02x ", static_cast<unsigned char>(data[i]));
+        hex << buf;
+    }
+    if (data.size() > max_bytes) {
+        hex << "... (" << (data.size() - max_bytes) << " more bytes)";
+    }
+    return hex.str();
+}
+
+// Convert data to printable ASCII (replacing non-printable chars)
+std::string ToPrintableAscii(const std::string& data, size_t max_bytes = 500) {
+    std::string result;
+    size_t bytes_to_show = std::min(data.size(), max_bytes);
+    result.reserve(bytes_to_show);
+    for (size_t i = 0; i < bytes_to_show; i++) {
+        char c = data[i];
+        if (c >= 32 && c < 127) {
+            result += c;
+        } else if (c == '\r') {
+            result += "\\r";
+        } else if (c == '\n') {
+            result += "\\n\n";  // Add actual newline for readability
+        } else if (c == '\t') {
+            result += "\\t";
+        } else {
+            result += '.';  // Non-printable placeholder
+        }
+    }
+    return result;
+}
+
+// Debug header writer that logs headers before writing them
+ssize_t DebugHeaderWriter(duckdb_httplib_openssl::Stream& strm, duckdb_httplib_openssl::Headers& headers) {
+    // Build the header string that will be written
+    std::ostringstream header_data;
+    for (const auto& h : headers) {
+        header_data << h.first << ": " << h.second << "\r\n";
+    }
+    header_data << "\r\n";
+
+    std::string headers_str = header_data.str();
+
+    // Log the headers in multiple formats for debugging
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "=== HEADERS BEING SENT ===");
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Header count: " + std::to_string(headers.size()));
+
+    // Log each header individually
+    for (const auto& h : headers) {
+        std::string header_line = h.first + ": " + (h.second.empty() ? "(empty)" : h.second);
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "  " + header_line);
+    }
+
+    // Log as hex dump (what actually goes on the wire)
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Headers hex: " + ToHexDump(headers_str));
+
+    // Log as ASCII
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Headers ASCII:\n" + ToPrintableAscii(headers_str));
+
+    // Now write the headers using the standard format
+    ssize_t write_len = 0;
+    for (const auto& x : headers) {
+        auto len = strm.write_format("%s: %s\r\n", x.first.c_str(), x.second.c_str());
+        if (len < 0) { return len; }
+        write_len += len;
+    }
+    auto len = strm.write("\r\n");
+    if (len < 0) { return len; }
+    write_len += len;
+    return write_len;
+}
+
+} // anonymous namespace
+
 HttpUrl::HttpUrl(const std::string& url) {
     ParseUrl(url);
 }
@@ -180,11 +266,8 @@ HttpUrl HttpUrl::MergeWithBaseUrlIfRelative(const HttpUrl& base_url, const std::
     // Handle path
     if (!rel_path.empty()) {
         if (rel_path[0] == '/') {
-            // Path starting with / should be treated as relative to base URL's root
-            // Remove the leading / and merge with base path
-            std::string rel_path_without_slash = rel_path.substr(1);
-            auto merged_path = MergePaths(base_url.Path(), rel_path_without_slash);
-            merged_url.Path(merged_path.string());
+            // Path starting with / is an absolute path from the root
+            merged_url.Path(rel_path);
         } else {
             // Relative path - merge with base path
             auto merged_path = MergePaths(base_url.Path(), rel_path);
@@ -223,6 +306,22 @@ std::string HttpUrl::Fragment() const { return fragment; }
 std::string HttpUrl::Username() const { return username; }
 std::string HttpUrl::Password() const { return password; }
 
+bool HttpUrl::IsSameOrigin(const HttpUrl& other) const {
+    // Get effective port (default 443 for https, 80 for http)
+    auto effective_port = [](const std::string& url_scheme, const std::string& url_port) -> std::string {
+        if (!url_port.empty()) {
+            return url_port;
+        }
+        return (ToLower(url_scheme) == "https") ? "443" : "80";
+    };
+
+    // Origin = scheme + host + port (all must match for same-origin)
+    // This prevents HTTPS→HTTP downgrade attacks and port-based credential leakage
+    return ToLower(scheme) == ToLower(other.scheme) &&
+           ToLower(host) == ToLower(other.host) &&
+           effective_port(scheme, port) == effective_port(other.scheme, other.port);
+}
+
 // ----------------------------------------------------------------------
 
 HttpParams::HttpParams()
@@ -232,7 +331,8 @@ HttpParams::HttpParams()
       retry_backoff(DEFAULT_RETRY_BACKOFF),
       force_download(DEFAULT_FORCE_DOWNLOAD),
       keep_alive(DEFAULT_KEEP_ALIVE),
-      url_encode(DEFAULT_URL_ENCODE)
+      url_encode(DEFAULT_URL_ENCODE),
+      max_redirects(DEFAULT_MAX_REDIRECTS)
 {
 }
 
@@ -440,13 +540,16 @@ void HttpRequest::HeadersFromMapArg(duckdb::Value &header_map)
                     }
                 }
                 
-                if (!key.empty() && !value.empty()) {
-                    headers.emplace(key, value);
-                    ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + value);
-
+                if (!key.empty()) {
+                    // Content-Type is handled separately via the content_type parameter to httplib.
+                    // Adding it to headers would cause duplicate Content-Type headers which breaks
+                    // some servers (e.g., GENESIS API returns 400). See GitHub issue #3.
                     if (ToLower(key) == "content-type") {
                         content_type = value;
-                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Updated content_type to: " + value);
+                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Updated content_type to: " + value + " (not adding to headers to avoid duplication)");
+                    } else {
+                        headers.emplace(key, value);
+                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + (value.empty() ? "(empty)" : value));
                     }
                 }
             }
@@ -593,6 +696,14 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
         ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request content (" + std::to_string(content.length()) + " bytes): " + content);
         ERPL_TRACE_DEBUG("HTTP_REQUEST", "Content-Type: " + content_type);
     }
+
+    // Wire-level debug: show the request line that will be sent
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "=== REQUEST LINE ===");
+    std::string request_line = method.ToString() + " " + path_str + " HTTP/1.1";
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Request line: " + request_line);
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Request line hex: " + ToHexDump(request_line + "\r\n"));
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Body to send: " + (content.empty() ? "(empty)" : content.substr(0, 200)));
+    ERPL_TRACE_DEBUG("HTTP_WIRE", "Body hex: " + ToHexDump(content));
 
     duckdb_httplib_openssl::Result result;
     if (method == HttpMethod::GET)
@@ -801,6 +912,7 @@ HttpClient::HttpClient()
 std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 {
     idx_t n_tries = 0;
+    idx_t redirect_count = 0;
     while (true)
     {
         std::exception_ptr caught_e = nullptr;
@@ -824,6 +936,63 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
 
         if (err == duckdb_httplib_openssl::Error::Success)
         {
+            // Check for redirect status codes and handle manually to preserve auth headers
+            if (IsRedirectStatus(status)) {
+                // Check if we've exceeded max redirects
+                if (redirect_count >= http_params.max_redirects) {
+                    ERPL_TRACE_WARN("HTTP_CLIENT", "Max redirects (" + std::to_string(http_params.max_redirects) +
+                                   ") reached, returning redirect response as-is");
+                    return HttpResponse::FromHttpLibResponse(request.method, request.url, response);
+                }
+
+                auto location_it = response.headers.find("Location");
+                if (location_it != response.headers.end()) {
+                    std::string redirect_url = location_it->second;
+
+                    // Resolve relative URLs against the current request URL
+                    HttpUrl new_url = HttpUrl::MergeWithBaseUrlIfRelative(request.url, redirect_url);
+
+                    // Check if same origin (scheme + host + port) - preserve auth headers only for same origin
+                    bool same_origin = request.url.IsSameOrigin(new_url);
+
+                    ERPL_TRACE_DEBUG("HTTP_CLIENT", "Following redirect " + std::to_string(redirect_count + 1) +
+                                   " to: " + new_url.ToString() + (same_origin ? " (same origin)" : " (cross origin)"));
+
+                    // Update request URL
+                    request.url = new_url;
+
+                    // If cross-origin, clear all sensitive headers for security
+                    // This prevents credential leakage on HTTPS→HTTP downgrades, port changes, or host changes
+                    if (!same_origin) {
+                        static const std::vector<std::string> sensitive_headers = {
+                            "Authorization",
+                            "Cookie",
+                            "Proxy-Authorization",
+                            "X-API-Key",
+                            "X-Auth-Token"
+                        };
+                        for (const auto& header : sensitive_headers) {
+                            request.headers.erase(header);
+                        }
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", "Cross-origin redirect - removed sensitive headers");
+                    }
+
+                    // 301/302/303 redirects change method to GET (per HTTP spec, historical browser behavior)
+                    // 307/308 preserve the original method
+                    if ((status == 301 || status == 302 || status == 303) &&
+                        request.method != HttpMethod::GET && request.method != HttpMethod::HEAD) {
+                        request.method = HttpMethod::GET;
+                        request.content.clear();
+                        request.content_type.clear();
+                        ERPL_TRACE_DEBUG("HTTP_CLIENT", std::to_string(status) + " redirect - changing method to GET");
+                    }
+
+                    redirect_count++;
+                    n_tries = 0; // Reset retry counter for the new redirect request
+                    continue; // Follow the redirect
+                }
+            }
+
             switch (status) {
                 case 408: // Request Timeout
                 case 418: // Server is pretending to be a teapot
@@ -884,7 +1053,8 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
                                                                                 const std::string &scheme_host_and_port)
 {
     auto c = std::make_unique<duckdb_httplib_openssl::Client>(scheme_host_and_port.c_str());
-    c->set_follow_location(true);
+    // We handle redirects manually to preserve auth headers on same-domain redirects
+    c->set_follow_location(false);
 	c->set_keep_alive(http_params.keep_alive);
 	c->enable_server_certificate_verification(false);
 	// Interpret timeout as a single max-time budget in milliseconds and
@@ -898,6 +1068,27 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 	c->set_decompress(true);
     // Control URL encoding behavior
     c->set_url_encode(http_params.url_encode);
+
+    // Wire-level debugging: set custom header writer to capture exact bytes being sent
+    c->set_header_writer(DebugHeaderWriter);
+
+    // Set logger to capture complete request/response for debugging
+    c->set_logger([](const duckdb_httplib_openssl::Request& req, const duckdb_httplib_openssl::Response& res) {
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "=== REQUEST COMPLETE ===");
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Request: " + req.method + " " + req.path);
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body length: " + std::to_string(req.body.size()));
+        if (!req.body.empty()) {
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body: " + req.body.substr(0, 500) +
+                           (req.body.size() > 500 ? "..." : ""));
+        }
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "=== RESPONSE ===");
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response status: " + std::to_string(res.status));
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response content-type: " + res.get_header_value("Content-Type"));
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body length: " + std::to_string(res.body.size()));
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body preview: " + res.body.substr(0, 200) +
+                       (res.body.size() > 200 ? "..." : ""));
+    });
+
 	return c;
 }
 
