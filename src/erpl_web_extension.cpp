@@ -26,6 +26,8 @@
 #include "business_central_functions.hpp"
 #include "dataverse_secret.hpp"
 #include "dataverse_functions.hpp"
+#include "graph_excel_secret.hpp"
+#include "graph_excel_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -332,6 +334,15 @@ static void RegisterDataverseFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateCrmReadFunction());
 }
 
+static void RegisterGraphExcelFunctions(ExtensionLoader &loader)
+{
+    // Register Microsoft Graph secret type
+    erpl_web::CreateGraphSecretFunctions::Register(loader);
+
+    // Register Microsoft Graph Excel table functions
+    erpl_web::GraphExcelFunctions::Register(loader);
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -364,6 +375,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterDeltaShareFunctions(loader);
     RegisterBusinessCentralFunctions(loader);
     RegisterDataverseFunctions(loader);
+    RegisterGraphExcelFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     

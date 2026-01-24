@@ -127,6 +127,9 @@ set(EXTENSION_SOURCES
     src/dataverse_secret.cpp
     src/dataverse_client.cpp
     src/dataverse_functions.cpp
+    src/graph_excel_secret.cpp
+    src/graph_excel_client.cpp
+    src/graph_excel_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

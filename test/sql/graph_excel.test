@@ -1,0 +1,173 @@
+# name: test/sql/graph_excel.test
+# description: Test Microsoft Graph Excel integration functions and secret management
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Test: Microsoft Graph Secret Creation (client_credentials provider)
+# =============================================================================
+
+# Test creating a Graph secret with all required parameters
+statement ok
+CREATE SECRET test_graph_client_creds (
+    TYPE microsoft_graph,
+    tenant_id 'test-tenant-id-12345',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_graph_client_creds'
+----
+1
+
+# Verify secret type
+query I
+SELECT type FROM duckdb_secrets() WHERE name = 'test_graph_client_creds'
+----
+microsoft_graph
+
+# =============================================================================
+# Test: Microsoft Graph Secret with Custom Scope
+# =============================================================================
+
+statement ok
+CREATE SECRET test_graph_custom_scope (
+    TYPE microsoft_graph,
+    tenant_id 'test-tenant-id-12345',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde',
+    scope 'https://graph.microsoft.com/Files.Read.All'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_graph_custom_scope'
+----
+1
+
+# =============================================================================
+# Test: Microsoft Graph Secret with Config Provider
+# =============================================================================
+
+statement ok
+CREATE SECRET test_graph_config (
+    TYPE microsoft_graph,
+    PROVIDER config,
+    tenant_id 'test-tenant-id-12345',
+    access_token 'pre-acquired-access-token-xyz',
+    expires_at '2099-12-31T23:59:59Z'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_graph_config'
+----
+1
+
+# =============================================================================
+# Test: Microsoft Graph Secret Validation - Missing Required Parameters
+# =============================================================================
+
+# Missing tenant_id
+statement error
+CREATE SECRET test_graph_missing_tenant (
+    TYPE microsoft_graph,
+    client_id 'test-client-id',
+    client_secret 'test-secret'
+);
+----
+tenant_id
+
+# Missing client_id (client_credentials provider)
+statement error
+CREATE SECRET test_graph_missing_client (
+    TYPE microsoft_graph,
+    tenant_id 'test-tenant-id',
+    client_secret 'test-secret'
+);
+----
+client_id
+
+# Missing client_secret (client_credentials provider)
+statement error
+CREATE SECRET test_graph_missing_secret (
+    TYPE microsoft_graph,
+    tenant_id 'test-tenant-id',
+    client_id 'test-client-id'
+);
+----
+client_secret
+
+# =============================================================================
+# Test: Secret Replacement (OR REPLACE)
+# =============================================================================
+
+statement ok
+CREATE OR REPLACE SECRET test_graph_client_creds (
+    TYPE microsoft_graph,
+    tenant_id 'updated-tenant-id',
+    client_id 'updated-client-id',
+    client_secret 'updated-client-secret'
+);
+
+# Verify only one secret exists with that name
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_graph_client_creds'
+----
+1
+
+# =============================================================================
+# Test: Function Existence
+# =============================================================================
+
+# Verify graph_list_files exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_files'
+----
+1
+
+# Verify graph_excel_tables exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_tables'
+----
+1
+
+# Verify graph_excel_worksheets exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_worksheets'
+----
+1
+
+# Verify graph_excel_range exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_range'
+----
+1
+
+# Verify graph_excel_table_data exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_table_data'
+----
+1
+
+# =============================================================================
+# Test: Secret Cleanup
+# =============================================================================
+
+statement ok
+DROP SECRET test_graph_client_creds;
+
+statement ok
+DROP SECRET test_graph_custom_scope;
+
+statement ok
+DROP SECRET test_graph_config;
+
+# Verify all test secrets are removed
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name LIKE 'test_graph_%'
+----
+0

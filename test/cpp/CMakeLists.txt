@@ -30,6 +30,7 @@ set(TEST_SOURCES
     test_microsoft_entra_auth.cpp
     test_business_central.cpp
     test_dataverse.cpp
+    test_graph_excel.cpp
 
     test_main.cpp
 )
