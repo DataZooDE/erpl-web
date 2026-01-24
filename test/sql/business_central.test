@@ -1,0 +1,209 @@
+# name: test/sql/business_central.test
+# description: Test Business Central integration functions and secret management
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Test: Business Central Secret Creation (client_credentials provider)
+# =============================================================================
+
+# Test creating a Business Central secret with all required parameters
+statement ok
+CREATE SECRET test_bc_client_creds (
+    TYPE business_central,
+    tenant_id 'test-tenant-id-12345',
+    environment 'sandbox',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_bc_client_creds'
+----
+1
+
+# Verify secret type
+query I
+SELECT type FROM duckdb_secrets() WHERE name = 'test_bc_client_creds'
+----
+business_central
+
+# =============================================================================
+# Test: Business Central Secret with Optional Scope
+# =============================================================================
+
+statement ok
+CREATE SECRET test_bc_custom_scope (
+    TYPE business_central,
+    tenant_id 'test-tenant-id-12345',
+    environment 'production',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde',
+    scope 'https://api.businesscentral.dynamics.com/.default'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_bc_custom_scope'
+----
+1
+
+# =============================================================================
+# Test: Business Central Secret with Config Provider
+# =============================================================================
+
+statement ok
+CREATE SECRET test_bc_config (
+    TYPE business_central,
+    PROVIDER config,
+    tenant_id 'test-tenant-id-12345',
+    environment 'sandbox',
+    access_token 'pre-acquired-access-token-xyz',
+    expires_at '2099-12-31T23:59:59Z'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_bc_config'
+----
+1
+
+# =============================================================================
+# Test: Business Central Secret Validation - Missing Required Parameters
+# =============================================================================
+
+# Missing tenant_id
+statement error
+CREATE SECRET test_bc_missing_tenant (
+    TYPE business_central,
+    environment 'sandbox',
+    client_id 'test-client-id',
+    client_secret 'test-secret'
+);
+----
+tenant_id
+
+# Environment is optional (defaults to 'production')
+statement ok
+CREATE SECRET test_bc_missing_env (
+    TYPE business_central,
+    tenant_id 'test-tenant-id',
+    client_id 'test-client-id',
+    client_secret 'test-secret'
+);
+
+# Missing client_id (client_credentials provider)
+statement error
+CREATE SECRET test_bc_missing_client (
+    TYPE business_central,
+    tenant_id 'test-tenant-id',
+    environment 'sandbox',
+    client_secret 'test-secret'
+);
+----
+client_id
+
+# Missing client_secret (client_credentials provider)
+statement error
+CREATE SECRET test_bc_missing_secret (
+    TYPE business_central,
+    tenant_id 'test-tenant-id',
+    environment 'sandbox',
+    client_id 'test-client-id'
+);
+----
+client_secret
+
+# =============================================================================
+# Test: Business Central Secret with Default Scope
+# =============================================================================
+
+# The default scope should be set automatically when not provided
+statement ok
+CREATE SECRET test_bc_default_scope (
+    TYPE business_central,
+    tenant_id 'another-tenant',
+    environment 'sandbox',
+    client_id 'another-client',
+    client_secret 'another-secret'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_bc_default_scope'
+----
+1
+
+# =============================================================================
+# Test: Secret Replacement (OR REPLACE)
+# =============================================================================
+
+statement ok
+CREATE OR REPLACE SECRET test_bc_client_creds (
+    TYPE business_central,
+    tenant_id 'updated-tenant-id',
+    environment 'production',
+    client_id 'updated-client-id',
+    client_secret 'updated-client-secret'
+);
+
+# Verify only one secret exists with that name
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_bc_client_creds'
+----
+1
+
+# =============================================================================
+# Test: Secret Cleanup
+# =============================================================================
+
+statement ok
+DROP SECRET test_bc_client_creds;
+
+statement ok
+DROP SECRET test_bc_custom_scope;
+
+statement ok
+DROP SECRET test_bc_config;
+
+statement ok
+DROP SECRET test_bc_default_scope;
+
+statement ok
+DROP SECRET test_bc_missing_env;
+
+# Verify all test secrets are removed
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name LIKE 'test_bc_%'
+----
+0
+
+# =============================================================================
+# Test: Function Existence
+# =============================================================================
+
+# Verify bc_show_companies exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'bc_show_companies'
+----
+1
+
+# Verify bc_show_entities exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'bc_show_entities'
+----
+1
+
+# Verify bc_describe exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'bc_describe'
+----
+1
+
+# Verify bc_read exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'bc_read'
+----
+1

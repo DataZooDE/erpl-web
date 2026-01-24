@@ -22,6 +22,8 @@
 #include "delta_share_storage.hpp"
 #include "delta_share_catalog.hpp"
 #include "microsoft_entra_secret.hpp"
+#include "business_central_secret.hpp"
+#include "business_central_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -305,6 +307,18 @@ static void RegisterDeltaShareFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateDeltaShareShowTablesFunction());
 }
 
+static void RegisterBusinessCentralFunctions(ExtensionLoader &loader)
+{
+    // Register Business Central secret type
+    erpl_web::CreateBusinessCentralSecretFunctions::Register(loader);
+
+    // Register Business Central table functions
+    loader.RegisterFunction(erpl_web::CreateBcShowCompaniesFunction());
+    loader.RegisterFunction(erpl_web::CreateBcShowEntitiesFunction());
+    loader.RegisterFunction(erpl_web::CreateBcDescribeFunction());
+    loader.RegisterFunction(erpl_web::CreateBcReadFunction());
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -335,6 +349,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterSacFunctions(loader);
     RegisterOdpFunctions(loader);
     RegisterDeltaShareFunctions(loader);
+    RegisterBusinessCentralFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     
