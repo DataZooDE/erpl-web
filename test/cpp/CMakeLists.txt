@@ -31,6 +31,7 @@ set(TEST_SOURCES
     test_business_central.cpp
     test_dataverse.cpp
     test_graph_excel.cpp
+    test_graph_sharepoint.cpp
 
     test_main.cpp
 )

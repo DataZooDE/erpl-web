@@ -1,0 +1,68 @@
+# name: test/sql/graph_sharepoint.test
+# description: Test Microsoft Graph SharePoint integration functions
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Test: Function Existence (SharePoint functions use the microsoft_graph secret)
+# =============================================================================
+
+# Verify graph_show_sites exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_show_sites'
+----
+1
+
+# Verify graph_show_lists exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_show_lists'
+----
+1
+
+# Verify graph_describe_list exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_describe_list'
+----
+1
+
+# Verify graph_list_items exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_items'
+----
+1
+
+# =============================================================================
+# Test: Microsoft Graph Secret (shared with Excel - verify it still works)
+# =============================================================================
+
+# Test creating a Graph secret that SharePoint functions can use
+statement ok
+CREATE SECRET test_sp_graph_secret (
+    TYPE microsoft_graph,
+    tenant_id 'test-tenant-id-12345',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_sp_graph_secret'
+----
+1
+
+# Verify secret type
+query I
+SELECT type FROM duckdb_secrets() WHERE name = 'test_sp_graph_secret'
+----
+microsoft_graph
+
+# Cleanup
+statement ok
+DROP SECRET test_sp_graph_secret;
+
+# Verify secret was removed
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name LIKE 'test_sp_%'
+----
+0

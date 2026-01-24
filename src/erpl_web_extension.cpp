@@ -28,6 +28,7 @@
 #include "dataverse_functions.hpp"
 #include "graph_excel_secret.hpp"
 #include "graph_excel_functions.hpp"
+#include "graph_sharepoint_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -343,6 +344,12 @@ static void RegisterGraphExcelFunctions(ExtensionLoader &loader)
     erpl_web::GraphExcelFunctions::Register(loader);
 }
 
+static void RegisterGraphSharePointFunctions(ExtensionLoader &loader)
+{
+    // Register Microsoft Graph SharePoint table functions
+    erpl_web::GraphSharePointFunctions::Register(loader);
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -376,6 +383,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterBusinessCentralFunctions(loader);
     RegisterDataverseFunctions(loader);
     RegisterGraphExcelFunctions(loader);
+    RegisterGraphSharePointFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     
