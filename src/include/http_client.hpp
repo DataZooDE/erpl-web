@@ -70,6 +70,8 @@ public:
     static std::filesystem::path MergePaths(const std::filesystem::path& base_path, const std::filesystem::path& relative_path);
     static std::string ToLower(const std::string& str);
 
+    bool IsSameOrigin(const HttpUrl& other) const;
+
 private:
     std::string scheme;
     std::string host;
@@ -92,6 +94,7 @@ struct HttpParams {
 	static constexpr bool DEFAULT_FORCE_DOWNLOAD = false;
 	static constexpr bool DEFAULT_KEEP_ALIVE = true;
     static constexpr bool DEFAULT_URL_ENCODE = true;
+	static constexpr uint64_t DEFAULT_MAX_REDIRECTS = 10;
 
     HttpParams();
 
@@ -102,7 +105,14 @@ struct HttpParams {
 	bool force_download;
 	bool keep_alive;
     bool url_encode;
+	uint64_t max_redirects;
 };
+
+// Helper function to check for HTTP redirect status codes
+inline bool IsRedirectStatus(int status) {
+    return status == 301 || status == 302 || status == 303 ||
+           status == 307 || status == 308;
+}
 
 // ----------------------------------------------------------------------
 
