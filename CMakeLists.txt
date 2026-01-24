@@ -120,6 +120,7 @@ set(EXTENSION_SOURCES
     src/delta_share_scan.cpp
     src/delta_share_catalog.cpp
     src/delta_share_storage.cpp
+    src/microsoft_entra_secret.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

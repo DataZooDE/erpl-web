@@ -21,6 +21,7 @@
 #include "delta_share_scan.hpp"
 #include "delta_share_storage.hpp"
 #include "delta_share_catalog.hpp"
+#include "microsoft_entra_secret.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -235,6 +236,7 @@ static void RegisterWebFunctions(ExtensionLoader &loader)
 
     erpl::CreateBasicSecretFunctions::Register(loader);
     erpl::CreateBearerTokenSecretFunctions::Register(loader);
+    erpl_web::CreateMicrosoftEntraSecretFunctions::Register(loader);
 }
 
 static void RegisterODataFunctions(ExtensionLoader &loader)

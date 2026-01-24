@@ -1,0 +1,104 @@
+# name: test/sql/microsoft_entra.test
+# description: Test Microsoft Entra ID authentication secret management
+# group: [microsoft_entra]
+
+require erpl_web
+
+# Test 1: Create a Microsoft Entra secret with client_credentials provider
+statement ok
+CREATE SECRET test_entra_client_creds (
+    TYPE microsoft_entra,
+    tenant_id 'test-tenant-id-12345',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde',
+    scope 'https://graph.microsoft.com/.default'
+);
+
+# Verify the secret was created
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_client_creds';
+----
+test_entra_client_creds	microsoft_entra	client_credentials
+
+# Test 2: Create a Microsoft Entra secret with config provider and explicit token
+statement ok
+CREATE SECRET test_entra_config (
+    TYPE microsoft_entra,
+    PROVIDER config,
+    tenant_id 'config-tenant-id',
+    client_id 'config-client-id',
+    access_token 'pre-acquired-access-token'
+);
+
+# Verify the config secret was created
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_config';
+----
+test_entra_config	microsoft_entra	config
+
+# Test 3: Create a Microsoft Entra secret with default scope (should default to Graph API)
+statement ok
+CREATE SECRET test_entra_default_scope (
+    TYPE microsoft_entra,
+    tenant_id 'default-scope-tenant',
+    client_id 'default-scope-client',
+    client_secret 'default-scope-secret'
+);
+
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_default_scope';
+----
+test_entra_default_scope	microsoft_entra	client_credentials
+
+# Test 4: Verify required parameters - missing tenant_id should fail
+statement error
+CREATE SECRET test_entra_no_tenant (
+    TYPE microsoft_entra,
+    client_id 'some-client-id',
+    client_secret 'some-client-secret'
+);
+----
+'tenant_id' is required
+
+# Test 5: Verify required parameters - missing client_id should fail
+statement error
+CREATE SECRET test_entra_no_client_id (
+    TYPE microsoft_entra,
+    tenant_id 'some-tenant-id',
+    client_secret 'some-client-secret'
+);
+----
+'client_id' is required
+
+# Test 6: Verify required parameters - missing client_secret should fail
+statement error
+CREATE SECRET test_entra_no_client_secret (
+    TYPE microsoft_entra,
+    tenant_id 'some-tenant-id',
+    client_id 'some-client-id'
+);
+----
+'client_secret' is required
+
+# Test 7: Verify secret redaction (sensitive fields should be redacted)
+# Note: We can't easily verify redaction in SQLLogicTest, but we ensure the secret exists
+query I
+SELECT COUNT(*) FROM duckdb_secrets() WHERE type = 'microsoft_entra';
+----
+3
+
+# Cleanup
+statement ok
+DROP SECRET IF EXISTS test_entra_client_creds;
+
+statement ok
+DROP SECRET IF EXISTS test_entra_config;
+
+statement ok
+DROP SECRET IF EXISTS test_entra_default_scope;
+
+# Verify cleanup
+query I
+SELECT COUNT(*) FROM duckdb_secrets() WHERE type = 'microsoft_entra';
+----
+0
