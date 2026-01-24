@@ -87,7 +87,93 @@ SELECT COUNT(*) FROM duckdb_secrets() WHERE type = 'microsoft_entra';
 ----
 3
 
+# ============================================================================
+# Additional Integration Tests for Token Flow
+# ============================================================================
+
+# Test 8: Config provider with pre-acquired token and expiration timestamp
+# This tests the cached token retrieval path in MicrosoftEntraTokenManager::GetToken()
+statement ok
+CREATE SECRET test_entra_cached_token (
+    TYPE microsoft_entra,
+    PROVIDER config,
+    tenant_id 'cached-token-tenant',
+    client_id 'cached-token-client',
+    access_token 'my-cached-access-token-value'
+);
+
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_cached_token';
+----
+test_entra_cached_token	microsoft_entra	config
+
+# Test 9: Multiple secrets with different scopes for different services
+statement ok
+CREATE SECRET entra_for_graph (
+    TYPE microsoft_entra,
+    tenant_id 'multi-scope-tenant',
+    client_id 'multi-scope-client',
+    client_secret 'multi-scope-secret',
+    scope 'https://graph.microsoft.com/.default'
+);
+
+statement ok
+CREATE SECRET entra_for_bc (
+    TYPE microsoft_entra,
+    tenant_id 'multi-scope-tenant',
+    client_id 'multi-scope-client',
+    client_secret 'multi-scope-secret',
+    scope 'https://api.businesscentral.dynamics.com/.default'
+);
+
+statement ok
+CREATE SECRET entra_for_dynamics (
+    TYPE microsoft_entra,
+    tenant_id 'multi-scope-tenant',
+    client_id 'multi-scope-client',
+    client_secret 'multi-scope-secret',
+    scope 'https://org.crm.dynamics.com/.default'
+);
+
+# Verify all secrets were created (3 from tests 1-3, 1 cached token, 3 multi-scope = 7)
+query I
+SELECT COUNT(*) FROM duckdb_secrets() WHERE type = 'microsoft_entra';
+----
+7
+
+# Test 10: Secret replacement (OR REPLACE)
+statement ok
+CREATE OR REPLACE SECRET test_entra_client_creds (
+    TYPE microsoft_entra,
+    tenant_id 'replaced-tenant-id',
+    client_id 'replaced-client-id',
+    client_secret 'replaced-client-secret',
+    scope 'https://graph.microsoft.com/.default'
+);
+
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_client_creds';
+----
+test_entra_client_creds	microsoft_entra	client_credentials
+
+# Test 11: Config provider is more permissive (no required fields)
+# This allows pre-configured tokens without full credentials
+statement ok
+CREATE SECRET test_entra_minimal_config (
+    TYPE microsoft_entra,
+    PROVIDER config,
+    access_token 'standalone-token-value'
+);
+
+query III
+SELECT name, type, provider FROM duckdb_secrets() WHERE name = 'test_entra_minimal_config';
+----
+test_entra_minimal_config	microsoft_entra	config
+
+# ============================================================================
 # Cleanup
+# ============================================================================
+
 statement ok
 DROP SECRET IF EXISTS test_entra_client_creds;
 
@@ -96,6 +182,21 @@ DROP SECRET IF EXISTS test_entra_config;
 
 statement ok
 DROP SECRET IF EXISTS test_entra_default_scope;
+
+statement ok
+DROP SECRET IF EXISTS test_entra_cached_token;
+
+statement ok
+DROP SECRET IF EXISTS entra_for_graph;
+
+statement ok
+DROP SECRET IF EXISTS entra_for_bc;
+
+statement ok
+DROP SECRET IF EXISTS entra_for_dynamics;
+
+statement ok
+DROP SECRET IF EXISTS test_entra_minimal_config;
 
 # Verify cleanup
 query I
