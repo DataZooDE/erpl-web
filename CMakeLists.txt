@@ -124,6 +124,9 @@ set(EXTENSION_SOURCES
     src/business_central_secret.cpp
     src/business_central_client.cpp
     src/business_central_functions.cpp
+    src/dataverse_secret.cpp
+    src/dataverse_client.cpp
+    src/dataverse_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

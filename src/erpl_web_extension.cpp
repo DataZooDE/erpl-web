@@ -24,6 +24,8 @@
 #include "microsoft_entra_secret.hpp"
 #include "business_central_secret.hpp"
 #include "business_central_functions.hpp"
+#include "dataverse_secret.hpp"
+#include "dataverse_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -319,6 +321,17 @@ static void RegisterBusinessCentralFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateBcReadFunction());
 }
 
+static void RegisterDataverseFunctions(ExtensionLoader &loader)
+{
+    // Register Dataverse/CRM secret type
+    erpl_web::CreateDataverseSecretFunctions::Register(loader);
+
+    // Register Dataverse/CRM table functions
+    loader.RegisterFunction(erpl_web::CreateCrmShowEntitiesFunction());
+    loader.RegisterFunction(erpl_web::CreateCrmDescribeFunction());
+    loader.RegisterFunction(erpl_web::CreateCrmReadFunction());
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -350,6 +363,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterOdpFunctions(loader);
     RegisterDeltaShareFunctions(loader);
     RegisterBusinessCentralFunctions(loader);
+    RegisterDataverseFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     

@@ -29,6 +29,7 @@ set(TEST_SOURCES
     test_datasphere_asset_consumption.cpp
     test_microsoft_entra_auth.cpp
     test_business_central.cpp
+    test_dataverse.cpp
 
     test_main.cpp
 )

@@ -1,0 +1,215 @@
+# name: test/sql/dataverse.test
+# description: Test Dataverse/CRM integration functions and secret management
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Test: Dataverse Secret Creation (client_credentials provider)
+# =============================================================================
+
+# Test creating a Dataverse secret with all required parameters
+statement ok
+CREATE SECRET test_dataverse_client_creds (
+    TYPE dataverse,
+    tenant_id 'test-tenant-id-12345',
+    environment_url 'https://myorg.crm.dynamics.com',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_dataverse_client_creds'
+----
+1
+
+# Verify secret type
+query I
+SELECT type FROM duckdb_secrets() WHERE name = 'test_dataverse_client_creds'
+----
+dataverse
+
+# =============================================================================
+# Test: Dataverse Secret with Custom Scope
+# =============================================================================
+
+statement ok
+CREATE SECRET test_dataverse_custom_scope (
+    TYPE dataverse,
+    tenant_id 'test-tenant-id-12345',
+    environment_url 'https://myorg.crm.dynamics.com',
+    client_id 'test-client-id-67890',
+    client_secret 'test-client-secret-abcde',
+    scope 'https://myorg.crm.dynamics.com/.default'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_dataverse_custom_scope'
+----
+1
+
+# =============================================================================
+# Test: Dataverse Secret with Config Provider
+# =============================================================================
+
+statement ok
+CREATE SECRET test_dataverse_config (
+    TYPE dataverse,
+    PROVIDER config,
+    tenant_id 'test-tenant-id-12345',
+    environment_url 'https://myorg.crm.dynamics.com',
+    access_token 'pre-acquired-access-token-xyz',
+    expires_at '2099-12-31T23:59:59Z'
+);
+
+# Verify secret was created
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_dataverse_config'
+----
+1
+
+# =============================================================================
+# Test: Dataverse Secret Validation - Missing Required Parameters
+# =============================================================================
+
+# Missing tenant_id
+statement error
+CREATE SECRET test_dataverse_missing_tenant (
+    TYPE dataverse,
+    environment_url 'https://myorg.crm.dynamics.com',
+    client_id 'test-client-id',
+    client_secret 'test-secret'
+);
+----
+tenant_id
+
+# Missing environment_url
+statement error
+CREATE SECRET test_dataverse_missing_url (
+    TYPE dataverse,
+    tenant_id 'test-tenant-id',
+    client_id 'test-client-id',
+    client_secret 'test-secret'
+);
+----
+environment_url
+
+# Missing client_id (client_credentials provider)
+statement error
+CREATE SECRET test_dataverse_missing_client (
+    TYPE dataverse,
+    tenant_id 'test-tenant-id',
+    environment_url 'https://myorg.crm.dynamics.com',
+    client_secret 'test-secret'
+);
+----
+client_id
+
+# Missing client_secret (client_credentials provider)
+statement error
+CREATE SECRET test_dataverse_missing_secret (
+    TYPE dataverse,
+    tenant_id 'test-tenant-id',
+    environment_url 'https://myorg.crm.dynamics.com',
+    client_id 'test-client-id'
+);
+----
+client_secret
+
+# =============================================================================
+# Test: Dataverse Secret with Different Region URLs
+# =============================================================================
+
+# US region
+statement ok
+CREATE SECRET test_dataverse_us (
+    TYPE dataverse,
+    tenant_id 'test-tenant',
+    environment_url 'https://contoso.crm.dynamics.com',
+    client_id 'client-id',
+    client_secret 'client-secret'
+);
+
+# Europe region
+statement ok
+CREATE SECRET test_dataverse_eu (
+    TYPE dataverse,
+    tenant_id 'test-tenant',
+    environment_url 'https://contoso.crm4.dynamics.com',
+    client_id 'client-id',
+    client_secret 'client-secret'
+);
+
+# Verify all secrets created (5 total)
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name LIKE 'test_dataverse_%'
+----
+5
+
+# =============================================================================
+# Test: Secret Replacement (OR REPLACE)
+# =============================================================================
+
+statement ok
+CREATE OR REPLACE SECRET test_dataverse_client_creds (
+    TYPE dataverse,
+    tenant_id 'updated-tenant-id',
+    environment_url 'https://updated-org.crm.dynamics.com',
+    client_id 'updated-client-id',
+    client_secret 'updated-client-secret'
+);
+
+# Verify only one secret exists with that name
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_dataverse_client_creds'
+----
+1
+
+# =============================================================================
+# Test: Secret Cleanup
+# =============================================================================
+
+statement ok
+DROP SECRET test_dataverse_client_creds;
+
+statement ok
+DROP SECRET test_dataverse_custom_scope;
+
+statement ok
+DROP SECRET test_dataverse_config;
+
+statement ok
+DROP SECRET test_dataverse_us;
+
+statement ok
+DROP SECRET test_dataverse_eu;
+
+# Verify all test secrets are removed
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name LIKE 'test_dataverse_%'
+----
+0
+
+# =============================================================================
+# Test: Function Existence
+# =============================================================================
+
+# Verify crm_show_entities exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'crm_show_entities'
+----
+1
+
+# Verify crm_describe exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'crm_describe'
+----
+1
+
+# Verify crm_read exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'crm_read'
+----
+1
