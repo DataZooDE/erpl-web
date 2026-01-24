@@ -1,0 +1,27 @@
+# name: test/sql/graph_planner.test
+# description: Test Microsoft Graph Planner integration functions
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Test: Function Existence
+# =============================================================================
+
+# Verify graph_planner_plans exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_plans'
+----
+1
+
+# Verify graph_planner_buckets exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_buckets'
+----
+1
+
+# Verify graph_planner_tasks exists
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_tasks'
+----
+1
