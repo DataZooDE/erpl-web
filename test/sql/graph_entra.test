@@ -1,0 +1,21 @@
+# name: test/sql/graph_entra.test
+# description: Test Microsoft Graph Entra ID Directory functions
+# group: [erpl_web]
+
+require erpl_web
+
+# Test that graph_users function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_users';
+
+# Test that graph_groups function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_groups';
+
+# Test that graph_devices function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_devices';
+
+# Test that graph_signin_logs function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_signin_logs';

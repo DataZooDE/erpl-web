@@ -136,6 +136,8 @@ set(EXTENSION_SOURCES
     src/graph_planner_functions.cpp
     src/graph_outlook_client.cpp
     src/graph_outlook_functions.cpp
+    src/graph_entra_client.cpp
+    src/graph_entra_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

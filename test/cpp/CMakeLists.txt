@@ -34,6 +34,7 @@ set(TEST_SOURCES
     test_graph_sharepoint.cpp
     test_graph_planner.cpp
     test_graph_outlook.cpp
+    test_graph_entra.cpp
 
     test_main.cpp
 )

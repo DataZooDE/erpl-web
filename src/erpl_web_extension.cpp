@@ -31,6 +31,7 @@
 #include "graph_sharepoint_functions.hpp"
 #include "graph_planner_functions.hpp"
 #include "graph_outlook_functions.hpp"
+#include "graph_entra_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -364,6 +365,12 @@ static void RegisterGraphOutlookFunctions(ExtensionLoader &loader)
     erpl_web::GraphOutlookFunctions::Register(loader);
 }
 
+static void RegisterGraphEntraFunctions(ExtensionLoader &loader)
+{
+    // Register Microsoft Graph Entra ID Directory table functions
+    erpl_web::GraphEntraFunctions::Register(loader);
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -400,6 +407,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterGraphSharePointFunctions(loader);
     RegisterGraphPlannerFunctions(loader);
     RegisterGraphOutlookFunctions(loader);
+    RegisterGraphEntraFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     
