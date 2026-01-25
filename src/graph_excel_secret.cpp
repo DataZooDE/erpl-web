@@ -1,6 +1,8 @@
 #include "graph_excel_secret.hpp"
+#include "oauth2_flow_v2.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include <chrono>
 
 namespace erpl_web {
 
@@ -34,9 +36,18 @@ void CreateGraphSecretFunctions::Register(duckdb::ExtensionLoader &loader) {
     config_function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(config_function);
 
+    // Register the authorization_code provider (interactive browser login)
+    duckdb::CreateSecretFunction auth_code_function = {type, "authorization_code", CreateFromAuthorizationCode, {}};
+    auth_code_function.named_parameters["tenant_id"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    auth_code_function.named_parameters["client_id"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    auth_code_function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    auth_code_function.named_parameters["redirect_uri"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    RegisterCommonSecretParameters(auth_code_function);
+
     loader.RegisterSecretType(secret_type);
     loader.RegisterFunction(client_creds_function);
     loader.RegisterFunction(config_function);
+    loader.RegisterFunction(auth_code_function);
 
     ERPL_TRACE_INFO("GRAPH_SECRET", "Successfully registered Microsoft Graph secret functions");
 }
@@ -127,6 +138,95 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromCon
     RedactCommonKeys(*result);
 
     ERPL_TRACE_INFO("GRAPH_SECRET", "Successfully created Microsoft Graph config secret");
+    return std::move(result);
+}
+
+duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAuthorizationCode(
+    duckdb::ClientContext &context,
+    duckdb::CreateSecretInput &input) {
+
+    ERPL_TRACE_DEBUG("GRAPH_SECRET", "Creating Microsoft Graph secret with authorization_code provider (interactive login)");
+
+    auto scope = input.scope;
+    auto result = duckdb::make_uniq<duckdb::KeyValueSecret>(scope, input.type, input.provider, input.name);
+
+    // Get required parameters
+    auto tenant_id_val = input.options.find("tenant_id");
+    auto client_id_val = input.options.find("client_id");
+    auto scope_val = input.options.find("scope");
+    auto redirect_uri_val = input.options.find("redirect_uri");
+
+    if (tenant_id_val == input.options.end()) {
+        throw duckdb::InvalidInputException("'tenant_id' is required for Microsoft Graph authorization_code flow");
+    }
+    if (client_id_val == input.options.end()) {
+        throw duckdb::InvalidInputException("'client_id' is required for Microsoft Graph authorization_code flow");
+    }
+
+    std::string tenant_id = tenant_id_val->second.ToString();
+    std::string client_id = client_id_val->second.ToString();
+
+    // Default scopes for delegated access (user permissions)
+    std::string scopes = (scope_val != input.options.end())
+        ? scope_val->second.ToString()
+        : "openid profile offline_access User.Read Files.Read.All Mail.Read Calendars.Read Contacts.Read Team.ReadBasic.All Channel.ReadBasic.All";
+
+    // Default redirect URI
+    std::string redirect_uri = (redirect_uri_val != input.options.end())
+        ? redirect_uri_val->second.ToString()
+        : "http://localhost:8080/callback";
+
+    // Build Microsoft Entra ID OAuth2 URLs
+    std::string auth_url = "https://login.microsoftonline.com/" + tenant_id + "/oauth2/v2.0/authorize";
+    std::string token_url = "https://login.microsoftonline.com/" + tenant_id + "/oauth2/v2.0/token";
+
+    ERPL_TRACE_INFO("GRAPH_SECRET", "Starting interactive OAuth2 login for Microsoft Graph");
+    ERPL_TRACE_DEBUG("GRAPH_SECRET", "Authorization URL: " + auth_url);
+    ERPL_TRACE_DEBUG("GRAPH_SECRET", "Token URL: " + token_url);
+
+    // Configure OAuth2 flow with custom Microsoft URLs
+    OAuth2Config config;
+    config.client_id = client_id;
+    config.client_secret = "";  // No client secret for public client (authorization_code with PKCE)
+    config.scope = scopes;
+    config.redirect_uri = redirect_uri;
+    config.authorization_flow = GrantType::authorization_code;
+    config.custom_client = true;  // Use port 8080
+    config.custom_auth_url = auth_url;
+    config.custom_token_url = token_url;
+
+    // Execute interactive OAuth2 flow (opens browser)
+    OAuth2FlowV2 oauth2_flow;
+    OAuth2Tokens tokens = oauth2_flow.ExecuteFlow(config);
+
+    if (tokens.access_token.empty()) {
+        throw duckdb::InvalidInputException("Failed to acquire access token via interactive login");
+    }
+
+    ERPL_TRACE_INFO("GRAPH_SECRET", "Successfully acquired tokens via interactive login");
+
+    // Store parameters in secret
+    result->secret_map["tenant_id"] = duckdb::Value(tenant_id);
+    result->secret_map["client_id"] = duckdb::Value(client_id);
+    result->secret_map["scope"] = duckdb::Value(scopes);
+    result->secret_map["access_token"] = duckdb::Value(tokens.access_token);
+
+    if (!tokens.refresh_token.empty()) {
+        result->secret_map["refresh_token"] = duckdb::Value(tokens.refresh_token);
+    }
+
+    // Store expiration as Unix timestamp
+    if (tokens.expires_after > 0) {
+        result->secret_map["expires_at"] = duckdb::Value(std::to_string(tokens.expires_after));
+    }
+
+    // Store grant type for token refresh
+    result->secret_map["grant_type"] = duckdb::Value("authorization_code");
+
+    // Redact sensitive keys
+    RedactCommonKeys(*result);
+
+    ERPL_TRACE_INFO("GRAPH_SECRET", "Successfully created Microsoft Graph secret with delegated tokens");
     return std::move(result);
 }
 

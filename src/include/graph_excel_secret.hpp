@@ -24,6 +24,10 @@ private:
         duckdb::ClientContext &context,
         duckdb::CreateSecretInput &input);
 
+    static duckdb::unique_ptr<duckdb::BaseSecret> CreateFromAuthorizationCode(
+        duckdb::ClientContext &context,
+        duckdb::CreateSecretInput &input);
+
     static void RegisterCommonSecretParameters(duckdb::CreateSecretFunction &function);
     static void RedactCommonKeys(duckdb::KeyValueSecret &result);
 };

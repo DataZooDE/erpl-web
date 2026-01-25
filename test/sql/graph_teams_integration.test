@@ -1,16 +1,44 @@
 # name: test/sql/graph_teams_integration.test
 # description: Integration tests for Microsoft Graph Teams
 # group: [erpl_web]
-# note: Teams functions require delegated authentication (authorization_code flow)
-#       These tests verify function registration only - schema tests require delegated auth
+# note: Teams functions require delegated authentication
+#       Run ./scripts/acquire_graph_token.sh to get delegated tokens
 
 require erpl_web
 
-# Test: graph_my_teams function exists
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
+
+require-env ERPL_MS_DELEGATED_EXPIRES_AT
+
+# Create secret with delegated (user) credentials
+statement ok
+CREATE SECRET ms_graph_teams_test (
+    TYPE microsoft_graph,
+    PROVIDER config,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    access_token '${ERPL_MS_DELEGATED_ACCESS_TOKEN}',
+    expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
+);
+
+# Test: graph_my_teams returns data (may be empty if user has no teams)
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_my_teams';
+SELECT COUNT(*) >= 0 FROM graph_my_teams('ms_graph_teams_test');
 ----
-1
+true
+
+# Test: graph_my_teams has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_my_teams('ms_graph_teams_test'))
+    WHERE column_name IN ('id', 'display_name', 'description', 'web_url')
+);
+----
+4
 
 # Test: graph_team_channels function exists
 query I
@@ -29,3 +57,7 @@ query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_channel_messages';
 ----
 1
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_teams_test;

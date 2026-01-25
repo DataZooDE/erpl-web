@@ -18,7 +18,7 @@ enum class OAuth2ClientType {
     custom
 };
 
-// OAuth2 configuration structure (matching SAP CLI exactly)
+// OAuth2 configuration structure (supports SAP and Microsoft identity platforms)
 struct OAuth2Config {
     std::string tenant_name;
     std::string data_center;
@@ -28,17 +28,23 @@ struct OAuth2Config {
     std::string redirect_uri;
     GrantType authorization_flow;
     bool custom_client;          // Whether this is a custom OAuth client
-    
+
+    // Custom URL overrides (for non-SAP identity providers like Microsoft Entra)
+    std::string custom_auth_url;   // If set, overrides GetAuthorizationUrl()
+    std::string custom_token_url;  // If set, overrides GetTokenUrl()
+
     // Constructor to properly initialize fields
-    OAuth2Config() : 
-        tenant_name(""), 
-        data_center(""), 
-        client_id(""), 
-        client_secret(""), 
-        scope(""), 
-        redirect_uri(""), 
-        authorization_flow(GrantType::authorization_code), 
-        custom_client(false) {}
+    OAuth2Config() :
+        tenant_name(""),
+        data_center(""),
+        client_id(""),
+        client_secret(""),
+        scope(""),
+        redirect_uri(""),
+        authorization_flow(GrantType::authorization_code),
+        custom_client(false),
+        custom_auth_url(""),
+        custom_token_url("") {}
     
     // Get authorization URL
     std::string GetAuthorizationUrl() const;

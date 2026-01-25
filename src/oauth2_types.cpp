@@ -8,11 +8,21 @@
 namespace erpl_web {
 
 std::string OAuth2Config::GetAuthorizationUrl() const {
+    // Use custom URL if provided (for Microsoft Entra, etc.)
+    if (!custom_auth_url.empty()) {
+        return custom_auth_url;
+    }
+    // Default: SAP BTP URL format
     std::string base_url = "https://" + tenant_name + ".authentication." + data_center + ".hana.ondemand.com/oauth/authorize";
     return base_url;
 }
 
 std::string OAuth2Config::GetTokenUrl() const {
+    // Use custom URL if provided (for Microsoft Entra, etc.)
+    if (!custom_token_url.empty()) {
+        return custom_token_url;
+    }
+    // Default: SAP BTP URL format
     std::string base_url = "https://" + tenant_name + ".authentication." + data_center + ".hana.ondemand.com/oauth/token";
     return base_url;
 }
