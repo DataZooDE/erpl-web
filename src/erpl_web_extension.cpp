@@ -32,6 +32,7 @@
 #include "graph_planner_functions.hpp"
 #include "graph_outlook_functions.hpp"
 #include "graph_entra_functions.hpp"
+#include "graph_teams_functions.hpp"
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
@@ -371,6 +372,12 @@ static void RegisterGraphEntraFunctions(ExtensionLoader &loader)
     erpl_web::GraphEntraFunctions::Register(loader);
 }
 
+static void RegisterGraphTeamsFunctions(ExtensionLoader &loader)
+{
+    // Register Microsoft Graph Teams table functions
+    erpl_web::GraphTeamsFunctions::Register(loader);
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
     // Register tracing pragma functions
@@ -408,6 +415,7 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterGraphPlannerFunctions(loader);
     RegisterGraphOutlookFunctions(loader);
     RegisterGraphEntraFunctions(loader);
+    RegisterGraphTeamsFunctions(loader);
     RegisterTracingPragmas(loader);
 }
     

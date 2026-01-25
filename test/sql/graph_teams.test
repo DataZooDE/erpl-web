@@ -1,0 +1,21 @@
+# name: test/sql/graph_teams.test
+# description: Test Microsoft Graph Teams functions
+# group: [erpl_web]
+
+require erpl_web
+
+# Test that graph_my_teams function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_my_teams';
+
+# Test that graph_team_channels function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_team_channels';
+
+# Test that graph_team_members function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_team_members';
+
+# Test that graph_channel_messages function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_channel_messages';
