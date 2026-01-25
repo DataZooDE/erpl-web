@@ -40,6 +40,7 @@ void CreateGraphSecretFunctions::Register(duckdb::ExtensionLoader &loader) {
     duckdb::CreateSecretFunction auth_code_function = {type, "authorization_code", CreateFromAuthorizationCode, {}};
     auth_code_function.named_parameters["tenant_id"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     auth_code_function.named_parameters["client_id"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    auth_code_function.named_parameters["client_secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     auth_code_function.named_parameters["scope"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     auth_code_function.named_parameters["redirect_uri"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     RegisterCommonSecretParameters(auth_code_function);
@@ -153,6 +154,7 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
     // Get required parameters
     auto tenant_id_val = input.options.find("tenant_id");
     auto client_id_val = input.options.find("client_id");
+    auto client_secret_val = input.options.find("client_secret");
     auto scope_val = input.options.find("scope");
     auto redirect_uri_val = input.options.find("redirect_uri");
 
@@ -165,6 +167,9 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
 
     std::string tenant_id = tenant_id_val->second.ToString();
     std::string client_id = client_id_val->second.ToString();
+    std::string client_secret = (client_secret_val != input.options.end())
+        ? client_secret_val->second.ToString()
+        : "";
 
     // Default scopes for delegated access (user permissions)
     std::string scopes = (scope_val != input.options.end())
@@ -187,11 +192,11 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
     // Configure OAuth2 flow with custom Microsoft URLs
     OAuth2Config config;
     config.client_id = client_id;
-    config.client_secret = "";  // No client secret for public client (authorization_code with PKCE)
+    config.client_secret = client_secret;  // Required for confidential clients (web apps)
     config.scope = scopes;
     config.redirect_uri = redirect_uri;
     config.authorization_flow = GrantType::authorization_code;
-    config.custom_client = true;  // Use port 8080
+    config.custom_client = true;  // Use port 8080 and include client credentials in token exchange
     config.custom_auth_url = auth_url;
     config.custom_token_url = token_url;
 
@@ -208,6 +213,9 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
     // Store parameters in secret
     result->secret_map["tenant_id"] = duckdb::Value(tenant_id);
     result->secret_map["client_id"] = duckdb::Value(client_id);
+    if (!client_secret.empty()) {
+        result->secret_map["client_secret"] = duckdb::Value(client_secret);
+    }
     result->secret_map["scope"] = duckdb::Value(scopes);
     result->secret_map["access_token"] = duckdb::Value(tokens.access_token);
 

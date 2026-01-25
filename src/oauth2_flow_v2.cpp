@@ -100,9 +100,26 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     
     // Wait for authorization code with timeout
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Waiting for authorization code");
-    
+
+    // Extract port from redirect_uri (e.g., "http://localhost:8080/callback" -> 8080)
+    int callback_port = config.GetDefaultPort();
+    size_t port_start = config.redirect_uri.find("localhost:");
+    if (port_start != std::string::npos) {
+        port_start += 10; // length of "localhost:"
+        size_t port_end = config.redirect_uri.find_first_of("/?", port_start);
+        std::string port_str = (port_end != std::string::npos)
+            ? config.redirect_uri.substr(port_start, port_end - port_start)
+            : config.redirect_uri.substr(port_start);
+        try {
+            callback_port = std::stoi(port_str);
+        } catch (...) {
+            // Use default port if parsing fails
+        }
+    }
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using callback port: " + std::to_string(callback_port));
+
     try {
-        std::string auth_code = server_->StartAndWaitForCode(state, 0);
+        std::string auth_code = server_->StartAndWaitForCode(state, callback_port);
         ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code: " + auth_code.substr(0, 10) + "...");
         ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Authorization successful, received authorization code");
         return auth_code;
@@ -361,9 +378,9 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
     const OAuth2Config& config,
     const std::string& code_challenge,
     const std::string& state) {
-    
+
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Building authorization URL");
-    
+
     std::ostringstream auth_url;
     auth_url << config.GetAuthorizationUrl()
              << "?response_type=code"
@@ -372,7 +389,12 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
              << "&state=" << UrlEncode(state)
              << "&code_challenge=" << UrlEncode(code_challenge)
              << "&code_challenge_method=S256";
-    
+
+    // Add scope if provided (required by Microsoft Entra ID)
+    if (!config.scope.empty()) {
+        auth_url << "&scope=" << UrlEncode(config.scope);
+    }
+
     std::string url = auth_url.str();
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Built authorization URL: " + url);
     return url;

@@ -73,9 +73,9 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     
     // Create httplib server instance
     server_instance_ = std::make_unique<duckdb_httplib_openssl::Server>();
-    
-    // Set up OAuth callback route
-    server_instance_->Get("/", [this](const duckdb_httplib_openssl::Request& req, duckdb_httplib_openssl::Response& res) {
+
+    // Lambda to handle OAuth callbacks (used for both "/" and "/callback" routes)
+    auto oauth_handler = [this](const duckdb_httplib_openssl::Request& req, duckdb_httplib_openssl::Response& res) {
         ERPL_TRACE_DEBUG("OAUTH2_SERVER", std::string("Received HTTP request: ") + req.path);
         
         // Check for authorization code
@@ -218,8 +218,13 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
                 "text/html"
             );
         }
-    });
-    
+    };
+
+    // Register handler for both "/" and "/callback" routes
+    // (Microsoft Entra uses /callback, SAP uses /)
+    server_instance_->Get("/", oauth_handler);
+    server_instance_->Get("/callback", oauth_handler);
+
     // Start server in main thread (httplib handles requests in its own threads)
     ERPL_TRACE_INFO("OAUTH2_SERVER", "Starting server on port " + std::to_string(port));
     
