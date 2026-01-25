@@ -134,6 +134,8 @@ set(EXTENSION_SOURCES
     src/graph_sharepoint_functions.cpp
     src/graph_planner_client.cpp
     src/graph_planner_functions.cpp
+    src/graph_outlook_client.cpp
+    src/graph_outlook_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

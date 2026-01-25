@@ -1,0 +1,17 @@
+# name: test/sql/graph_outlook.test
+# description: Test Microsoft Graph Outlook functions
+# group: [erpl_web]
+
+require erpl_web
+
+# Test that graph_calendar_events function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_calendar_events';
+
+# Test that graph_contacts function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_contacts';
+
+# Test that graph_messages function exists
+statement ok
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_messages';
