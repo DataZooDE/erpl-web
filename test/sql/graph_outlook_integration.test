@@ -1,7 +1,8 @@
 # name: test/sql/graph_outlook_integration.test
 # description: Integration tests for Microsoft Graph Outlook
 # group: [erpl_web]
-# note: Outlook functions use /me endpoint but can be described with application auth
+# note: Outlook functions require delegated authentication
+#       Use authorization_code provider or set ERPL_MS_DELEGATED_ACCESS_TOKEN
 
 require erpl_web
 
@@ -9,23 +10,26 @@ require-env ERPL_MS_TENANT_ID
 
 require-env ERPL_MS_CLIENT_ID
 
-require-env ERPL_MS_CLIENT_SECRET
+require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
 
-# Create secret for schema validation
+require-env ERPL_MS_DELEGATED_EXPIRES_AT
+
+# Create secret with delegated (user) credentials
 statement ok
 CREATE SECRET ms_graph_outlook_test (
     TYPE microsoft_graph,
-    PROVIDER client_credentials,
+    PROVIDER config,
     tenant_id '${ERPL_MS_TENANT_ID}',
     client_id '${ERPL_MS_CLIENT_ID}',
-    client_secret '${ERPL_MS_CLIENT_SECRET}'
+    access_token '${ERPL_MS_DELEGATED_ACCESS_TOKEN}',
+    expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
 );
 
-# Test: graph_calendar_events function exists
+# Test: graph_calendar_events returns data (may be empty)
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_calendar_events';
+SELECT COUNT(*) >= 0 FROM graph_calendar_events('ms_graph_outlook_test');
 ----
-1
+true
 
 # Test: graph_calendar_events has expected columns
 query I
@@ -36,11 +40,11 @@ SELECT COUNT(*) FROM (
 ----
 10
 
-# Test: graph_contacts function exists
+# Test: graph_contacts returns data (may be empty)
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_contacts';
+SELECT COUNT(*) >= 0 FROM graph_contacts('ms_graph_outlook_test');
 ----
-1
+true
 
 # Test: graph_contacts has expected columns
 query I
@@ -51,11 +55,11 @@ SELECT COUNT(*) FROM (
 ----
 9
 
-# Test: graph_messages function exists
+# Test: graph_messages returns data (may be empty)
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_messages';
+SELECT COUNT(*) >= 0 FROM graph_messages('ms_graph_outlook_test');
 ----
-1
+true
 
 # Test: graph_messages has expected columns
 query I

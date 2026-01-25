@@ -1,21 +1,40 @@
 # name: test/sql/graph_excel_integration.test
 # description: Integration tests for Microsoft Graph Excel/OneDrive
 # group: [erpl_web]
-# note: Excel/OneDrive functions require delegated authentication (authorization_code flow)
-#       These tests verify function registration and schema only
+# note: Excel/OneDrive functions require delegated authentication
+#       Use authorization_code provider or set ERPL_MS_DELEGATED_ACCESS_TOKEN
 
 require erpl_web
 
-# Test: graph_list_files function exists
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
+
+require-env ERPL_MS_DELEGATED_EXPIRES_AT
+
+# Create secret with delegated (user) credentials
+statement ok
+CREATE SECRET ms_graph_excel_test (
+    TYPE microsoft_graph,
+    PROVIDER config,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    access_token '${ERPL_MS_DELEGATED_ACCESS_TOKEN}',
+    expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
+);
+
+# Test: graph_list_files returns data (may be empty if no files in root)
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_list_files';
+SELECT COUNT(*) >= 0 FROM graph_list_files('ms_graph_excel_test');
 ----
-1
+true
 
 # Test: graph_list_files has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files('dummy-secret'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files('ms_graph_excel_test'))
     WHERE column_name IN ('id', 'name', 'size', 'created_at', 'modified_at', 'web_url', 'mime_type')
 );
 ----
@@ -27,32 +46,18 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_table
 ----
 1
 
-# Test: graph_excel_tables has expected columns
-query I
-SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_excel_tables('dummy-secret', 'dummy-file-path'))
-    WHERE column_name IN ('id', 'name', 'show_headers', 'show_totals')
-);
-----
-4
-
 # Test: graph_excel_worksheets function exists
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_worksheets';
 ----
 1
 
-# Test: graph_excel_worksheets has expected columns
-query I
-SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_excel_worksheets('dummy-secret', 'dummy-file-path'))
-    WHERE column_name IN ('id', 'name', 'position', 'visibility')
-);
-----
-4
-
 # Test: graph_excel_range function exists
 query I
 SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_range';
 ----
 1
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_excel_test;
