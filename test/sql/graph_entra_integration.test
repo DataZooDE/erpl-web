@@ -22,14 +22,14 @@ CREATE SECRET ms_graph_entra_test (
 
 # Test: graph_users returns data
 query I
-SELECT COUNT(*) > 0 FROM graph_users('ms_graph_entra_test');
+SELECT COUNT(*) > 0 FROM graph_users();
 ----
 true
 
 # Test: graph_users has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_users('ms_graph_entra_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_users())
     WHERE column_name IN ('id', 'display_name', 'user_principal_name', 'mail', 'job_title', 'department', 'account_enabled')
 );
 ----
@@ -37,20 +37,20 @@ SELECT COUNT(*) FROM (
 
 # Test: users have non-empty id and display_name
 query I
-SELECT COUNT(*) = 0 FROM graph_users('ms_graph_entra_test') WHERE id IS NULL OR id = '';
+SELECT COUNT(*) = 0 FROM graph_users() WHERE id IS NULL OR id = '';
 ----
 true
 
 # Test: graph_groups returns data
 query I
-SELECT COUNT(*) > 0 FROM graph_groups('ms_graph_entra_test');
+SELECT COUNT(*) > 0 FROM graph_groups();
 ----
 true
 
 # Test: graph_groups has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_groups('ms_graph_entra_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_groups())
     WHERE column_name IN ('id', 'display_name', 'description', 'mail', 'mail_enabled', 'security_enabled')
 );
 ----
@@ -58,20 +58,20 @@ SELECT COUNT(*) FROM (
 
 # Test: groups have non-empty id
 query I
-SELECT COUNT(*) = 0 FROM graph_groups('ms_graph_entra_test') WHERE id IS NULL OR id = '';
+SELECT COUNT(*) = 0 FROM graph_groups() WHERE id IS NULL OR id = '';
 ----
 true
 
 # Test: graph_devices can be called (may return 0 rows if no devices)
 query I
-SELECT COUNT(*) >= 0 FROM graph_devices('ms_graph_entra_test');
+SELECT COUNT(*) >= 0 FROM graph_devices();
 ----
 true
 
 # Test: graph_devices has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_devices('ms_graph_entra_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_devices())
     WHERE column_name IN ('id', 'display_name', 'operating_system', 'os_version', 'trust_type', 'account_enabled')
 );
 ----

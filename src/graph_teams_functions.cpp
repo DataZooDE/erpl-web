@@ -87,10 +87,12 @@ unique_ptr<FunctionData> GraphTeamsFunctions::MyTeamsBind(
 
     auto bind_data = make_uniq<GraphMyTeamsBindData>();
 
-    if (input.inputs.empty()) {
-        throw BinderException("graph_my_teams requires a secret name parameter");
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -175,11 +177,18 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
 
     auto bind_data = make_uniq<GraphTeamChannelsBindData>();
 
-    if (input.inputs.size() < 2) {
-        throw BinderException("graph_team_channels requires secret_name and team_id parameters");
+    // team_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_team_channels requires a team_id parameter");
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->team_id = input.inputs[1].GetValue<std::string>();
+    bind_data->team_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -264,11 +273,18 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
 
     auto bind_data = make_uniq<GraphTeamMembersBindData>();
 
-    if (input.inputs.size() < 2) {
-        throw BinderException("graph_team_members requires secret_name and team_id parameters");
+    // team_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_team_members requires a team_id parameter");
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->team_id = input.inputs[1].GetValue<std::string>();
+    bind_data->team_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -365,12 +381,19 @@ unique_ptr<FunctionData> GraphTeamsFunctions::ChannelMessagesBind(
 
     auto bind_data = make_uniq<GraphChannelMessagesBindData>();
 
-    if (input.inputs.size() < 3) {
-        throw BinderException("graph_channel_messages requires secret_name, team_id, and channel_id parameters");
+    // team_id and channel_id are required positional parameters
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_channel_messages requires team_id and channel_id parameters");
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->team_id = input.inputs[1].GetValue<std::string>();
-    bind_data->channel_id = input.inputs[2].GetValue<std::string>();
+    bind_data->team_id = input.inputs[0].GetValue<std::string>();
+    bind_data->channel_id = input.inputs[1].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -471,20 +494,24 @@ void GraphTeamsFunctions::ChannelMessagesScan(
 // =============================================================================
 
 void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
-    // graph_my_teams
-    TableFunction my_teams_func("graph_my_teams", {LogicalType::VARCHAR}, MyTeamsScan, MyTeamsBind);
+    // graph_my_teams - no required params, optional secret named param
+    TableFunction my_teams_func("graph_my_teams", {}, MyTeamsScan, MyTeamsBind);
+    my_teams_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(my_teams_func);
 
-    // graph_team_channels
-    TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR, LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
+    // graph_team_channels(team_id) - optional secret named param
+    TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
+    team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(team_channels_func);
 
-    // graph_team_members
-    TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR, LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
+    // graph_team_members(team_id) - optional secret named param
+    TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
+    team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(team_members_func);
 
-    // graph_channel_messages
-    TableFunction channel_messages_func("graph_channel_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, ChannelMessagesScan, ChannelMessagesBind);
+    // graph_channel_messages(team_id, channel_id) - optional secret named param
+    TableFunction channel_messages_func("graph_channel_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ChannelMessagesScan, ChannelMessagesBind);
+    channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(channel_messages_func);
 }
 

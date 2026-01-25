@@ -44,7 +44,13 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarEventsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<CalendarEventsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema for calendar events
     names = {"id", "subject", "body_preview", "start_time", "end_time", "location",
@@ -185,7 +191,13 @@ unique_ptr<FunctionData> GraphOutlookFunctions::ContactsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ContactsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema for contacts
     names = {"id", "display_name", "given_name", "surname", "email", "mobile_phone",
@@ -318,7 +330,13 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<MessagesBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema for messages (metadata only, no body content)
     names = {"id", "subject", "body_preview", "from_name", "from_email",
@@ -452,19 +470,22 @@ void GraphOutlookFunctions::MessagesScan(
 void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_OUTLOOK", "Registering Microsoft Graph Outlook functions");
 
-    // graph_calendar_events(secret_name)
-    TableFunction calendar_events("graph_calendar_events", {LogicalType::VARCHAR},
+    // graph_calendar_events - no required params, optional secret named param
+    TableFunction calendar_events("graph_calendar_events", {},
                                   CalendarEventsScan, CalendarEventsBind);
+    calendar_events.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(calendar_events);
 
-    // graph_contacts(secret_name)
-    TableFunction contacts("graph_contacts", {LogicalType::VARCHAR},
+    // graph_contacts - no required params, optional secret named param
+    TableFunction contacts("graph_contacts", {},
                            ContactsScan, ContactsBind);
+    contacts.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(contacts);
 
-    // graph_messages(secret_name)
-    TableFunction messages("graph_messages", {LogicalType::VARCHAR},
+    // graph_messages - no required params, optional secret named param
+    TableFunction messages("graph_messages", {},
                            MessagesScan, MessagesBind);
+    messages.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(messages);
 
     ERPL_TRACE_INFO("GRAPH_OUTLOOK", "Successfully registered Microsoft Graph Outlook functions");

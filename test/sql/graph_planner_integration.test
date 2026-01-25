@@ -24,14 +24,14 @@ CREATE SECRET ms_graph_planner_test (
 # Test: graph_planner_plans can be called (may return 0 rows if no plans)
 # Using a known group ID from the tenant
 query I
-SELECT COUNT(*) >= 0 FROM graph_planner_plans('ms_graph_planner_test', '13009691-7f30-41e4-98f0-9f2623f6d7c9');
+SELECT COUNT(*) >= 0 FROM graph_planner_plans('13009691-7f30-41e4-98f0-9f2623f6d7c9');
 ----
 true
 
 # Test: graph_planner_plans has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_plans('ms_graph_planner_test', 'dummy-group-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_plans('dummy-group-id'))
     WHERE column_name IN ('id', 'title', 'owner_group_id', 'created_at')
 );
 ----
@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_buc
 # Test: graph_planner_buckets has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_buckets('ms_graph_planner_test', 'dummy-plan-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_buckets('dummy-plan-id'))
     WHERE column_name IN ('id', 'name', 'plan_id', 'order_hint')
 );
 ----
@@ -61,7 +61,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_tas
 # Test: graph_planner_tasks has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_tasks('ms_graph_planner_test', 'dummy-plan-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_tasks('dummy-plan-id'))
     WHERE column_name IN ('id', 'title', 'plan_id', 'bucket_id', 'percent_complete', 'priority', 'created_at', 'due_at')
 );
 ----

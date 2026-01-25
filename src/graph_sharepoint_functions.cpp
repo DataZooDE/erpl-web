@@ -57,11 +57,18 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ShowSitesBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ShowSitesBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
 
-    if (input.inputs.size() > 1 && !input.inputs[1].IsNull()) {
-        bind_data->search_query = input.inputs[1].GetValue<std::string>();
+    // Optional search query is first positional param
+    if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
+        bind_data->search_query = input.inputs[0].GetValue<std::string>();
     }
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: id, name, displayName, webUrl, createdDateTime
     names = {"id", "name", "display_name", "web_url", "created_at"};
@@ -166,8 +173,19 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ShowListsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ShowListsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->site_id = input.inputs[1].GetValue<std::string>();
+
+    // site_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_show_lists requires a site_id parameter");
+    }
+    bind_data->site_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: id, name, displayName, webUrl, createdDateTime, lastModifiedDateTime
     names = {"id", "name", "display_name", "description", "web_url", "created_at", "modified_at"};
@@ -284,9 +302,20 @@ unique_ptr<FunctionData> GraphSharePointFunctions::DescribeListBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<DescribeListBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->site_id = input.inputs[1].GetValue<std::string>();
-    bind_data->list_id = input.inputs[2].GetValue<std::string>();
+
+    // site_id and list_id are required positional parameters
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_describe_list requires site_id and list_id parameters");
+    }
+    bind_data->site_id = input.inputs[0].GetValue<std::string>();
+    bind_data->list_id = input.inputs[1].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: name, displayName, columnType, description, required
     names = {"name", "display_name", "column_type", "description", "required"};
@@ -409,9 +438,20 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ListItemsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->site_id = input.inputs[1].GetValue<std::string>();
-    bind_data->list_id = input.inputs[2].GetValue<std::string>();
+
+    // site_id and list_id are required positional parameters
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_list_items requires site_id and list_id parameters");
+    }
+    bind_data->site_id = input.inputs[0].GetValue<std::string>();
+    bind_data->list_id = input.inputs[1].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Fetch list columns to determine schema
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
@@ -568,26 +608,30 @@ void GraphSharePointFunctions::ListItemsScan(
 void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_SHAREPOINT", "Registering Microsoft Graph SharePoint functions");
 
-    // graph_show_sites(secret_name, search_query?)
-    TableFunction show_sites("graph_show_sites", {LogicalType::VARCHAR}, ShowSitesScan, ShowSitesBind);
+    // graph_show_sites(search_query?) - optional secret named param
+    TableFunction show_sites("graph_show_sites", {}, ShowSitesScan, ShowSitesBind);
     show_sites.varargs = LogicalType::VARCHAR;
+    show_sites.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(show_sites);
 
-    // graph_show_lists(secret_name, site_id)
-    TableFunction show_lists("graph_show_lists", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_show_lists(site_id) - optional secret named param
+    TableFunction show_lists("graph_show_lists", {LogicalType::VARCHAR},
                              ShowListsScan, ShowListsBind);
+    show_lists.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(show_lists);
 
-    // graph_describe_list(secret_name, site_id, list_id)
+    // graph_describe_list(site_id, list_id) - optional secret named param
     TableFunction describe_list("graph_describe_list",
-                                {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                 DescribeListScan, DescribeListBind);
+    describe_list.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(describe_list);
 
-    // graph_list_items(secret_name, site_id, list_id)
+    // graph_list_items(site_id, list_id) - optional secret named param
     TableFunction list_items("graph_list_items",
-                             {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                             {LogicalType::VARCHAR, LogicalType::VARCHAR},
                              ListItemsScan, ListItemsBind);
+    list_items.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(list_items);
 
     ERPL_TRACE_INFO("GRAPH_SHAREPOINT", "Successfully registered Microsoft Graph SharePoint functions");

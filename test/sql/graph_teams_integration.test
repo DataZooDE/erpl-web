@@ -27,14 +27,14 @@ CREATE SECRET ms_graph_teams_test (
 
 # Test: graph_my_teams returns data (may be empty if user has no teams)
 query I
-SELECT COUNT(*) >= 0 FROM graph_my_teams('ms_graph_teams_test');
+SELECT COUNT(*) >= 0 FROM graph_my_teams();
 ----
 true
 
 # Test: graph_my_teams has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_my_teams('ms_graph_teams_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_my_teams())
     WHERE column_name IN ('id', 'display_name', 'description', 'web_url')
 );
 ----

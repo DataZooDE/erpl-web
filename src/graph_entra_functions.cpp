@@ -100,11 +100,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::UsersBind(
 
     auto bind_data = make_uniq<GraphUsersBindData>();
 
-    // Get secret name from first positional argument
-    if (input.inputs.empty()) {
-        throw BinderException("graph_users requires a secret name parameter");
+    // Get secret name from named parameter (optional - uses first microsoft_graph secret if not provided)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = secret_name;
 
     // Resolve auth
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
@@ -202,10 +203,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::GroupsBind(
 
     auto bind_data = make_uniq<GraphGroupsBindData>();
 
-    if (input.inputs.empty()) {
-        throw BinderException("graph_groups requires a secret name parameter");
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -296,10 +299,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::DevicesBind(
 
     auto bind_data = make_uniq<GraphDevicesBindData>();
 
-    if (input.inputs.empty()) {
-        throw BinderException("graph_devices requires a secret name parameter");
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -390,10 +395,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::SignInLogsBind(
 
     auto bind_data = make_uniq<GraphSignInLogsBindData>();
 
-    if (input.inputs.empty()) {
-        throw BinderException("graph_signin_logs requires a secret name parameter");
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = secret_name;
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
@@ -493,20 +500,24 @@ void GraphEntraFunctions::SignInLogsScan(
 // =============================================================================
 
 void GraphEntraFunctions::Register(ExtensionLoader &loader) {
-    // graph_users
-    TableFunction users_func("graph_users", {LogicalType::VARCHAR}, UsersScan, UsersBind);
+    // graph_users - no required params, optional secret named param
+    TableFunction users_func("graph_users", {}, UsersScan, UsersBind);
+    users_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(users_func);
 
-    // graph_groups
-    TableFunction groups_func("graph_groups", {LogicalType::VARCHAR}, GroupsScan, GroupsBind);
+    // graph_groups - no required params, optional secret named param
+    TableFunction groups_func("graph_groups", {}, GroupsScan, GroupsBind);
+    groups_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(groups_func);
 
-    // graph_devices
-    TableFunction devices_func("graph_devices", {LogicalType::VARCHAR}, DevicesScan, DevicesBind);
+    // graph_devices - no required params, optional secret named param
+    TableFunction devices_func("graph_devices", {}, DevicesScan, DevicesBind);
+    devices_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(devices_func);
 
-    // graph_signin_logs
-    TableFunction signin_logs_func("graph_signin_logs", {LogicalType::VARCHAR}, SignInLogsScan, SignInLogsBind);
+    // graph_signin_logs - no required params, optional secret named param
+    TableFunction signin_logs_func("graph_signin_logs", {}, SignInLogsScan, SignInLogsBind);
+    signin_logs_func.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(signin_logs_func);
 }
 

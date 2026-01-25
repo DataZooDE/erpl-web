@@ -92,11 +92,18 @@ unique_ptr<FunctionData> GraphExcelFunctions::ListFilesBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ListFilesBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
 
-    if (input.inputs.size() > 1 && !input.inputs[1].IsNull()) {
-        bind_data->folder_path = input.inputs[1].GetValue<std::string>();
+    // Optional folder_path is first positional param
+    if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
+        bind_data->folder_path = input.inputs[0].GetValue<std::string>();
     }
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: id, name, webUrl, size, createdDateTime, lastModifiedDateTime, mimeType, isFolder
     names = {"id", "name", "web_url", "size", "created_at", "modified_at", "mime_type", "is_folder"};
@@ -221,8 +228,19 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTablesBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ExcelTablesBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->file_path = input.inputs[1].GetValue<std::string>();
+
+    // file_path is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_excel_tables requires a file_path parameter");
+    }
+    bind_data->file_path = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: name, id, showHeaders, showTotals
     names = {"name", "id", "show_headers", "show_totals"};
@@ -315,8 +333,19 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelWorksheetsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ExcelWorksheetsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->file_path = input.inputs[1].GetValue<std::string>();
+
+    // file_path is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_excel_worksheets requires a file_path parameter");
+    }
+    bind_data->file_path = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: name, id, position, visibility
     names = {"name", "id", "position", "visibility"};
@@ -409,13 +438,25 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ExcelRangeBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->file_path = input.inputs[1].GetValue<std::string>();
-    bind_data->sheet_name = input.inputs[2].GetValue<std::string>();
 
-    if (input.inputs.size() > 3 && !input.inputs[3].IsNull()) {
-        bind_data->range = input.inputs[3].GetValue<std::string>();
+    // file_path and sheet_name are required positional parameters
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_excel_range requires file_path and sheet_name parameters");
     }
+    bind_data->file_path = input.inputs[0].GetValue<std::string>();
+    bind_data->sheet_name = input.inputs[1].GetValue<std::string>();
+
+    // Optional range parameter
+    if (input.inputs.size() > 2 && !input.inputs[2].IsNull()) {
+        bind_data->range = input.inputs[2].GetValue<std::string>();
+    }
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Fetch the range data to determine column count
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
@@ -551,9 +592,20 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTableDataBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<ExcelTableDataBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->file_path = input.inputs[1].GetValue<std::string>();
-    bind_data->table_name = input.inputs[2].GetValue<std::string>();
+
+    // file_path and table_name are required positional parameters
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_excel_table_data requires file_path and table_name parameters");
+    }
+    bind_data->file_path = input.inputs[0].GetValue<std::string>();
+    bind_data->table_name = input.inputs[1].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Fetch the table data to determine schema
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
@@ -691,32 +743,37 @@ void GraphExcelFunctions::ExcelTableDataScan(
 void GraphExcelFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_EXCEL", "Registering Microsoft Graph Excel functions");
 
-    // graph_list_files(secret_name, folder_path?)
-    TableFunction list_files("graph_list_files", {LogicalType::VARCHAR}, ListFilesScan, ListFilesBind);
+    // graph_list_files(folder_path?) - optional secret named param
+    TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
     list_files.varargs = LogicalType::VARCHAR;
+    list_files.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(list_files);
 
-    // graph_excel_tables(secret_name, file_path)
-    TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_excel_tables(file_path) - optional secret named param
+    TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR},
                                ExcelTablesScan, ExcelTablesBind);
+    excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(excel_tables);
 
-    // graph_excel_worksheets(secret_name, file_path)
-    TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_excel_worksheets(file_path) - optional secret named param
+    TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR},
                                    ExcelWorksheetsScan, ExcelWorksheetsBind);
+    excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(excel_worksheets);
 
-    // graph_excel_range(secret_name, file_path, sheet_name, range?)
+    // graph_excel_range(file_path, sheet_name, range?) - optional secret named param
     TableFunction excel_range("graph_excel_range",
-                              {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                              {LogicalType::VARCHAR, LogicalType::VARCHAR},
                               ExcelRangeScan, ExcelRangeBind);
     excel_range.varargs = LogicalType::VARCHAR;
+    excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(excel_range);
 
-    // graph_excel_table_data(secret_name, file_path, table_name)
+    // graph_excel_table_data(file_path, table_name) - optional secret named param
     TableFunction excel_table_data("graph_excel_table_data",
-                                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                   {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                    ExcelTableDataScan, ExcelTableDataBind);
+    excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(excel_table_data);
 
     ERPL_TRACE_INFO("GRAPH_EXCEL", "Successfully registered Microsoft Graph Excel functions");

@@ -27,14 +27,14 @@ CREATE SECRET ms_graph_outlook_test (
 
 # Test: graph_calendar_events returns data (may be empty)
 query I
-SELECT COUNT(*) >= 0 FROM graph_calendar_events('ms_graph_outlook_test');
+SELECT COUNT(*) >= 0 FROM graph_calendar_events();
 ----
 true
 
 # Test: graph_calendar_events has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_calendar_events('ms_graph_outlook_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_calendar_events())
     WHERE column_name IN ('id', 'subject', 'body_preview', 'start_time', 'end_time', 'location', 'organizer_name', 'is_all_day', 'is_cancelled', 'web_link')
 );
 ----
@@ -42,14 +42,14 @@ SELECT COUNT(*) FROM (
 
 # Test: graph_contacts returns data (may be empty)
 query I
-SELECT COUNT(*) >= 0 FROM graph_contacts('ms_graph_outlook_test');
+SELECT COUNT(*) >= 0 FROM graph_contacts();
 ----
 true
 
 # Test: graph_contacts has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_contacts('ms_graph_outlook_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_contacts())
     WHERE column_name IN ('id', 'display_name', 'given_name', 'surname', 'email', 'mobile_phone', 'business_phone', 'company_name', 'job_title')
 );
 ----
@@ -57,14 +57,14 @@ SELECT COUNT(*) FROM (
 
 # Test: graph_messages returns data (may be empty)
 query I
-SELECT COUNT(*) >= 0 FROM graph_messages('ms_graph_outlook_test');
+SELECT COUNT(*) >= 0 FROM graph_messages();
 ----
 true
 
 # Test: graph_messages has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_messages('ms_graph_outlook_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_messages())
     WHERE column_name IN ('id', 'subject', 'body_preview', 'from_name', 'from_email', 'received_at', 'has_attachments', 'is_read', 'importance', 'web_link')
 );
 ----

@@ -27,14 +27,14 @@ CREATE SECRET ms_graph_excel_test (
 
 # Test: graph_list_files returns data (may be empty if no files in root)
 query I
-SELECT COUNT(*) >= 0 FROM graph_list_files('ms_graph_excel_test');
+SELECT COUNT(*) >= 0 FROM graph_list_files();
 ----
 true
 
 # Test: graph_list_files has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files('ms_graph_excel_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files())
     WHERE column_name IN ('id', 'name', 'size', 'created_at', 'modified_at', 'web_url', 'mime_type')
 );
 ----

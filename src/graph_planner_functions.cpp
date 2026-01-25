@@ -47,8 +47,19 @@ unique_ptr<FunctionData> GraphPlannerFunctions::PlansBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<PlansBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->group_id = input.inputs[1].GetValue<std::string>();
+
+    // group_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_planner_plans requires a group_id parameter");
+    }
+    bind_data->group_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: id, title, owner (group id), createdDateTime
     names = {"id", "title", "owner_group_id", "created_at"};
@@ -147,8 +158,19 @@ unique_ptr<FunctionData> GraphPlannerFunctions::BucketsBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<BucketsBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->plan_id = input.inputs[1].GetValue<std::string>();
+
+    // plan_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_planner_buckets requires a plan_id parameter");
+    }
+    bind_data->plan_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema: id, name, planId, orderHint
     names = {"id", "name", "plan_id", "order_hint"};
@@ -247,8 +269,19 @@ unique_ptr<FunctionData> GraphPlannerFunctions::TasksBind(
     vector<std::string> &names) {
 
     auto bind_data = make_uniq<TasksBindData>();
-    bind_data->secret_name = input.inputs[0].GetValue<std::string>();
-    bind_data->plan_id = input.inputs[1].GetValue<std::string>();
+
+    // plan_id is required positional parameter
+    if (input.inputs.empty()) {
+        throw BinderException("graph_planner_tasks requires a plan_id parameter");
+    }
+    bind_data->plan_id = input.inputs[0].GetValue<std::string>();
+
+    // Get secret name from named parameter (optional)
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind_data->secret_name = secret_name;
 
     // Return schema for planner tasks
     names = {"id", "title", "bucket_id", "plan_id", "percent_complete", "priority",
@@ -374,19 +407,22 @@ void GraphPlannerFunctions::TasksScan(
 void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_PLANNER", "Registering Microsoft Graph Planner functions");
 
-    // graph_planner_plans(secret_name, group_id)
-    TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_planner_plans(group_id) - optional secret named param
+    TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR},
                                 PlansScan, PlansBind);
+    planner_plans.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(planner_plans);
 
-    // graph_planner_buckets(secret_name, plan_id)
-    TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_planner_buckets(plan_id) - optional secret named param
+    TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR},
                                   BucketsScan, BucketsBind);
+    planner_buckets.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(planner_buckets);
 
-    // graph_planner_tasks(secret_name, plan_id)
-    TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+    // graph_planner_tasks(plan_id) - optional secret named param
+    TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR},
                                 TasksScan, TasksBind);
+    planner_tasks.named_parameters["secret"] = LogicalType::VARCHAR;
     loader.RegisterFunction(planner_tasks);
 
     ERPL_TRACE_INFO("GRAPH_PLANNER", "Successfully registered Microsoft Graph Planner functions");

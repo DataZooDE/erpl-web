@@ -23,14 +23,14 @@ CREATE SECRET ms_graph_sharepoint_test (
 
 # Test: graph_show_sites can be called (may return 0 rows if no sites)
 query I
-SELECT COUNT(*) >= 0 FROM graph_show_sites('ms_graph_sharepoint_test');
+SELECT COUNT(*) >= 0 FROM graph_show_sites();
 ----
 true
 
 # Test: graph_show_sites has expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_sites('ms_graph_sharepoint_test'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_sites())
     WHERE column_name IN ('id', 'name', 'display_name', 'web_url', 'created_at')
 );
 ----
@@ -38,7 +38,7 @@ SELECT COUNT(*) FROM (
 
 # Test: graph_show_sites with search query can be called
 query I
-SELECT COUNT(*) >= 0 FROM graph_show_sites('ms_graph_sharepoint_test', 'test');
+SELECT COUNT(*) >= 0 FROM graph_show_sites('test');
 ----
 true
 
@@ -51,7 +51,7 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_show_lists'
 # Test: graph_show_lists has expected columns (using describe with dummy values)
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_lists('ms_graph_sharepoint_test', 'dummy-site-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_lists('dummy-site-id'))
     WHERE column_name IN ('id', 'name', 'display_name', 'description', 'web_url', 'created_at', 'modified_at')
 );
 ----

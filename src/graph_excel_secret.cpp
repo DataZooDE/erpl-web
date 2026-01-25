@@ -254,15 +254,33 @@ duckdb::unique_ptr<duckdb::KeyValueSecret> GetGraphKeyValueSecret(
 
     auto &secret_manager = duckdb::SecretManager::Get(context);
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
-    auto secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
 
-    if (!secret_entry) {
-        throw duckdb::InvalidInputException("Microsoft Graph secret '" + secret_name + "' not found. Use CREATE SECRET to create it.");
+    std::unique_ptr<duckdb::SecretEntry> secret_entry;
+
+    if (secret_name.empty()) {
+        // No secret name provided - look up first secret of type microsoft_graph
+        auto match = secret_manager.LookupSecret(transaction, "", "microsoft_graph");
+        if (match.HasMatch()) {
+            // Clone the secret entry
+            secret_entry = duckdb::make_uniq<duckdb::SecretEntry>(*match.secret_entry);
+        }
+        if (!secret_entry) {
+            throw duckdb::InvalidInputException(
+                "No Microsoft Graph secret found. Create one using:\n"
+                "  CREATE SECRET (TYPE microsoft_graph, PROVIDER authorization_code, tenant_id '...', client_id '...', client_secret '...');\n"
+                "Or specify a secret name explicitly using the 'secret' parameter.");
+        }
+    } else {
+        // Secret name provided - look up by name
+        secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
+        if (!secret_entry) {
+            throw duckdb::InvalidInputException("Microsoft Graph secret '" + secret_name + "' not found. Use CREATE SECRET to create it.");
+        }
     }
 
     auto kv_secret = dynamic_cast<const duckdb::KeyValueSecret *>(secret_entry->secret.get());
     if (!kv_secret) {
-        throw duckdb::InvalidInputException("Secret '" + secret_name + "' is not a KeyValueSecret");
+        throw duckdb::InvalidInputException("Secret is not a KeyValueSecret");
     }
 
     // Clone to extend lifetime beyond SecretEntry unique_ptr
