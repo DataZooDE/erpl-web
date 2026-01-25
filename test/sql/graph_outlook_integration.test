@@ -1,0 +1,71 @@
+# name: test/sql/graph_outlook_integration.test
+# description: Integration tests for Microsoft Graph Outlook
+# group: [erpl_web]
+# note: Outlook functions use /me endpoint but can be described with application auth
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+# Create secret for schema validation
+statement ok
+CREATE SECRET ms_graph_outlook_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# Test: graph_calendar_events function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_calendar_events';
+----
+1
+
+# Test: graph_calendar_events has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_calendar_events('ms_graph_outlook_test'))
+    WHERE column_name IN ('id', 'subject', 'body_preview', 'start_time', 'end_time', 'location', 'organizer_name', 'is_all_day', 'is_cancelled', 'web_link')
+);
+----
+10
+
+# Test: graph_contacts function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_contacts';
+----
+1
+
+# Test: graph_contacts has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_contacts('ms_graph_outlook_test'))
+    WHERE column_name IN ('id', 'display_name', 'given_name', 'surname', 'email', 'mobile_phone', 'business_phone', 'company_name', 'job_title')
+);
+----
+9
+
+# Test: graph_messages function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_messages';
+----
+1
+
+# Test: graph_messages has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_messages('ms_graph_outlook_test'))
+    WHERE column_name IN ('id', 'subject', 'body_preview', 'from_name', 'from_email', 'received_at', 'has_attachments', 'is_read', 'importance', 'web_link')
+);
+----
+10
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_outlook_test;

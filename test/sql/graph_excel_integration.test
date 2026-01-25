@@ -1,0 +1,58 @@
+# name: test/sql/graph_excel_integration.test
+# description: Integration tests for Microsoft Graph Excel/OneDrive
+# group: [erpl_web]
+# note: Excel/OneDrive functions require delegated authentication (authorization_code flow)
+#       These tests verify function registration and schema only
+
+require erpl_web
+
+# Test: graph_list_files function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_list_files';
+----
+1
+
+# Test: graph_list_files has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files('dummy-secret'))
+    WHERE column_name IN ('id', 'name', 'size', 'created_at', 'modified_at', 'web_url', 'mime_type')
+);
+----
+7
+
+# Test: graph_excel_tables function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_tables';
+----
+1
+
+# Test: graph_excel_tables has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_excel_tables('dummy-secret', 'dummy-file-path'))
+    WHERE column_name IN ('id', 'name', 'show_headers', 'show_totals')
+);
+----
+4
+
+# Test: graph_excel_worksheets function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_worksheets';
+----
+1
+
+# Test: graph_excel_worksheets has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_excel_worksheets('dummy-secret', 'dummy-file-path'))
+    WHERE column_name IN ('id', 'name', 'position', 'visibility')
+);
+----
+4
+
+# Test: graph_excel_range function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_range';
+----
+1

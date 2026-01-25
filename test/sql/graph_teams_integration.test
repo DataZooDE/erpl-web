@@ -1,0 +1,31 @@
+# name: test/sql/graph_teams_integration.test
+# description: Integration tests for Microsoft Graph Teams
+# group: [erpl_web]
+# note: Teams functions require delegated authentication (authorization_code flow)
+#       These tests verify function registration only - schema tests require delegated auth
+
+require erpl_web
+
+# Test: graph_my_teams function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_my_teams';
+----
+1
+
+# Test: graph_team_channels function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_team_channels';
+----
+1
+
+# Test: graph_team_members function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_team_members';
+----
+1
+
+# Test: graph_channel_messages function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_channel_messages';
+----
+1

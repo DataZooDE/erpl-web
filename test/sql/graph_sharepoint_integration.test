@@ -1,0 +1,74 @@
+# name: test/sql/graph_sharepoint_integration.test
+# description: Integration tests for Microsoft Graph SharePoint
+# group: [erpl_web]
+# note: Requires Sites.Read.All application permission in Azure AD
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+# Create secret with real credentials
+statement ok
+CREATE SECRET ms_graph_sharepoint_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# Test: graph_show_sites can be called (may return 0 rows if no sites)
+query I
+SELECT COUNT(*) >= 0 FROM graph_show_sites('ms_graph_sharepoint_test');
+----
+true
+
+# Test: graph_show_sites has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_sites('ms_graph_sharepoint_test'))
+    WHERE column_name IN ('id', 'name', 'display_name', 'web_url', 'created_at')
+);
+----
+5
+
+# Test: graph_show_sites with search query can be called
+query I
+SELECT COUNT(*) >= 0 FROM graph_show_sites('ms_graph_sharepoint_test', 'test');
+----
+true
+
+# Test: graph_show_lists function exists (requires site_id to call)
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_show_lists';
+----
+1
+
+# Test: graph_show_lists has expected columns (using describe with dummy values)
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_lists('ms_graph_sharepoint_test', 'dummy-site-id'))
+    WHERE column_name IN ('id', 'name', 'display_name', 'description', 'web_url', 'created_at', 'modified_at')
+);
+----
+7
+
+# Test: graph_describe_list function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_describe_list';
+----
+1
+
+# Test: graph_list_items function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_list_items';
+----
+1
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_sharepoint_test;

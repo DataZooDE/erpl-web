@@ -1,0 +1,72 @@
+# name: test/sql/graph_planner_integration.test
+# description: Integration tests for Microsoft Graph Planner
+# group: [erpl_web]
+# note: Requires Tasks.Read.All application permission in Azure AD
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+# Create secret with real credentials
+statement ok
+CREATE SECRET ms_graph_planner_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# Test: graph_planner_plans can be called (may return 0 rows if no plans)
+# Using a known group ID from the tenant
+query I
+SELECT COUNT(*) >= 0 FROM graph_planner_plans('ms_graph_planner_test', '13009691-7f30-41e4-98f0-9f2623f6d7c9');
+----
+true
+
+# Test: graph_planner_plans has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_plans('ms_graph_planner_test', 'dummy-group-id'))
+    WHERE column_name IN ('id', 'title', 'owner_group_id', 'created_at')
+);
+----
+4
+
+# Test: graph_planner_buckets function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_buckets';
+----
+1
+
+# Test: graph_planner_buckets has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_buckets('ms_graph_planner_test', 'dummy-plan-id'))
+    WHERE column_name IN ('id', 'name', 'plan_id', 'order_hint')
+);
+----
+4
+
+# Test: graph_planner_tasks function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_tasks';
+----
+1
+
+# Test: graph_planner_tasks has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_tasks('ms_graph_planner_test', 'dummy-plan-id'))
+    WHERE column_name IN ('id', 'title', 'plan_id', 'bucket_id', 'percent_complete', 'priority', 'created_at', 'due_at')
+);
+----
+8
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_planner_test;
