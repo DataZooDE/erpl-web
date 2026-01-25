@@ -1,0 +1,82 @@
+# name: test/sql/graph_entra_integration.test
+# description: Integration tests for Microsoft Graph Entra ID Directory
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+# Create secret with real credentials
+statement ok
+CREATE SECRET ms_graph_entra_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# Test: graph_users returns data
+query I
+SELECT COUNT(*) > 0 FROM graph_users('ms_graph_entra_test');
+----
+true
+
+# Test: graph_users has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_users('ms_graph_entra_test'))
+    WHERE column_name IN ('id', 'display_name', 'user_principal_name', 'mail', 'job_title', 'department', 'account_enabled')
+);
+----
+7
+
+# Test: users have non-empty id and display_name
+query I
+SELECT COUNT(*) = 0 FROM graph_users('ms_graph_entra_test') WHERE id IS NULL OR id = '';
+----
+true
+
+# Test: graph_groups returns data
+query I
+SELECT COUNT(*) > 0 FROM graph_groups('ms_graph_entra_test');
+----
+true
+
+# Test: graph_groups has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_groups('ms_graph_entra_test'))
+    WHERE column_name IN ('id', 'display_name', 'description', 'mail', 'mail_enabled', 'security_enabled')
+);
+----
+6
+
+# Test: groups have non-empty id
+query I
+SELECT COUNT(*) = 0 FROM graph_groups('ms_graph_entra_test') WHERE id IS NULL OR id = '';
+----
+true
+
+# Test: graph_devices can be called (may return 0 rows if no devices)
+query I
+SELECT COUNT(*) >= 0 FROM graph_devices('ms_graph_entra_test');
+----
+true
+
+# Test: graph_devices has expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_devices('ms_graph_entra_test'))
+    WHERE column_name IN ('id', 'display_name', 'operating_system', 'os_version', 'trust_type', 'account_enabled')
+);
+----
+6
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_entra_test;

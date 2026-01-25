@@ -21,3 +21,12 @@ test/fixtures/delta_share/*.json
 *.tmp
 *.log.*
 debug.log
+
+# Microsoft test credentials - NEVER commit these
+.env.microsoft
+.env.local
+.env.test
+*credentials*.json
+*secret*.json
+!*_secret.cpp
+!*_secret.hpp
