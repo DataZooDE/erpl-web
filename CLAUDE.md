@@ -460,7 +460,7 @@ This extension uses **extension-ci-tools** reusable workflows for automated mult
 
 **Primary workflow:** `.github/workflows/MainDistributionPipeline.yml`
 - Calls `duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main`
-- Builds for DuckDB v1.4.1 (configured via `duckdb_version` parameter)
+- Builds for DuckDB v1.4.3 and v1.4.4 (configured via `duckdb_version` parameter)
 - Generates platform-specific binaries as GitHub Actions artifacts
 - Deploys to S3 for distribution
 
@@ -551,7 +551,7 @@ Checkout repo → Setup Docker → Build in container → Test → Upload artifa
 ```
 - Uses ccache for compilation speed
 - VCPKG dependencies cached in S3
-- Produces `erpl_web-v1.4.1-extension-linux_amd64.duckdb_extension`
+- Produces `erpl_web-v1.4.4-extension-linux_amd64.duckdb_extension`
 
 #### **3. macOS Build** (Conditional on Linux success)
 ```
@@ -559,7 +559,7 @@ Setup Homebrew → Install ninja/ccache → Configure VCPKG → Build → Test �
 ```
 - Builds both x86_64 and ARM64 variants
 - Uses native runners (no emulation)
-- Produces `erpl_web-v1.4.1-extension-osx_{amd64,arm64}.duckdb_extension`
+- Produces `erpl_web-v1.4.4-extension-osx_{amd64,arm64}.duckdb_extension`
 
 #### **4. Windows Build** (Conditional on Linux success)
 ```
@@ -567,7 +567,7 @@ Setup MSVC → Configure VCPKG → Build with Ninja/MSBuild → Test → Upload
 ```
 - Static linking to avoid DLL dependencies
 - VS2019 compatibility mode for broader Windows support
-- Produces `erpl_web-v1.4.1-extension-windows_amd64.duckdb_extension`
+- Produces `erpl_web-v1.4.4-extension-windows_amd64.duckdb_extension`
 
 #### **5. Deployment** (S3 Upload)
 ```
@@ -862,7 +862,7 @@ The extension-ci-tools repository provides centralized CI/CD:
 - **Automatic updates** when DuckDB changes build system
 - **Phased deprecation:** Old versions removed systematically
 
-This project currently targets **DuckDB v1.4.1** (check `.github/workflows/` and `extension-ci-tools` branch).
+This project currently targets **DuckDB v1.4.3 and v1.4.4** (check `.github/workflows/` and `extension-ci-tools` branch).
 
 ## Codebase Architecture
 
