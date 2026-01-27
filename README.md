@@ -1,7 +1,7 @@
 <a name="top"></a>
 
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
-[![DuckDB](https://img.shields.io/badge/DuckDB-1.4.2+-green.svg)](https://duckdb.org)
+[![DuckDB](https://img.shields.io/badge/DuckDB-1.4.3+-green.svg)](https://duckdb.org)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
 # ERPL Web — DuckDB HTTP + OData + Delta Sharing + SAP Datasphere + SAP Analytics Cloud Extension
