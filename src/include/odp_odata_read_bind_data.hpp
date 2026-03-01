@@ -186,6 +186,8 @@ private:
     std::string secret_name_;
     std::shared_ptr<HttpAuthParams> auth_params_;
     std::optional<uint32_t> max_page_size_;
+    bool force_full_load_;
+    std::string import_delta_token_;
     
     // State tracking
     bool initialized_;
