@@ -636,9 +636,17 @@ void OdpSubscriptionRepository::InitializeTables() {
 
 duckdb::unique_ptr<duckdb::MaterializedQueryResult> OdpSubscriptionRepository::ExecuteQuery(const std::string& query) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Executing query: " + query);
-    
-    auto connection = duckdb::Connection(context.db->GetDatabase(context));
-    return connection.Query(query);
+    duckdb::Connection connection(context.db->GetDatabase(context));
+    auto result = connection.Query(query);
+    if (!result) {
+        throw duckdb::InternalException("Failed to execute query: no result returned");
+    }
+    auto* materialized = dynamic_cast<duckdb::MaterializedQueryResult*>(result.get());
+    if (!materialized) {
+        throw duckdb::InternalException("Failed to execute query: non-materialized result returned");
+    }
+    result.release();
+    return duckdb::unique_ptr<duckdb::MaterializedQueryResult>(materialized);
 }
 
 std::string OdpSubscriptionRepository::BuildInsertSubscriptionQuery(const OdpSubscription& subscription) {

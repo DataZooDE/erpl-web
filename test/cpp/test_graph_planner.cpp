@@ -67,7 +67,9 @@ TEST_CASE("GraphPlannerUrlBuilder - BuildMyPlansUrl", "[graph_planner][url_build
 // =============================================================================
 
 TEST_CASE("Microsoft Graph Planner Functions Exist", "[graph_planner][functions]") {
-    duckdb::DuckDB db(nullptr);
+    duckdb::DBConfig config;
+    config.options.allocator_background_threads = true;
+    duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
     // Load the extension

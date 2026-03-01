@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Self-Optimisation Principle
+
+When you discover a non-obvious requirement, workaround, or environment quirk during a session:
+
+1. **Add a Makefile target** that encapsulates the correct invocation (with flags, env vars, etc.).
+2. **Update this file (CLAUDE.md)** to document the target, explain *why* the raw command doesn't work, and point future sessions to the target.
+3. **Never document "run the binary directly" when a Makefile target is available** — targets are the canonical, always-correct interface.
+
+This keeps institutional knowledge in the repo and prevents rediscovering the same workarounds.
+
+---
+
 ## Project Overview
 
 **ERPL Web** is a production-grade DuckDB extension that provides HTTP/REST API access, OData v2/v4 query support, and SAP ecosystem integration (Datasphere, Analytics Cloud, ODP) directly from SQL. The codebase is primarily C++ with SQLLogicTest-based tests.
@@ -51,11 +63,35 @@ make release    # Release build
 **Full test suites:**
 - `make test_debug` - Run all SQL tests (SQLLogicTests)
 - `make test` - Run all tests (release mode)
-- `./build/debug/extension/erpl_web/test/cpp/erpl_web_tests` - Run C++ unit tests
-- `./build/debug/extension/erpl_web/test/cpp/erpl_web_tests -l` - List all C++ tests
-- `./build/debug/extension/erpl_web/test/cpp/erpl_web_tests TEST_NAME` - Run single C++ test
-- `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`)
+- `make test_cpp` - Run C++ unit tests (**always use this**, not the binary directly — see note below)
 - `make test_debug_sap` - Run SAP-specific tests with local SAP environment
+- `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`)
+
+**Running individual C++ tests:**
+- `ASAN_OPTIONS=detect_odr_violation=0 ./build/debug/extension/erpl_web/test/cpp/erpl_web_tests -l` - List all tests
+- `ASAN_OPTIONS=detect_odr_violation=0 ./build/debug/extension/erpl_web/test/cpp/erpl_web_tests TEST_NAME` - Run single test
+
+**Why `ASAN_OPTIONS=detect_odr_violation=0` is required for C++ tests:**
+The debug build statically links DuckDB into the test binary AND loads `libduckdb.so`, causing
+AddressSanitizer to report a false-positive ODR violation on `LOOKUP_TABLE` in
+`nested_to_varchar_cast.cpp`. Both copies are identical — this is a structural artefact of
+the debug linking strategy, not a real bug. The `make test_cpp` target sets this flag automatically.
+
+**Why C++ tests must set `allocator_background_threads = true` in `DBConfig`:**
+Any test that creates a bare `DuckDB db(nullptr)` and runs queries will crash in DEBUG+jemalloc
+builds with `terminate called after throwing 'InternalException': je_mallctl failed for setting
+"arena.N.purge"`. The crash happens ~0.5s after a query in DuckDB's background worker threads
+(`TaskScheduler` → `Allocator::ThreadFlush` → `JemallocExtension::ThreadFlush` → throws under
+`#ifdef DEBUG`). It is unrelated to `Connection` lifecycle — do not try to fix it there.
+
+Always use this pattern in every C++ test that touches a `DuckDB` instance:
+```cpp
+DBConfig config;
+config.options.allocator_background_threads = true;  // prevents jemalloc crash in debug builds
+DuckDB db(nullptr, &config);
+```
+This delegates arena management to jemalloc's own background threads; DuckDB workers then skip
+the manual `ThreadFlush` call entirely.
 
 **SQL tests location:** `test/sql/` (various `.test` files organized by module)
 **C++ unit tests location:** `build/debug/extension/erpl_web/test/cpp/`

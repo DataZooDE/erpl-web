@@ -98,7 +98,8 @@ TEST_CASE("HttpUrl Parsing and Serialization", "[http_url]") {
         base_url = HttpUrl("https://services.odata.org/v4/northwind/northwind.svc/Customers");
         relative_url = "/Customers?$skiptoken='ERNSH'";
         merged_url = HttpUrl::MergeWithBaseUrlIfRelative(base_url, relative_url);
-        REQUIRE(merged_url.ToString() == "https://services.odata.org/v4/northwind/northwind.svc/Customers?$skiptoken='ERNSH'");
+        // Leading '/' is a path-absolute reference per RFC 3986 — replaces entire path after the authority.
+        REQUIRE(merged_url.ToString() == "https://services.odata.org/Customers?$skiptoken='ERNSH'");
     }
 
     SECTION("ToLower function efficiency") {

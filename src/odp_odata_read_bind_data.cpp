@@ -15,6 +15,8 @@ OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
     , entity_set_url_(entity_set_url)
     , secret_name_(secret_name.empty() ? "default" : secret_name)
     , max_page_size_(max_page_size)
+    , force_full_load_(force_full_load)
+    , import_delta_token_(import_delta_token)
     , initialized_(false)
     , first_fetch_completed_(false)
     , current_audit_id_(-1)
@@ -203,8 +205,8 @@ void OdpODataReadBindData::Initialize() {
         // Create state manager
         std::string entity_set_name = ExtractEntitySetName(entity_set_url_);
         state_manager_ = std::make_unique<OdpSubscriptionStateManager>(
-            context_, entity_set_url_, entity_set_name, secret_name_, 
-            false, ""); // Use defaults for now
+            context_, entity_set_url_, entity_set_name, secret_name_,
+            force_full_load_, import_delta_token_);
         
         // Create request orchestrator
         request_orchestrator_ = std::make_unique<OdpRequestOrchestrator>(

@@ -52,7 +52,9 @@ TEST_CASE("GraphTeamsUrlBuilder builds message URLs", "[graph_teams][url]") {
 // =============================================================================
 
 TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     // Load extension
@@ -80,7 +82,9 @@ TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckd
 }
 
 TEST_CASE("Graph Teams functions require parameters", "[graph_teams][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     con.Query("LOAD erpl_web");
