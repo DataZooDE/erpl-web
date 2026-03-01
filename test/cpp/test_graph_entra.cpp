@@ -64,7 +64,9 @@ TEST_CASE("GraphEntraUrlBuilder builds sign-in logs URL", "[graph_entra][url]") 
 // =============================================================================
 
 TEST_CASE("Graph Entra functions are registered in DuckDB", "[graph_entra][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     // Load extension
@@ -92,7 +94,9 @@ TEST_CASE("Graph Entra functions are registered in DuckDB", "[graph_entra][duckd
 }
 
 TEST_CASE("Graph Entra functions require secret parameter", "[graph_entra][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     con.Query("LOAD erpl_web");

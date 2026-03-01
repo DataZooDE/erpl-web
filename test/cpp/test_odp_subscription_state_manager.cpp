@@ -6,7 +6,9 @@ using namespace erpl_web;
 using namespace duckdb;
 
 TEST_CASE("OdpSubscriptionStateManager - Basic State Management", "[odp_state_manager]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
     
@@ -53,7 +55,9 @@ TEST_CASE("OdpSubscriptionStateManager - Basic State Management", "[odp_state_ma
 }
 
 TEST_CASE("OdpSubscriptionStateManager - State Transitions", "[odp_state_transitions]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
     
@@ -112,7 +116,9 @@ TEST_CASE("OdpSubscriptionStateManager - State Transitions", "[odp_state_transit
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Delta Token Management", "[odp_delta_tokens]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
     
@@ -156,7 +162,9 @@ TEST_CASE("OdpSubscriptionStateManager - Delta Token Management", "[odp_delta_to
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Audit Operations", "[odp_audit]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
     
@@ -212,7 +220,9 @@ TEST_CASE("OdpSubscriptionStateManager - Utility Methods", "[odp_state_utils]") 
     }
     
     SECTION("Log current state (should not throw)") {
-        DuckDB db(nullptr);
+        DBConfig config;
+        config.options.allocator_background_threads = true;
+        DuckDB db(nullptr, &config);
         Connection conn(db);
         ClientContext& context = *conn.context;
         
@@ -231,7 +241,9 @@ TEST_CASE("OdpSubscriptionStateManager - Utility Methods", "[odp_state_utils]") 
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Error Handling", "[odp_state_errors]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
     

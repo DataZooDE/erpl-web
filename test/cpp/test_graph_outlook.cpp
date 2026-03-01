@@ -69,7 +69,9 @@ TEST_CASE("GraphOutlookUrlBuilder builds mail URLs", "[graph_outlook][url]") {
 // =============================================================================
 
 TEST_CASE("Graph Outlook functions are registered in DuckDB", "[graph_outlook][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     // Load extension
@@ -92,7 +94,9 @@ TEST_CASE("Graph Outlook functions are registered in DuckDB", "[graph_outlook][d
 }
 
 TEST_CASE("Graph Outlook functions require secret parameter", "[graph_outlook][duckdb]") {
-    DuckDB db(nullptr);
+    DBConfig config;
+    config.options.allocator_background_threads = true;
+    DuckDB db(nullptr, &config);
     Connection con(db);
 
     con.Query("LOAD erpl_web");
