@@ -8,9 +8,12 @@ include_directories(./include
                     ../../duckdb/test/include
                     ../../duckdb/extension/json/include
                     ../../duckdb/extension/json/yyjson/include
+                    ../../duckdb/extension/core_functions/include
+                    ../../duckdb/extension/parquet/include
                     ${OPENSSL_INCLUDE_DIR})
 
 set(TEST_SOURCES
+    erpl_web_extension_loader.cpp
     test_charset_converter.cpp
     test_http_client.cpp
     test_odata_edm.cpp
@@ -41,23 +44,23 @@ set(TEST_SOURCES
 )
 
 add_executable(erpl_web_tests ${TEST_SOURCES})
-# Avoid ODR violation by not linking both static and shared DuckDB simultaneously
-# Link only test_helpers (which already links against DuckDB)
-target_link_libraries(erpl_web_tests 
-                      ${EXTENSION_NAME} 
+target_link_libraries(erpl_web_tests
+                      ${EXTENSION_NAME}
                       test_helpers
-                      OpenSSL::SSL OpenSSL::Crypto 
+                      core_functions_extension
+                      json_extension
+                      parquet_extension
+                      OpenSSL::SSL OpenSSL::Crypto
                       tinyxml2::tinyxml2)
 
 # Register with CTest and inject sanitizer env overrides
 include(CTest)
 if (BUILD_TESTING)
     add_test(NAME erpl_web_tests COMMAND erpl_web_tests)
-    set_property(TEST erpl_web_tests PROPERTY ENVIRONMENT 
+    set_property(TEST erpl_web_tests PROPERTY ENVIRONMENT
         "ASAN_OPTIONS=detect_odr_violation=0:detect_leaks=0:halt_on_error=0:abort_on_error=0;UBSAN_OPTIONS=halt_on_error=0:print_stacktrace=0;ERPL_DISABLE_TELEMETRY=1")
 endif()
 
-                    
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
 set(CMAKE_CXX_STANDARD 17)

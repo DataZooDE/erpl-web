@@ -2,6 +2,7 @@
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "duckdb/function/pragma_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/main/extension_callback_manager.hpp"
 
 #include "erpl_web_extension.hpp"
 #include "web_functions.hpp"
@@ -258,9 +259,9 @@ static void RegisterODataFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateODataSapShowFunction());
     
 
-    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-    config.storage_extensions["odata"] = erpl_web::CreateODataStorageExtension();
-    config.storage_extensions["delta_share"] = erpl_web::CreateDeltaShareStorageExtension();
+    auto &callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
+    callback_manager.Register("odata", shared_ptr<StorageExtension>(erpl_web::CreateODataStorageExtension().release()));
+    callback_manager.Register("delta_share", shared_ptr<StorageExtension>(erpl_web::CreateDeltaShareStorageExtension().release()));
 }
 
 static void RegisterDatasphereFunctions(ExtensionLoader &loader)
@@ -301,8 +302,8 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
     loader.RegisterFunction(erpl_web::CreateSacReadStoryDataFunction());
 
     // Register SAC storage extension (handles ATTACH support)
-    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-    config.storage_extensions["sac"] = erpl_web::CreateSacStorageExtension();
+    auto &callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
+    callback_manager.Register("sac", shared_ptr<StorageExtension>(erpl_web::CreateSacStorageExtension().release()));
 }
 
 static void RegisterDeltaShareFunctions(ExtensionLoader &loader)
