@@ -41,8 +41,11 @@ void ExtensionHelper::LoadAllExtensions(DuckDB &db) {
     }
 }
 
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+// Added in DuckDB v1.5.0
 vector<string> ExtensionHelper::LoadedExtensionTestPaths() {
     return {};
 }
+#endif
 
 } // namespace duckdb
