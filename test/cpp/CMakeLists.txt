@@ -12,8 +12,17 @@ include_directories(./include
                     ../../duckdb/extension/parquet/include
                     ${OPENSSL_INCLUDE_DIR})
 
-set(TEST_SOURCES
-    erpl_web_extension_loader.cpp
+# On DuckDB v1.5+, LoadExtension/LoadAllExtensions are stubs in libduckdb_static.a
+# that return NOT_LOADED for all extensions. We provide a custom loader that maps
+# extension names to statically-linked Load functions.
+# On DuckDB v1.4.x, these functions are already fully implemented in libduckdb_static.a
+# using the generated loader; including our file would cause duplicate symbol errors.
+set(TEST_SOURCES "")
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/include/duckdb/main/extension_callback_manager.hpp")
+    list(APPEND TEST_SOURCES erpl_web_extension_loader.cpp)
+endif()
+
+list(APPEND TEST_SOURCES
     test_charset_converter.cpp
     test_http_client.cpp
     test_odata_edm.cpp
@@ -44,14 +53,24 @@ set(TEST_SOURCES
 )
 
 add_executable(erpl_web_tests ${TEST_SOURCES})
-target_link_libraries(erpl_web_tests
-                      ${EXTENSION_NAME}
-                      test_helpers
-                      core_functions_extension
-                      json_extension
-                      parquet_extension
-                      OpenSSL::SSL OpenSSL::Crypto
-                      tinyxml2::tinyxml2)
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/include/duckdb/main/extension_callback_manager.hpp")
+    # DuckDB v1.5+: link extension libraries explicitly (custom loader calls their Load fns)
+    target_link_libraries(erpl_web_tests
+                          ${EXTENSION_NAME}
+                          test_helpers
+                          core_functions_extension
+                          json_extension
+                          parquet_extension
+                          OpenSSL::SSL OpenSSL::Crypto
+                          tinyxml2::tinyxml2)
+else()
+    # DuckDB v1.4.x: generated loader handles extensions; no explicit extension libs needed
+    target_link_libraries(erpl_web_tests
+                          ${EXTENSION_NAME}
+                          test_helpers
+                          OpenSSL::SSL OpenSSL::Crypto
+                          tinyxml2::tinyxml2)
+endif()
 
 # Register with CTest and inject sanitizer env overrides
 include(CTest)
