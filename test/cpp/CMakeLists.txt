@@ -46,7 +46,7 @@ add_executable(erpl_web_tests ${TEST_SOURCES})
 target_link_libraries(erpl_web_tests
                       ${EXTENSION_NAME}
                       test_helpers
-                      dummy_static_extension_loader
+                      $<TARGET_NAME_IF_EXISTS:dummy_static_extension_loader>
                       OpenSSL::SSL OpenSSL::Crypto
                       tinyxml2::tinyxml2)
 
