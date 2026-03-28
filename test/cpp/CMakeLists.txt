@@ -43,10 +43,17 @@ set(TEST_SOURCES
 add_executable(erpl_web_tests ${TEST_SOURCES})
 # Avoid ODR violation by not linking both static and shared DuckDB simultaneously
 # Link only test_helpers (which already links against DuckDB)
+# DuckDB v1.5.0+ moved LoadAllExtensions out of duckdb_static into dummy_static_extension_loader;
+# link it explicitly when building against v1.5.0+ to avoid undefined symbol at link time.
+if(DEFINED DUCKDB_MINOR_VERSION AND NOT DUCKDB_MINOR_VERSION LESS 5)
+    set(ERPL_EXTENSION_LOADER_LIB dummy_static_extension_loader)
+else()
+    set(ERPL_EXTENSION_LOADER_LIB "")
+endif()
 target_link_libraries(erpl_web_tests
                       ${EXTENSION_NAME}
                       test_helpers
-                      $<TARGET_NAME_IF_EXISTS:dummy_static_extension_loader>
+                      ${ERPL_EXTENSION_LOADER_LIB}
                       OpenSSL::SSL OpenSSL::Crypto
                       tinyxml2::tinyxml2)
 
