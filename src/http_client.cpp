@@ -97,7 +97,8 @@ ssize_t DebugHeaderWriter(duckdb_httplib_openssl::Stream& strm, duckdb_httplib_o
     // Now write the headers using the standard format
     ssize_t write_len = 0;
     for (const auto& x : headers) {
-        auto len = strm.write_format("%s: %s\r\n", x.first.c_str(), x.second.c_str());
+        std::string header_entry = x.first + ": " + x.second + "\r\n";
+        auto len = strm.write(header_entry.c_str(), header_entry.size());
         if (len < 0) { return len; }
         write_len += len;
     }

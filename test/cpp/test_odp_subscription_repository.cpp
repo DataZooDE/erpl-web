@@ -9,7 +9,7 @@ using namespace duckdb;
 
 TEST_CASE("OdpSubscriptionRepository - Basic Operations", "[odp_repository]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;
@@ -224,7 +224,7 @@ TEST_CASE("OdpSubscriptionRepository - Utility Methods", "[odp_repository_utils]
 
 TEST_CASE("OdpSubscriptionRepository - Error Handling", "[odp_repository_errors]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection conn(db);
     ClientContext& context = *conn.context;

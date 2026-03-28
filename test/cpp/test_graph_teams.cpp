@@ -53,7 +53,7 @@ TEST_CASE("GraphTeamsUrlBuilder builds message URLs", "[graph_teams][url]") {
 
 TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 
@@ -83,7 +83,7 @@ TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckd
 
 TEST_CASE("Graph Teams functions require parameters", "[graph_teams][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 

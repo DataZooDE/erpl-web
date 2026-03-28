@@ -108,7 +108,7 @@ TEST_CASE("Test Microsoft Entra Secret Creation in DuckDB", "[microsoft_entra][i
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -153,7 +153,7 @@ TEST_CASE("Test Microsoft Entra Config Provider", "[microsoft_entra][integration
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -199,7 +199,7 @@ TEST_CASE("Test Microsoft Entra Scope Configuration", "[microsoft_entra][basic]"
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -260,7 +260,7 @@ TEST_CASE("Test HasValidCachedToken with KeyValueSecret", "[microsoft_entra][int
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -295,7 +295,7 @@ TEST_CASE("Test Token Manager with Empty Token", "[microsoft_entra][integration]
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -331,7 +331,7 @@ TEST_CASE("Test GetMicrosoftEntraKeyValueSecret retrieval", "[microsoft_entra][i
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -374,7 +374,7 @@ TEST_CASE("Test Microsoft Entra Secret Replacement", "[microsoft_entra][integrat
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -428,7 +428,7 @@ TEST_CASE("Test Multiple Tenants with Different Secrets", "[microsoft_entra][int
     std::cout << std::endl;
 
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 

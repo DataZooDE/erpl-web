@@ -70,7 +70,7 @@ TEST_CASE("GraphOutlookUrlBuilder builds mail URLs", "[graph_outlook][url]") {
 
 TEST_CASE("Graph Outlook functions are registered in DuckDB", "[graph_outlook][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 
@@ -95,7 +95,7 @@ TEST_CASE("Graph Outlook functions are registered in DuckDB", "[graph_outlook][d
 
 TEST_CASE("Graph Outlook functions require secret parameter", "[graph_outlook][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 

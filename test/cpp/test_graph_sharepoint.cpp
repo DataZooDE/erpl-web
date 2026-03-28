@@ -96,7 +96,7 @@ TEST_CASE("GraphSharePointUrlBuilder - BuildSiteByPathUrl", "[graph_sharepoint][
 
 TEST_CASE("Microsoft Graph SharePoint Functions Exist", "[graph_sharepoint][functions]") {
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -131,7 +131,7 @@ TEST_CASE("Microsoft Graph SharePoint Functions Exist", "[graph_sharepoint][func
 
 TEST_CASE("Microsoft Graph SharePoint uses Graph Secret Type", "[graph_sharepoint][secret]") {
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 

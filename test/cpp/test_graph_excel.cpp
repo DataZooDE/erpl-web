@@ -101,7 +101,7 @@ TEST_CASE("GraphExcelUrlBuilder - BuildSiteDriveRootChildrenUrl", "[graph_excel]
 
 TEST_CASE("Microsoft Graph Secret Creation via DuckDB", "[graph_excel][secret]") {
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 
@@ -188,7 +188,7 @@ TEST_CASE("Microsoft Graph Secret Creation via DuckDB", "[graph_excel][secret]")
 
 TEST_CASE("Microsoft Graph Excel Functions Exist", "[graph_excel][functions]") {
     duckdb::DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     duckdb::DuckDB db(nullptr, &config);
     duckdb::Connection con(db);
 

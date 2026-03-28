@@ -87,11 +87,15 @@ builds with `terminate called after throwing 'InternalException': je_mallctl fai
 Always use this pattern in every C++ test that touches a `DuckDB` instance:
 ```cpp
 DBConfig config;
-config.options.allocator_background_threads = true;  // prevents jemalloc crash in debug builds
+config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));  // prevents jemalloc crash in debug builds
 DuckDB db(nullptr, &config);
 ```
 This delegates arena management to jemalloc's own background threads; DuckDB workers then skip
 the manual `ThreadFlush` call entirely.
+
+**Note (DuckDB v1.5.1+):** `config.options.allocator_background_threads` was removed; use
+`config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true))` instead.
+The setting is now a generic DBConfig setting stored via `user_settings`.
 
 **SQL tests location:** `test/sql/` (various `.test` files organized by module)
 **C++ unit tests location:** `build/debug/extension/erpl_web/test/cpp/`

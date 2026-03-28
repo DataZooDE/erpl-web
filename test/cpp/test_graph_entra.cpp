@@ -65,7 +65,7 @@ TEST_CASE("GraphEntraUrlBuilder builds sign-in logs URL", "[graph_entra][url]") 
 
 TEST_CASE("Graph Entra functions are registered in DuckDB", "[graph_entra][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 
@@ -95,7 +95,7 @@ TEST_CASE("Graph Entra functions are registered in DuckDB", "[graph_entra][duckd
 
 TEST_CASE("Graph Entra functions require secret parameter", "[graph_entra][duckdb]") {
     DBConfig config;
-    config.options.allocator_background_threads = true;
+    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 

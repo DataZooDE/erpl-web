@@ -1,4 +1,5 @@
 #include "odata_url_helpers.hpp"
+#include "duckdb/common/string_util.hpp"
 #include <sstream>
 
 namespace erpl_web {
@@ -146,14 +147,11 @@ static inline bool has_format_param(const std::string &query) {
 }
 
 std::string ODataUrlCodec::encodeQueryValue(const std::string &value) {
-    // Use httplib encode_query_param to encode query values
-    return duckdb_httplib_openssl::detail::encode_query_param(value);
+    return duckdb::StringUtil::URLEncode(value);
 }
 
 std::string ODataUrlCodec::decodeQueryValue(const std::string &value) {
-    // Use httplib decode_url; do not convert '+' into spaces for safety
-    static const std::set<char> exclude{};
-    return duckdb_httplib_openssl::detail::decode_url(value, false, exclude);
+    return duckdb::StringUtil::URLDecode(value, false);
 }
 
 void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
@@ -176,7 +174,7 @@ void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
 std::string ODataUrlCodec::encodeFilterExpression(const std::string &filter_expr) {
     // Encode the entire filter expression as a query value so that spaces and quotes are percent-encoded
     // This avoids 400s on services that require strict URL encoding of the $filter value
-    return duckdb_httplib_openssl::detail::encode_url(filter_expr);
+    return duckdb::StringUtil::URLEncode(filter_expr);
 }
 
 // Normalize $expand syntax:

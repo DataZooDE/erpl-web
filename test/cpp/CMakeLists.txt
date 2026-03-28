@@ -43,10 +43,11 @@ set(TEST_SOURCES
 add_executable(erpl_web_tests ${TEST_SOURCES})
 # Avoid ODR violation by not linking both static and shared DuckDB simultaneously
 # Link only test_helpers (which already links against DuckDB)
-target_link_libraries(erpl_web_tests 
-                      ${EXTENSION_NAME} 
+target_link_libraries(erpl_web_tests
+                      ${EXTENSION_NAME}
                       test_helpers
-                      OpenSSL::SSL OpenSSL::Crypto 
+                      dummy_static_extension_loader
+                      OpenSSL::SSL OpenSSL::Crypto
                       tinyxml2::tinyxml2)
 
 # Register with CTest and inject sanitizer env overrides
