@@ -24,6 +24,11 @@ if(MSVC)
     add_compile_definitions(NOMINMAX)
 endif()
 
+# Detect DuckDB v1.5+ API availability (ExtensionCallbackManager replaces DBConfig::storage_extensions)
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/include/duckdb/main/extension_callback_manager.hpp")
+    add_compile_definitions(DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER=1)
+endif()
+
 # Try to find mold binary
 include(CheckCXXCompilerFlag)
 find_program(MOLD_LINKER mold)
@@ -175,6 +180,12 @@ endif()
 if(${BUILD_UNITTESTS})
     add_subdirectory(test)
 endif()
+
+install(
+  TARGETS posthog_telemetry
+  EXPORT "${DUCKDB_EXPORT_SET}"
+  LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
+  ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
 
 install(
   TARGETS ${EXTENSION_NAME}

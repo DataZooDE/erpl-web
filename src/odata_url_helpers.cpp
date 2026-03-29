@@ -1,5 +1,4 @@
 #include "odata_url_helpers.hpp"
-#include "duckdb/common/string_util.hpp"
 #include <sstream>
 
 namespace erpl_web {
@@ -147,11 +146,21 @@ static inline bool has_format_param(const std::string &query) {
 }
 
 std::string ODataUrlCodec::encodeQueryValue(const std::string &value) {
-    return duckdb::StringUtil::URLEncode(value);
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+    // DuckDB v1.5+: encode_query_component moved to top-level namespace
+    return duckdb_httplib_openssl::encode_query_component(value, false);
+#else
+    return duckdb_httplib_openssl::detail::encode_query_param(value);
+#endif
 }
 
 std::string ODataUrlCodec::decodeQueryValue(const std::string &value) {
-    return duckdb::StringUtil::URLDecode(value, false);
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+    // DuckDB v1.5+: decode_query_component moved to top-level namespace
+    return duckdb_httplib_openssl::decode_query_component(value, false);
+#else
+    return duckdb_httplib_openssl::detail::decode_url(value, false);
+#endif
 }
 
 void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
@@ -172,9 +181,22 @@ void ODataUrlCodec::ensureJsonFormat(HttpUrl &url) {
 }
 
 std::string ODataUrlCodec::encodeFilterExpression(const std::string &filter_expr) {
-    // Encode the entire filter expression as a query value so that spaces and quotes are percent-encoded
-    // This avoids 400s on services that require strict URL encoding of the $filter value
-    return duckdb::StringUtil::URLEncode(filter_expr);
+    // Percent-encode all characters except RFC 3986 unreserved characters.
+    // This ensures spaces (%20), single quotes (%27), semicolons (%3B), and other
+    // special chars are encoded, which is required by strict OData services.
+    std::string result;
+    result.reserve(filter_expr.size() * 3);
+    for (auto c : filter_expr) {
+        auto uc = static_cast<unsigned char>(c);
+        if (std::isalnum(uc) || uc == '-' || uc == '_' || uc == '.' || uc == '~') {
+            result += c;
+        } else {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%%%02X", uc);
+            result += hex;
+        }
+    }
+    return result;
 }
 
 // Normalize $expand syntax:

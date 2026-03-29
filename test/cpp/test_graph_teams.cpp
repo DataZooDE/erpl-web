@@ -53,7 +53,7 @@ TEST_CASE("GraphTeamsUrlBuilder builds message URLs", "[graph_teams][url]") {
 
 TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckdb]") {
     DBConfig config;
-    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
+    config.SetOption("allocator_background_threads", Value(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 
@@ -81,31 +81,28 @@ TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckd
     }
 }
 
-TEST_CASE("Graph Teams functions require parameters", "[graph_teams][duckdb]") {
+TEST_CASE("Graph Teams functions enforce required parameters", "[graph_teams][duckdb]") {
     DBConfig config;
-    config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
+    config.SetOption("allocator_background_threads", Value(true));
     DuckDB db(nullptr, &config);
     Connection con(db);
 
     con.Query("LOAD erpl_web");
 
-    SECTION("graph_my_teams requires secret") {
-        auto result = con.Query("SELECT * FROM graph_my_teams()");
+    SECTION("graph_team_channels requires team_id argument") {
+        // Call with no args → binder rejects missing required positional arg
+        auto result = con.Query("SELECT * FROM graph_team_channels()");
         REQUIRE(result->HasError());
     }
 
-    SECTION("graph_team_channels requires secret and team_id") {
-        auto result = con.Query("SELECT * FROM graph_team_channels('secret')");
+    SECTION("graph_team_members requires team_id argument") {
+        auto result = con.Query("SELECT * FROM graph_team_members()");
         REQUIRE(result->HasError());
     }
 
-    SECTION("graph_team_members requires secret and team_id") {
-        auto result = con.Query("SELECT * FROM graph_team_members('secret')");
-        REQUIRE(result->HasError());
-    }
-
-    SECTION("graph_channel_messages requires secret, team_id, and channel_id") {
-        auto result = con.Query("SELECT * FROM graph_channel_messages('secret', 'team')");
+    SECTION("graph_channel_messages requires team_id and channel_id arguments") {
+        // Only one of two required positional args supplied
+        auto result = con.Query("SELECT * FROM graph_channel_messages('team-id')");
         REQUIRE(result->HasError());
     }
 }
