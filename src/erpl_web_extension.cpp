@@ -1,5 +1,6 @@
 #include "duckdb.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include <duckdb/parser/parsed_data/create_table_function_info.hpp>
 #include "duckdb/function/pragma_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
@@ -241,12 +242,101 @@ static void RegisterConfiguration(DatabaseInstance &instance)
 static void RegisterWebFunctions(ExtensionLoader &loader)
 {
     loader.RegisterType("HTTP_HEADER", erpl_web::CreateHttpHeaderType());
-    loader.RegisterFunction(erpl_web::CreateHttpGetFunction());
-    loader.RegisterFunction(erpl_web::CreateHttpPostFunction());
-    loader.RegisterFunction(erpl_web::CreateHttpPutFunction());
-    loader.RegisterFunction(erpl_web::CreateHttpPatchFunction());
-    loader.RegisterFunction(erpl_web::CreateHttpDeleteFunction());
-    loader.RegisterFunction(erpl_web::CreateHttpHeadFunction());
+
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpGetFunction());
+        FunctionDescription desc;
+        desc.description = "Send an HTTP GET request and return the response as a table.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM http_get('https://httpbin.org/ip')"};
+        desc.categories = {"http"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpHeadFunction());
+        FunctionDescription desc;
+        desc.description = "Send an HTTP HEAD request and return the response headers as a table.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM http_head('https://httpbin.org/ip')"};
+        desc.categories = {"http"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpPostFunction());
+        FunctionDescription desc1;
+        desc1.description = "Send an HTTP POST request with a JSON body and return the response as a table.";
+        desc1.parameter_names = {"url", "body"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::JSON()};
+        desc1.examples = {"SELECT * FROM http_post('https://httpbin.org/post', '{\"key\": \"value\"}'::JSON)"};
+        desc1.categories = {"http"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Send an HTTP POST request with raw content and return the response as a table.";
+        desc2.parameter_names = {"url", "content", "content_type"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM http_post('https://httpbin.org/post', 'hello', 'text/plain')"};
+        desc2.categories = {"http"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpPutFunction());
+        FunctionDescription desc1;
+        desc1.description = "Send an HTTP PUT request with a JSON body and return the response as a table.";
+        desc1.parameter_names = {"url", "body"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::JSON()};
+        desc1.examples = {"SELECT * FROM http_put('https://httpbin.org/put', '{\"key\": \"value\"}'::JSON)"};
+        desc1.categories = {"http"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Send an HTTP PUT request with raw content and return the response as a table.";
+        desc2.parameter_names = {"url", "content", "content_type"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM http_put('https://example.com/resource', 'data', 'text/plain')"};
+        desc2.categories = {"http"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpPatchFunction());
+        FunctionDescription desc1;
+        desc1.description = "Send an HTTP PATCH request with a JSON body and return the response as a table.";
+        desc1.parameter_names = {"url", "body"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::JSON()};
+        desc1.examples = {"SELECT * FROM http_patch('https://httpbin.org/patch', '{\"key\": \"value\"}'::JSON)"};
+        desc1.categories = {"http"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Send an HTTP PATCH request with raw content and return the response as a table.";
+        desc2.parameter_names = {"url", "content", "content_type"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM http_patch('https://example.com/resource', 'patch', 'text/plain')"};
+        desc2.categories = {"http"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateHttpDeleteFunction());
+        FunctionDescription desc1;
+        desc1.description = "Send an HTTP DELETE request with a JSON body and return the response as a table.";
+        desc1.parameter_names = {"url", "body"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::JSON()};
+        desc1.examples = {"SELECT * FROM http_delete('https://httpbin.org/delete', '{}'::JSON)"};
+        desc1.categories = {"http"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Send an HTTP DELETE request with raw content and return the response as a table.";
+        desc2.parameter_names = {"url", "content", "content_type"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM http_delete('https://example.com/resource', '', 'text/plain')"};
+        desc2.categories = {"http"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
 
     erpl::CreateBasicSecretFunctions::Register(loader);
     erpl::CreateBearerTokenSecretFunctions::Register(loader);
@@ -255,10 +345,50 @@ static void RegisterWebFunctions(ExtensionLoader &loader)
 
 static void RegisterODataFunctions(ExtensionLoader &loader)
 {
-    loader.RegisterFunction(erpl_web::CreateODataReadFunction());
-    loader.RegisterFunction(erpl_web::CreateODataDescribeFunction());
-    loader.RegisterFunction(erpl_web::CreateODataAttachFunction());
-    loader.RegisterFunction(erpl_web::CreateODataSapShowFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateODataReadFunction());
+        FunctionDescription desc;
+        desc.description = "Read data from an OData v2/v4 entity set with automatic version detection and predicate pushdown.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Customers')"};
+        desc.categories = {"odata"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateODataDescribeFunction());
+        FunctionDescription desc;
+        desc.description = "Describe the schema of an OData entity set by reading its metadata document.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odata_describe('https://services.odata.org/V4/Northwind/Northwind.svc/Customers')"};
+        desc.categories = {"odata"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateODataAttachFunction());
+        FunctionDescription desc;
+        desc.description = "Attach all entity sets of an OData service as views in the current DuckDB catalog.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odata_attach('https://services.odata.org/V4/Northwind/Northwind.svc/')"};
+        desc.categories = {"odata"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateODataSapShowFunction());
+        FunctionDescription desc;
+        desc.description = "List available SAP OData entity sets and services at a given service root URL.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odata_sap_show('https://<host>/sap/opu/odata/sap/')"};
+        desc.categories = {"odata", "sap"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
     
 
 #ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
@@ -274,40 +404,214 @@ static void RegisterODataFunctions(ExtensionLoader &loader)
 
 static void RegisterDatasphereFunctions(ExtensionLoader &loader)
 {
-    // Register catalog discovery functions
-    loader.RegisterFunction(erpl_web::CreateDatasphereShowSpacesFunction());
-    loader.RegisterFunction(erpl_web::CreateDatasphereShowAssetsFunction());
-    loader.RegisterFunction(erpl_web::CreateDatasphereDescribeSpaceFunction());
-    loader.RegisterFunction(erpl_web::CreateDatasphereDescribeAssetFunction());
-    
-    // Register asset consumption functions
-    loader.RegisterFunction(erpl_web::CreateDatasphereReadRelationalFunction());
-    loader.RegisterFunction(erpl_web::CreateDatasphereReadAnalyticalFunction());
-    
-    // Register Datasphere secret management functions
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereShowSpacesFunction());
+        FunctionDescription desc;
+        desc.description = "List all SAP Datasphere spaces accessible with the configured credentials.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM datasphere_show_spaces()"};
+        desc.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereShowAssetsFunction());
+        FunctionDescription desc1;
+        desc1.description = "List all assets in a specific SAP Datasphere space.";
+        desc1.parameter_names = {"space_id"};
+        desc1.parameter_types = {LogicalType::VARCHAR};
+        desc1.examples = {"SELECT * FROM datasphere_show_assets('MY_SPACE')"};
+        desc1.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "List all assets across all accessible SAP Datasphere spaces.";
+        desc2.parameter_names = {};
+        desc2.parameter_types = {};
+        desc2.examples = {"SELECT * FROM datasphere_show_assets()"};
+        desc2.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereDescribeSpaceFunction());
+        FunctionDescription desc;
+        desc.description = "Describe the metadata and configuration of a SAP Datasphere space.";
+        desc.parameter_names = {"space_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM datasphere_describe_space('MY_SPACE')"};
+        desc.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereDescribeAssetFunction());
+        FunctionDescription desc;
+        desc.description = "Describe the schema and metadata of a specific asset in a SAP Datasphere space.";
+        desc.parameter_names = {"space_id", "asset_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM datasphere_describe_asset('MY_SPACE', 'MY_VIEW')"};
+        desc.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereReadRelationalFunction());
+        FunctionDescription desc1;
+        desc1.description = "Read data from a relational asset in SAP Datasphere using space and asset ID.";
+        desc1.parameter_names = {"space_id", "asset_id"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc1.examples = {"SELECT * FROM datasphere_read_relational('MY_SPACE', 'MY_VIEW')"};
+        desc1.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Read data from a relational asset in SAP Datasphere using space, asset ID, and explicit secret name.";
+        desc2.parameter_names = {"space_id", "asset_id", "secret"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM datasphere_read_relational('MY_SPACE', 'MY_VIEW', 'my_secret')"};
+        desc2.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDatasphereReadAnalyticalFunction());
+        FunctionDescription desc1;
+        desc1.description = "Read data from an analytical (cube/view) asset in SAP Datasphere using space and asset ID.";
+        desc1.parameter_names = {"space_id", "asset_id"};
+        desc1.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc1.examples = {"SELECT * FROM datasphere_read_analytical('MY_SPACE', 'MY_CUBE')"};
+        desc1.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc1));
+        FunctionDescription desc2;
+        desc2.description = "Read data from an analytical asset in SAP Datasphere using space, asset ID, and explicit secret name.";
+        desc2.parameter_names = {"space_id", "asset_id", "secret"};
+        desc2.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc2.examples = {"SELECT * FROM datasphere_read_analytical('MY_SPACE', 'MY_CUBE', 'my_secret')"};
+        desc2.categories = {"sap", "datasphere"};
+        info.descriptions.push_back(std::move(desc2));
+        loader.RegisterFunction(std::move(info));
+    }
+
     erpl_web::CreateDatasphereSecretFunctions::Register(loader);
 }
 
 static void RegisterOdpFunctions(ExtensionLoader &loader)
 {
-    loader.RegisterFunction(erpl_web::CreateOdpODataShowFunction());
-    loader.RegisterFunction(erpl_web::CreateOdpODataReadFunction());
-    loader.RegisterFunction(erpl_web::CreateOdpListSubscriptionsFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateOdpODataShowFunction());
+        FunctionDescription desc;
+        desc.description = "List available SAP ODP (Operational Data Provisioning) contexts and extractors at a given OData service root URL.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odp_odata_show('https://<host>/sap/opu/odata/iwbep/GWSAMPLE_BASIC/')"};
+        desc.categories = {"sap", "odp"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateOdpODataReadFunction());
+        FunctionDescription desc;
+        desc.description = "Read data from a SAP ODP extractor via OData with delta token support for incremental/CDC loads.";
+        desc.parameter_names = {"url"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM odp_odata_read('https://<host>/sap/opu/odata/sap/ZEXTRACTOR_SRV/DataSet')"};
+        desc.categories = {"sap", "odp"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateOdpListSubscriptionsFunction());
+        FunctionDescription desc;
+        desc.description = "List all active ODP subscriptions with their status and current delta tokens.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM odp_odata_list_subscriptions()"};
+        desc.categories = {"sap", "odp"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
     loader.RegisterFunction(erpl_web::CreateOdpRemoveSubscriptionFunction());
 }
 
 static void RegisterSacFunctions(ExtensionLoader &loader)
 {
-    // Register catalog discovery functions
-    loader.RegisterFunction(erpl_web::CreateSacShowModelsFunction());
-    loader.RegisterFunction(erpl_web::CreateSacShowStoriesFunction());
-    loader.RegisterFunction(erpl_web::CreateSacGetModelInfoFunction());
-    loader.RegisterFunction(erpl_web::CreateSacGetStoryInfoFunction());
-
-    // Register data consumption functions
-    loader.RegisterFunction(erpl_web::CreateSacReadPlanningDataFunction());
-    loader.RegisterFunction(erpl_web::CreateSacReadAnalyticalFunction());
-    loader.RegisterFunction(erpl_web::CreateSacReadStoryDataFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacShowModelsFunction());
+        FunctionDescription desc;
+        desc.description = "List all planning and analytics models available in SAP Analytics Cloud.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM sac_show_models()"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacShowStoriesFunction());
+        FunctionDescription desc;
+        desc.description = "List all stories (dashboards/reports) available in SAP Analytics Cloud.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM sac_show_stories()"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacGetModelInfoFunction());
+        FunctionDescription desc;
+        desc.description = "Get detailed metadata and dimension/measure schema for a SAP Analytics Cloud model.";
+        desc.parameter_names = {"model_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM sac_get_model_info('t.2:MY_MODEL')"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacGetStoryInfoFunction());
+        FunctionDescription desc;
+        desc.description = "Get detailed metadata for a SAP Analytics Cloud story.";
+        desc.parameter_names = {"story_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM sac_get_story_info('ABC12345')"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacReadPlanningDataFunction());
+        FunctionDescription desc;
+        desc.description = "Read planning data from a SAP Analytics Cloud planning model.";
+        desc.parameter_names = {"model_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM sac_read_planning_data('t.2:MY_PLANNING_MODEL')"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacReadAnalyticalFunction());
+        FunctionDescription desc;
+        desc.description = "Read analytical data from a SAP Analytics Cloud model with optional dimension and measure filtering.";
+        desc.parameter_names = {"model_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM sac_read_analytical('t.2:MY_ANALYTICAL_MODEL')"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateSacReadStoryDataFunction());
+        FunctionDescription desc;
+        desc.description = "Extract underlying data from a SAP Analytics Cloud story's visualizations.";
+        desc.parameter_names = {"story_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM sac_read_story_data('ABC12345')"};
+        desc.categories = {"sap", "sac"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 
     // Register SAC storage extension (handles ATTACH support)
 #ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
@@ -321,36 +625,139 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
 
 static void RegisterDeltaShareFunctions(ExtensionLoader &loader)
 {
-    // Register Delta Sharing table function
-    loader.RegisterFunction(erpl_web::CreateDeltaShareScanFunction());
-
-    // Register Delta Sharing discovery functions
-    loader.RegisterFunction(erpl_web::CreateDeltaShareShowSharesFunction());
-    loader.RegisterFunction(erpl_web::CreateDeltaShareShowSchemasFunction());
-    loader.RegisterFunction(erpl_web::CreateDeltaShareShowTablesFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDeltaShareScanFunction());
+        FunctionDescription desc;
+        desc.description = "Read data from a Delta Sharing table using a profile file and share/schema/table path.";
+        desc.parameter_names = {"profile_path", "share", "schema", "table"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM delta_share_scan('/path/to/profile.json', 'my_share', 'my_schema', 'my_table')"};
+        desc.categories = {"delta", "sharing"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDeltaShareShowSharesFunction());
+        FunctionDescription desc;
+        desc.description = "List all shares available in a Delta Sharing server using a profile file.";
+        desc.parameter_names = {"profile_path"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM delta_share_show_shares('/path/to/profile.json')"};
+        desc.categories = {"delta", "sharing"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDeltaShareShowSchemasFunction());
+        FunctionDescription desc;
+        desc.description = "List all schemas within a Delta Sharing share.";
+        desc.parameter_names = {"profile_path", "share"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM delta_share_show_schemas('/path/to/profile.json', 'my_share')"};
+        desc.categories = {"delta", "sharing"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateDeltaShareShowTablesFunction());
+        FunctionDescription desc;
+        desc.description = "List all tables within a Delta Sharing schema.";
+        desc.parameter_names = {"profile_path", "share", "schema"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM delta_share_show_tables('/path/to/profile.json', 'my_share', 'my_schema')"};
+        desc.categories = {"delta", "sharing"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 }
 
 static void RegisterBusinessCentralFunctions(ExtensionLoader &loader)
 {
-    // Register Business Central secret type
     erpl_web::CreateBusinessCentralSecretFunctions::Register(loader);
 
-    // Register Business Central table functions
-    loader.RegisterFunction(erpl_web::CreateBcShowCompaniesFunction());
-    loader.RegisterFunction(erpl_web::CreateBcShowEntitiesFunction());
-    loader.RegisterFunction(erpl_web::CreateBcDescribeFunction());
-    loader.RegisterFunction(erpl_web::CreateBcReadFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateBcShowCompaniesFunction());
+        FunctionDescription desc;
+        desc.description = "List all companies accessible in Microsoft Dynamics 365 Business Central.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM bc_show_companies()"};
+        desc.categories = {"microsoft", "business_central"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateBcShowEntitiesFunction());
+        FunctionDescription desc;
+        desc.description = "List all OData entity sets available in Microsoft Dynamics 365 Business Central.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM bc_show_entities()"};
+        desc.categories = {"microsoft", "business_central"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateBcDescribeFunction());
+        FunctionDescription desc;
+        desc.description = "Describe the schema (property names, types, keys) of a Business Central entity.";
+        desc.parameter_names = {"entity"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM bc_describe('customers')"};
+        desc.categories = {"microsoft", "business_central"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateBcReadFunction());
+        FunctionDescription desc;
+        desc.description = "Read data from a Business Central entity with filter and predicate pushdown support.";
+        desc.parameter_names = {"entity"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM bc_read('customers')"};
+        desc.categories = {"microsoft", "business_central"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 }
 
 static void RegisterDataverseFunctions(ExtensionLoader &loader)
 {
-    // Register Dataverse/CRM secret type
     erpl_web::CreateDataverseSecretFunctions::Register(loader);
 
-    // Register Dataverse/CRM table functions
-    loader.RegisterFunction(erpl_web::CreateCrmShowEntitiesFunction());
-    loader.RegisterFunction(erpl_web::CreateCrmDescribeFunction());
-    loader.RegisterFunction(erpl_web::CreateCrmReadFunction());
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateCrmShowEntitiesFunction());
+        FunctionDescription desc;
+        desc.description = "List all entity types available in Microsoft Dataverse (Dynamics 365 CRM).";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM crm_show_entities()"};
+        desc.categories = {"microsoft", "dataverse"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateCrmDescribeFunction());
+        FunctionDescription desc;
+        desc.description = "Describe the attribute schema (names, types, keys) of a Microsoft Dataverse entity.";
+        desc.parameter_names = {"entity"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM crm_describe('accounts')"};
+        desc.categories = {"microsoft", "dataverse"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        CreateTableFunctionInfo info(erpl_web::CreateCrmReadFunction());
+        FunctionDescription desc;
+        desc.description = "Read data from a Microsoft Dataverse entity with filter and predicate pushdown support.";
+        desc.parameter_names = {"entity"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM crm_read('accounts')"};
+        desc.categories = {"microsoft", "dataverse"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 }
 
 static void RegisterGraphExcelFunctions(ExtensionLoader &loader)
@@ -410,6 +817,12 @@ static void RegisterTracingPragmas(ExtensionLoader &loader)
 
 static void LoadInternal(ExtensionLoader &loader) {
     auto &instance = loader.GetDatabaseInstance();
+
+    loader.SetDescription(
+        "HTTP/REST, OData v2/v4, SAP Datasphere, SAP Analytics Cloud, SAP ODP, "
+        "Delta Sharing, Microsoft 365 (Graph), Business Central, and Dataverse "
+        "data access functions for DuckDB."
+    );
 
     // Initialize telemetry with API key before capturing extension load
     PostHogTelemetry::Instance().SetAPIKey("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t");

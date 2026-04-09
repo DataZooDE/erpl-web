@@ -3,6 +3,7 @@
 #include "graph_excel_secret.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
@@ -407,23 +408,48 @@ void GraphPlannerFunctions::TasksScan(
 void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_PLANNER", "Registering Microsoft Graph Planner functions");
 
-    // graph_planner_plans(group_id) - optional secret named param
-    TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR},
-                                PlansScan, PlansBind);
-    planner_plans.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(planner_plans);
-
-    // graph_planner_buckets(plan_id) - optional secret named param
-    TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR},
-                                  BucketsScan, BucketsBind);
-    planner_buckets.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(planner_buckets);
-
-    // graph_planner_tasks(plan_id) - optional secret named param
-    TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR},
-                                TasksScan, TasksBind);
-    planner_tasks.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(planner_tasks);
+    {
+        TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR},
+                                    PlansScan, PlansBind);
+        planner_plans.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(planner_plans);
+        FunctionDescription desc;
+        desc.description = "List all Microsoft Planner plans in a Microsoft 365 group.";
+        desc.parameter_names = {"group_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_planner_plans('group-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "planner"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR},
+                                      BucketsScan, BucketsBind);
+        planner_buckets.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(planner_buckets);
+        FunctionDescription desc;
+        desc.description = "List all buckets in a Microsoft Planner plan.";
+        desc.parameter_names = {"plan_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_planner_buckets('plan-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "planner"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR},
+                                    TasksScan, TasksBind);
+        planner_tasks.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(planner_tasks);
+        FunctionDescription desc;
+        desc.description = "List all tasks in a Microsoft Planner plan.";
+        desc.parameter_names = {"plan_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_planner_tasks('plan-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "planner"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 
     ERPL_TRACE_INFO("GRAPH_PLANNER", "Successfully registered Microsoft Graph Planner functions");
 }

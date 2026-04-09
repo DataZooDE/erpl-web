@@ -3,6 +3,7 @@
 #include "graph_excel_secret.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
@@ -743,38 +744,79 @@ void GraphExcelFunctions::ExcelTableDataScan(
 void GraphExcelFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_EXCEL", "Registering Microsoft Graph Excel functions");
 
-    // graph_list_files(folder_path?) - optional secret named param
-    TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
-    list_files.varargs = LogicalType::VARCHAR;
-    list_files.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(list_files);
-
-    // graph_excel_tables(file_path) - optional secret named param
-    TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR},
-                               ExcelTablesScan, ExcelTablesBind);
-    excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(excel_tables);
-
-    // graph_excel_worksheets(file_path) - optional secret named param
-    TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR},
-                                   ExcelWorksheetsScan, ExcelWorksheetsBind);
-    excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(excel_worksheets);
-
-    // graph_excel_range(file_path, sheet_name, range?) - optional secret named param
-    TableFunction excel_range("graph_excel_range",
-                              {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                              ExcelRangeScan, ExcelRangeBind);
-    excel_range.varargs = LogicalType::VARCHAR;
-    excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(excel_range);
-
-    // graph_excel_table_data(file_path, table_name) - optional secret named param
-    TableFunction excel_table_data("graph_excel_table_data",
-                                   {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                   ExcelTableDataScan, ExcelTableDataBind);
-    excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(excel_table_data);
+    {
+        TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
+        list_files.varargs = LogicalType::VARCHAR;
+        list_files.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(list_files);
+        FunctionDescription desc;
+        desc.description = "List files in OneDrive/SharePoint accessible via Microsoft Graph.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_list_files(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR},
+                                   ExcelTablesScan, ExcelTablesBind);
+        excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(excel_tables);
+        FunctionDescription desc;
+        desc.description = "List all named tables in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
+        desc.parameter_names = {"file_path"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_tables('/path/to/workbook.xlsx', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR},
+                                       ExcelWorksheetsScan, ExcelWorksheetsBind);
+        excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(excel_worksheets);
+        FunctionDescription desc;
+        desc.description = "List all worksheets in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
+        desc.parameter_names = {"file_path"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_worksheets('/path/to/workbook.xlsx', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction excel_range("graph_excel_range",
+                                  {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                  ExcelRangeScan, ExcelRangeBind);
+        excel_range.varargs = LogicalType::VARCHAR;
+        excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(excel_range);
+        FunctionDescription desc;
+        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
+        desc.parameter_names = {"file_path", "sheet_name"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_range('/path/to/workbook.xlsx', 'Sheet1', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction excel_table_data("graph_excel_table_data",
+                                       {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                       ExcelTableDataScan, ExcelTableDataBind);
+        excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(excel_table_data);
+        FunctionDescription desc;
+        desc.description = "Read all rows from a named table in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
+        desc.parameter_names = {"file_path", "table_name"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_table_data('/path/to/workbook.xlsx', 'SalesData', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 
     ERPL_TRACE_INFO("GRAPH_EXCEL", "Successfully registered Microsoft Graph Excel functions");
 }

@@ -2,6 +2,7 @@
 #include "graph_entra_client.hpp"
 #include "graph_excel_secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
 #include "yyjson.hpp"
 
@@ -500,25 +501,58 @@ void GraphEntraFunctions::SignInLogsScan(
 // =============================================================================
 
 void GraphEntraFunctions::Register(ExtensionLoader &loader) {
-    // graph_users - no required params, optional secret named param
-    TableFunction users_func("graph_users", {}, UsersScan, UsersBind);
-    users_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(users_func);
-
-    // graph_groups - no required params, optional secret named param
-    TableFunction groups_func("graph_groups", {}, GroupsScan, GroupsBind);
-    groups_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(groups_func);
-
-    // graph_devices - no required params, optional secret named param
-    TableFunction devices_func("graph_devices", {}, DevicesScan, DevicesBind);
-    devices_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(devices_func);
-
-    // graph_signin_logs - no required params, optional secret named param
-    TableFunction signin_logs_func("graph_signin_logs", {}, SignInLogsScan, SignInLogsBind);
-    signin_logs_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(signin_logs_func);
+    {
+        TableFunction users_func("graph_users", {}, UsersScan, UsersBind);
+        users_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(users_func);
+        FunctionDescription desc;
+        desc.description = "List users from Microsoft Entra ID (Azure Active Directory).";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_users(secret := 'ms_entra')"};
+        desc.categories = {"microsoft", "graph", "entra"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction groups_func("graph_groups", {}, GroupsScan, GroupsBind);
+        groups_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(groups_func);
+        FunctionDescription desc;
+        desc.description = "List groups from Microsoft Entra ID (Azure Active Directory).";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_groups(secret := 'ms_entra')"};
+        desc.categories = {"microsoft", "graph", "entra"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction devices_func("graph_devices", {}, DevicesScan, DevicesBind);
+        devices_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(devices_func);
+        FunctionDescription desc;
+        desc.description = "List registered devices from Microsoft Entra ID (Azure Active Directory).";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_devices(secret := 'ms_entra')"};
+        desc.categories = {"microsoft", "graph", "entra"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction signin_logs_func("graph_signin_logs", {}, SignInLogsScan, SignInLogsBind);
+        signin_logs_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(signin_logs_func);
+        FunctionDescription desc;
+        desc.description = "List sign-in logs from Microsoft Entra ID (requires Azure AD Premium P1 or P2).";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_signin_logs(secret := 'ms_entra')"};
+        desc.categories = {"microsoft", "graph", "entra"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 }
 
 } // namespace erpl_web

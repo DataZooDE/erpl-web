@@ -3,6 +3,7 @@
 #include "graph_excel_secret.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
@@ -470,23 +471,48 @@ void GraphOutlookFunctions::MessagesScan(
 void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_OUTLOOK", "Registering Microsoft Graph Outlook functions");
 
-    // graph_calendar_events - no required params, optional secret named param
-    TableFunction calendar_events("graph_calendar_events", {},
-                                  CalendarEventsScan, CalendarEventsBind);
-    calendar_events.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(calendar_events);
-
-    // graph_contacts - no required params, optional secret named param
-    TableFunction contacts("graph_contacts", {},
-                           ContactsScan, ContactsBind);
-    contacts.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(contacts);
-
-    // graph_messages - no required params, optional secret named param
-    TableFunction messages("graph_messages", {},
-                           MessagesScan, MessagesBind);
-    messages.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(messages);
+    {
+        TableFunction calendar_events("graph_calendar_events", {},
+                                      CalendarEventsScan, CalendarEventsBind);
+        calendar_events.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(calendar_events);
+        FunctionDescription desc;
+        desc.description = "List calendar events from the authenticated user's Outlook calendar via Microsoft Graph.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_calendar_events(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "outlook"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction contacts("graph_contacts", {},
+                               ContactsScan, ContactsBind);
+        contacts.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(contacts);
+        FunctionDescription desc;
+        desc.description = "List contacts from the authenticated user's Outlook contacts via Microsoft Graph.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_contacts(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "outlook"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction messages("graph_messages", {},
+                               MessagesScan, MessagesBind);
+        messages.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(messages);
+        FunctionDescription desc;
+        desc.description = "List email messages (metadata only) from the authenticated user's Outlook inbox via Microsoft Graph.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_messages(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "outlook"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 
     ERPL_TRACE_INFO("GRAPH_OUTLOOK", "Successfully registered Microsoft Graph Outlook functions");
 }
