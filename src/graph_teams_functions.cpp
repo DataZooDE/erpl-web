@@ -2,6 +2,7 @@
 #include "graph_teams_client.hpp"
 #include "graph_excel_secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
 #include "yyjson.hpp"
 
@@ -494,25 +495,58 @@ void GraphTeamsFunctions::ChannelMessagesScan(
 // =============================================================================
 
 void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
-    // graph_my_teams - no required params, optional secret named param
-    TableFunction my_teams_func("graph_my_teams", {}, MyTeamsScan, MyTeamsBind);
-    my_teams_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(my_teams_func);
-
-    // graph_team_channels(team_id) - optional secret named param
-    TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
-    team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(team_channels_func);
-
-    // graph_team_members(team_id) - optional secret named param
-    TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
-    team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(team_members_func);
-
-    // graph_channel_messages(team_id, channel_id) - optional secret named param
-    TableFunction channel_messages_func("graph_channel_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ChannelMessagesScan, ChannelMessagesBind);
-    channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(channel_messages_func);
+    {
+        TableFunction my_teams_func("graph_my_teams", {}, MyTeamsScan, MyTeamsBind);
+        my_teams_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(my_teams_func);
+        FunctionDescription desc;
+        desc.description = "List Microsoft Teams that the authenticated user is a member of.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_my_teams(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "teams"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
+        team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(team_channels_func);
+        FunctionDescription desc;
+        desc.description = "List all channels in a Microsoft Teams team.";
+        desc.parameter_names = {"team_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_team_channels('team-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "teams"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
+        team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(team_members_func);
+        FunctionDescription desc;
+        desc.description = "List all members of a Microsoft Teams team.";
+        desc.parameter_names = {"team_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_team_members('team-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "teams"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction channel_messages_func("graph_channel_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ChannelMessagesScan, ChannelMessagesBind);
+        channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(channel_messages_func);
+        FunctionDescription desc;
+        desc.description = "List messages in a Microsoft Teams channel.";
+        desc.parameter_names = {"team_id", "channel_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_channel_messages('team-id', 'channel-id', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "teams"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 }
 
 } // namespace erpl_web

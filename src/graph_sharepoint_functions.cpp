@@ -3,6 +3,7 @@
 #include "graph_excel_secret.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;
@@ -608,31 +609,64 @@ void GraphSharePointFunctions::ListItemsScan(
 void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_SHAREPOINT", "Registering Microsoft Graph SharePoint functions");
 
-    // graph_show_sites(search_query?) - optional secret named param
-    TableFunction show_sites("graph_show_sites", {}, ShowSitesScan, ShowSitesBind);
-    show_sites.varargs = LogicalType::VARCHAR;
-    show_sites.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(show_sites);
-
-    // graph_show_lists(site_id) - optional secret named param
-    TableFunction show_lists("graph_show_lists", {LogicalType::VARCHAR},
-                             ShowListsScan, ShowListsBind);
-    show_lists.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(show_lists);
-
-    // graph_describe_list(site_id, list_id) - optional secret named param
-    TableFunction describe_list("graph_describe_list",
-                                {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                DescribeListScan, DescribeListBind);
-    describe_list.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(describe_list);
-
-    // graph_list_items(site_id, list_id) - optional secret named param
-    TableFunction list_items("graph_list_items",
-                             {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                             ListItemsScan, ListItemsBind);
-    list_items.named_parameters["secret"] = LogicalType::VARCHAR;
-    loader.RegisterFunction(list_items);
+    {
+        TableFunction show_sites("graph_show_sites", {}, ShowSitesScan, ShowSitesBind);
+        show_sites.varargs = LogicalType::VARCHAR;
+        show_sites.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(show_sites);
+        FunctionDescription desc;
+        desc.description = "Search and list SharePoint sites accessible via Microsoft Graph.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
+        desc.examples = {"SELECT * FROM graph_show_sites(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction show_lists("graph_show_lists", {LogicalType::VARCHAR},
+                                 ShowListsScan, ShowListsBind);
+        show_lists.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(show_lists);
+        FunctionDescription desc;
+        desc.description = "List all lists in a SharePoint site.";
+        desc.parameter_names = {"site_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_show_lists('site-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction describe_list("graph_describe_list",
+                                    {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                    DescribeListScan, DescribeListBind);
+        describe_list.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(describe_list);
+        FunctionDescription desc;
+        desc.description = "Describe the column schema of a SharePoint list.";
+        desc.parameter_names = {"site_id", "list_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_describe_list('site-id', 'list-id', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction list_items("graph_list_items",
+                                 {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                 ListItemsScan, ListItemsBind);
+        list_items.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(list_items);
+        FunctionDescription desc;
+        desc.description = "Read all items from a SharePoint list.";
+        desc.parameter_names = {"site_id", "list_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_list_items('site-id', 'list-id', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
 
     ERPL_TRACE_INFO("GRAPH_SHAREPOINT", "Successfully registered Microsoft Graph SharePoint functions");
 }
