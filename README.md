@@ -363,7 +363,7 @@ Attach usage:
 ```sql
 ATTACH 'https://services.odata.org/TripPinRESTierService' AS trippin (TYPE odata);
 SELECT TOP 5 UserName, FirstName FROM trippin.People;
-``;
+```
 
 ---
 
