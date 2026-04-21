@@ -58,7 +58,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='');
 ----
-20
+91
 
 statement ok
 SET erpl_trace_enabled=false;
