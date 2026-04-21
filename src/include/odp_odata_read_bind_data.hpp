@@ -197,13 +197,15 @@ private:
     // Incremental pagination state
     // When a multi-page response is being consumed, pending_next_url_ holds the
     // __next URL of the page currently loaded into odata_bind_data_. It is cleared
-    // when the last page is reached. preference_applied_first_page_ saves the
-    // preference-applied flag from the first page's HTTP header so it can be
-    // forwarded to ProcessRequestResult together with the last page's delta token.
+    // when the last page is reached.
     std::string pending_next_url_;
-    bool preference_applied_first_page_;
     bool initial_load_in_progress_;
     bool delta_fetch_in_progress_;
+
+    // Column projection: saved in ActivateColumns and re-applied to each replacement
+    // odata_bind_data_ created by FetchAndLoadNextPage, so column mapping is consistent
+    // across all pages.
+    std::vector<duckdb::column_t> active_column_ids_;
 
     // ========================================================================
     // Initialization and Setup

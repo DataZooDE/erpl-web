@@ -20,7 +20,6 @@ OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
     , initialized_(false)
     , first_fetch_completed_(false)
     , current_audit_id_(-1)
-    , preference_applied_first_page_(false)
     , initial_load_in_progress_(false)
     , delta_fetch_in_progress_(false)
 {
@@ -122,6 +121,7 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
 }
 
 void OdpODataReadBindData::ActivateColumns(const std::vector<duckdb::column_t> &column_ids) {
+    active_column_ids_ = column_ids;
     if (odata_bind_data_) {
         odata_bind_data_->ActivateColumns(column_ids);
     }
@@ -172,7 +172,6 @@ void OdpODataReadBindData::ForceInitialLoad() {
     state_manager_->TransitionToInitialLoad();
     first_fetch_completed_         = false;
     pending_next_url_              = "";
-    preference_applied_first_page_ = false;
     initial_load_in_progress_      = false;
     delta_fetch_in_progress_       = false;
 
@@ -289,10 +288,6 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         if (!result.response) {
             return false;
         }
-
-        // Save preference-applied from first page's HTTP header; the delta token
-        // arrives only on the last page and will be picked up by FetchAndLoadNextPage.
-        preference_applied_first_page_ = result.preference_applied;
 
         auto first_next = result.response->NextUrl();
         pending_next_url_ = (first_next.has_value() && !first_next->empty())
@@ -585,7 +580,7 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
 
         if (initial_load_in_progress_) {
             initial_load_in_progress_  = false;
-            last_page.preference_applied = preference_applied_first_page_;
+            last_page.preference_applied = !norm_token.empty();
             ProcessRequestResult(last_page, "initial_load");
         } else if (delta_fetch_in_progress_) {
             delta_fetch_in_progress_   = false;
@@ -597,6 +592,13 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
     // Reload odata_bind_data_ with the new page's JSON content.
     // Use entity_set_url_ as the canonical URL; the actual content comes from the fetched page.
     UpdateODataClientWithResponse(entity_set_url_, next_result.response->RawContent());
+
+    // Re-apply column projection: UpdateODataClientWithResponse creates a fresh
+    // ODataReadBindData that has no column selection. Without this, the new instance
+    // falls back to "all columns" mode and can write out-of-bounds into a projected chunk.
+    if (!active_column_ids_.empty()) {
+        odata_bind_data_->ActivateColumns(active_column_ids_);
+    }
 
     ERPL_TRACE_INFO("ODP_BIND_DATA", pending_next_url_.empty()
         ? "Last ODP page loaded into odata_bind_data_"
