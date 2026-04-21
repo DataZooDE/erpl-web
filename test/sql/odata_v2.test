@@ -34,7 +34,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test OData v2 with pagination
 query I

@@ -22,7 +22,7 @@ SET erpl_trace_enabled=false;
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test expand with other parameters
 query I
@@ -34,7 +34,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test nested expand with Northwind (Categories can expand Products)
 query I
@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test expand with top and skip
 query I
@@ -67,7 +67,7 @@ SET erpl_trace_enabled=false;
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # ============================================================================
 # SECTION 2: OData V4 Expand Testing (TripPin)
@@ -129,7 +129,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierServic
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test expand with special characters in filter (OData V4 only)
 query I
@@ -151,7 +151,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierServic
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test expand with multiple complex paths (OData V4 only)
 query I
@@ -167,7 +167,7 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierServic
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders');
 ----
-20
+91
 
 # Test expand with filter clause
 query I
