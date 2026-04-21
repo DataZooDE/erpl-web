@@ -194,6 +194,17 @@ private:
     bool first_fetch_completed_;
     int64_t current_audit_id_;
 
+    // Incremental pagination state
+    // When a multi-page response is being consumed, pending_next_url_ holds the
+    // __next URL of the page currently loaded into odata_bind_data_. It is cleared
+    // when the last page is reached. preference_applied_first_page_ saves the
+    // preference-applied flag from the first page's HTTP header so it can be
+    // forwarded to ProcessRequestResult together with the last page's delta token.
+    std::string pending_next_url_;
+    bool preference_applied_first_page_;
+    bool initial_load_in_progress_;
+    bool delta_fetch_in_progress_;
+
     // ========================================================================
     // Initialization and Setup
     // ========================================================================
@@ -249,6 +260,15 @@ private:
      * @param response_content Pre-fetched JSON response content
      */
     void UpdateODataClientWithResponse(const std::string& url, const std::string& response_content);
+
+    /**
+     * @brief Fetch the next ODP page and reload odata_bind_data_ with its content.
+     *
+     * Called from FetchNextResult() when the current page is exhausted and
+     * pending_next_url_ is non-empty. On the last page (no further __next),
+     * the deferred state transition (delta token save) is performed here.
+     */
+    void FetchAndLoadNextPage();
 
     // ========================================================================
     // Error Handling and Recovery

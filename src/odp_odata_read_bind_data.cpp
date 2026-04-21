@@ -20,6 +20,9 @@ OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
     , initialized_(false)
     , first_fetch_completed_(false)
     , current_audit_id_(-1)
+    , preference_applied_first_page_(false)
+    , initial_load_in_progress_(false)
+    , delta_fetch_in_progress_(false)
 {
     ERPL_TRACE_INFO("ODP_BIND_DATA", duckdb::StringUtil::Format(
         "Creating ODP bind data - URL: %s, Secret: %s, ForceFullLoad: %s, ImportToken: %s",
@@ -52,18 +55,12 @@ bool OdpODataReadBindData::HasMoreResults() {
     if (!odata_bind_data_) {
         return false;
     }
-    
-    // Check if underlying OData has more results
-    bool odata_has_more = odata_bind_data_->HasMoreResults();
-    
-    // If OData is done but we're in delta mode, we might have more delta fetches
-    if (!odata_has_more && state_manager_->GetCurrentPhase() == OdpSubscriptionStateManager::SubscriptionPhase::DELTA_FETCH) {
-        // For now, we don't automatically trigger more delta fetches
-        // This would be handled by a scheduler or explicit user request
-        return false;
+    // A pending __next URL means odata_bind_data_ will be reloaded on next
+    // FetchNextResult call even after the current page returns 0 rows.
+    if (!pending_next_url_.empty()) {
+        return true;
     }
-    
-    return odata_has_more;
+    return odata_bind_data_->HasMoreResults();
 }
 
 unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
@@ -101,17 +98,20 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
             first_fetch_completed_ = true;
         }
         
-        // Delegate to underlying OData bind data
+        // Drain current page; if exhausted and a next page URL is pending, load it.
         unsigned int rows_fetched = odata_bind_data_->FetchNextResult(output);
-        
-        ERPL_TRACE_DEBUG("ODP_BIND_DATA", duckdb::StringUtil::Format("Fetched %u rows", rows_fetched));
-        
-        // Update audit entry if we have one
-        if (current_audit_id_ > 0 && rows_fetched > 0) {
-            state_manager_->UpdateAuditEntry(current_audit_id_, 200, rows_fetched, 
-                                           output.size() * output.GetTypes().size() * 8); // Rough size estimate
+        if (rows_fetched == 0 && !pending_next_url_.empty()) {
+            FetchAndLoadNextPage();
+            rows_fetched = odata_bind_data_->FetchNextResult(output);
         }
-        
+
+        ERPL_TRACE_DEBUG("ODP_BIND_DATA", duckdb::StringUtil::Format("Fetched %u rows", rows_fetched));
+
+        if (current_audit_id_ > 0 && rows_fetched > 0) {
+            state_manager_->UpdateAuditEntry(current_audit_id_, 200, rows_fetched,
+                                           output.size() * output.GetTypes().size() * 8);
+        }
+
         return rows_fetched;
         
     } catch (const std::exception& e) {
@@ -168,11 +168,14 @@ OdpSubscriptionStateManager::SubscriptionPhase OdpODataReadBindData::GetCurrentP
 
 void OdpODataReadBindData::ForceInitialLoad() {
     ERPL_TRACE_INFO("ODP_BIND_DATA", "Forcing initial load");
-    
+
     state_manager_->TransitionToInitialLoad();
-    first_fetch_completed_ = false;
-    
-    // Recreate OData bind data to reset state
+    first_fetch_completed_         = false;
+    pending_next_url_              = "";
+    preference_applied_first_page_ = false;
+    initial_load_in_progress_      = false;
+    delta_fetch_in_progress_       = false;
+
     CreateODataBindData();
 }
 
@@ -277,27 +280,36 @@ void OdpODataReadBindData::ValidateEntitySetUrl() const {
 
 bool OdpODataReadBindData::HandleInitialLoad() {
     ERPL_TRACE_INFO("ODP_BIND_DATA", "Handling initial load request");
-    
+
     try {
-        // Create audit entry
         current_audit_id_ = state_manager_->CreateAuditEntry("initial_load", entity_set_url_);
-        
-        // Execute initial load request
+
         auto result = request_orchestrator_->ExecuteInitialLoad(entity_set_url_, max_page_size_);
-        
-        // Process the result
-        ProcessRequestResult(result, "initial_load");
-        
-        // Update OData client with pre-fetched initial response
-        if (result.response) {
-            // For initial load, we use the original URL with pre-fetched content
-            std::string response_content = result.response->RawContent();
-            UpdateODataClientWithResponse(entity_set_url_, response_content);
-            return true;
+
+        if (!result.response) {
+            return false;
         }
-        
-        return false;
-        
+
+        // Save preference-applied from first page's HTTP header; the delta token
+        // arrives only on the last page and will be picked up by FetchAndLoadNextPage.
+        preference_applied_first_page_ = result.preference_applied;
+
+        auto first_next = result.response->NextUrl();
+        pending_next_url_ = (first_next.has_value() && !first_next->empty())
+            ? first_next.value() : "";
+
+        if (pending_next_url_.empty()) {
+            // Single-page response: process state transition immediately.
+            ProcessRequestResult(result, "initial_load");
+        } else {
+            // Multi-page: defer state transition until FetchAndLoadNextPage reaches the last page.
+            initial_load_in_progress_ = true;
+            ERPL_TRACE_INFO("ODP_BIND_DATA", "Multi-page initial load — deferring state transition to last page");
+        }
+
+        UpdateODataClientWithResponse(entity_set_url_, result.response->RawContent());
+        return true;
+
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_BIND_DATA", "Initial load failed: " + std::string(e.what()));
         state_manager_->TransitionToError("Initial load failed: " + std::string(e.what()));
@@ -307,49 +319,52 @@ bool OdpODataReadBindData::HandleInitialLoad() {
 
 bool OdpODataReadBindData::HandleDeltaFetch() {
     ERPL_TRACE_INFO("ODP_BIND_DATA", "Handling delta fetch request");
-    
+
     std::string current_token = state_manager_->GetCurrentDeltaToken();
     if (current_token.empty()) {
         ERPL_TRACE_WARN("ODP_BIND_DATA", "No delta token available, falling back to initial load");
         state_manager_->TransitionToInitialLoad();
         return HandleInitialLoad();
     }
-    
+
     try {
-        // Create audit entry
         current_audit_id_ = state_manager_->CreateAuditEntry("delta_fetch", entity_set_url_);
-        
-        // Execute delta fetch request
+
         ERPL_TRACE_INFO("ODP_BIND_DATA", duckdb::StringUtil::Format(
             "Delta fetch with token: %s", current_token.substr(0, 64)));
         auto result = request_orchestrator_->ExecuteDeltaFetch(entity_set_url_, current_token, max_page_size_);
-        
-        // Process the result
-        ProcessRequestResult(result, "delta_fetch");
-        
-        // Update OData client with pre-fetched delta response
-        if (result.response) {
-            std::string delta_url = !result.extracted_delta_url.empty()
-                ? result.extracted_delta_url
-                : OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
-            std::string response_content = result.response->RawContent();
-            ERPL_TRACE_INFO("ODP_BIND_DATA", "Using constructed delta URL for response injection: " + delta_url);
-            UpdateODataClientWithResponse(delta_url, response_content);
-            return true;
+
+        if (!result.response) {
+            return false;
         }
-        
-        return false;
-        
+
+        auto first_next = result.response->NextUrl();
+        pending_next_url_ = (first_next.has_value() && !first_next->empty())
+            ? first_next.value() : "";
+
+        if (pending_next_url_.empty()) {
+            // Single-page delta response: process state transition immediately.
+            ProcessRequestResult(result, "delta_fetch");
+        } else {
+            // Multi-page: defer state transition until FetchAndLoadNextPage reaches the last page.
+            delta_fetch_in_progress_ = true;
+            ERPL_TRACE_INFO("ODP_BIND_DATA", "Multi-page delta fetch — deferring state transition to last page");
+        }
+
+        std::string delta_url = !result.extracted_delta_url.empty()
+            ? result.extracted_delta_url
+            : OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
+        ERPL_TRACE_INFO("ODP_BIND_DATA", "Using delta URL for first page injection: " + delta_url);
+        UpdateODataClientWithResponse(delta_url, result.response->RawContent());
+        return true;
+
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_BIND_DATA", "Delta fetch failed: " + std::string(e.what()));
-        
-        // Check if this is a token error that requires fallback to initial load
         if (IsTokenError(e)) {
             ERPL_TRACE_INFO("ODP_BIND_DATA", "Token error detected, falling back to initial load");
             state_manager_->TransitionToInitialLoad();
             return HandleInitialLoad();
         }
-        
         state_manager_->TransitionToError("Delta fetch failed: " + std::string(e.what()));
         return false;
     }
@@ -526,6 +541,66 @@ void OdpODataReadBindData::ProcessScanResult(const duckdb::DataChunk& output) {
         ERPL_TRACE_ERROR("ODP_BIND_DATA", "Error processing scan result: " + std::string(e.what()));
         // Don't throw - this is just for tracking, shouldn't break the scan
     }
+}
+
+void OdpODataReadBindData::FetchAndLoadNextPage() {
+    D_ASSERT(!pending_next_url_.empty());
+
+    const std::string url_to_fetch = pending_next_url_;
+    ERPL_TRACE_INFO("ODP_BIND_DATA", "Fetching next ODP page: " + url_to_fetch);
+
+    auto next_result = request_orchestrator_->ExecuteNextPage(url_to_fetch);
+    if (!next_result.response) {
+        ERPL_TRACE_WARN("ODP_BIND_DATA", "Next page request returned no response — stopping pagination");
+        pending_next_url_ = "";
+        return;
+    }
+
+    // Determine whether there is yet another page after this one.
+    auto further_next = next_result.response->NextUrl();
+    pending_next_url_ = (further_next.has_value() && !further_next->empty())
+        ? further_next.value() : "";
+
+    // When this is the last page, perform the state transition that was deferred
+    // in HandleInitialLoad / HandleDeltaFetch.
+    if (pending_next_url_.empty()) {
+        // Extract and normalize the delta token from this final page.
+        std::string raw_token    = OdpRequestOrchestrator::ExtractDeltaToken(*next_result.response);
+        std::string delta_url    = OdpRequestOrchestrator::ExtractDeltaUrl(*next_result.response);
+        std::string norm_token   = OdpRequestOrchestrator::NormalizeDeltaToken(raw_token);
+        std::string norm_url     = delta_url.empty() ? "" : OdpRequestOrchestrator::NormalizeDeltaUrl(delta_url);
+
+        if (!norm_token.empty()) {
+            ERPL_TRACE_INFO("ODP_BIND_DATA", "Last page delta token: " + norm_token.substr(0, 64));
+        } else {
+            ERPL_TRACE_WARN("ODP_BIND_DATA", "No delta token found on last pagination page");
+        }
+
+        OdpRequestOrchestrator::OdpRequestResult last_page;
+        last_page.response             = next_result.response;
+        last_page.http_status_code     = next_result.http_status_code;
+        last_page.response_size_bytes  = next_result.response_size_bytes;
+        last_page.extracted_delta_token = norm_token;
+        last_page.extracted_delta_url   = norm_url;
+
+        if (initial_load_in_progress_) {
+            initial_load_in_progress_  = false;
+            last_page.preference_applied = preference_applied_first_page_;
+            ProcessRequestResult(last_page, "initial_load");
+        } else if (delta_fetch_in_progress_) {
+            delta_fetch_in_progress_   = false;
+            last_page.preference_applied = false; // unused for delta_fetch path
+            ProcessRequestResult(last_page, "delta_fetch");
+        }
+    }
+
+    // Reload odata_bind_data_ with the new page's JSON content.
+    // Use entity_set_url_ as the canonical URL; the actual content comes from the fetched page.
+    UpdateODataClientWithResponse(entity_set_url_, next_result.response->RawContent());
+
+    ERPL_TRACE_INFO("ODP_BIND_DATA", pending_next_url_.empty()
+        ? "Last ODP page loaded into odata_bind_data_"
+        : "Intermediate ODP page loaded — more pages pending");
 }
 
 } // namespace erpl_web
