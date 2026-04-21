@@ -371,6 +371,66 @@ TEST_CASE("Test OData v2 Error handling - missing d wrapper", "[odata_content_v2
     REQUIRE_THROWS_AS(json_content_instance.ToRows(column_names, column_types), std::runtime_error);
 }
 
+TEST_CASE("Test OData v2 NextUrl - no next link returns nullopt", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // Response without any pagination link
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                {"ID": "1", "Name": "Foo"}
+            ],
+            "__delta": "https://example.com/sap/opu/odata/TYED/MySvc/MySet?!deltatoken='abc'"
+        }
+    })";
+
+    ODataEntitySetJsonContent instance(json_content);
+    REQUIRE_FALSE(instance.NextUrl().has_value());
+}
+
+TEST_CASE("Test OData v2 NextUrl - __next inside d wrapper (SAP ODP standard)", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // Real SAP ODP OData v2 pagination response: __next lives inside d, not at root.
+    // Confirmed with production SAP PP_ADOPS_PRODUCTIONORDER_SR responses.
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                {"ID": "1", "Name": "Foo"},
+                {"ID": "2", "Name": "Bar"}
+            ],
+            "__next": "https://example.com/sap/opu/odata/TYED/MySvc/MySet?$format=json&$skiptoken=D20260415084410_000038000_0000000001_0000000010_0000000001"
+        }
+    })";
+
+    ODataEntitySetJsonContent instance(json_content);
+    auto next_url = instance.NextUrl();
+    REQUIRE(next_url.has_value());
+    REQUIRE(next_url.value() == "https://example.com/sap/opu/odata/TYED/MySvc/MySet?$format=json&$skiptoken=D20260415084410_000038000_0000000001_0000000010_0000000001");
+}
+
+TEST_CASE("Test OData v2 NextUrl - __next at root level (backward compat)", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // Non-standard placement: __next at root. Retained for backward compatibility.
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                {"ID": "1", "Name": "Foo"}
+            ]
+        },
+        "__next": "https://example.com/sap/opu/odata/TYED/MySvc/MySet?$skiptoken=page2"
+    })";
+
+    ODataEntitySetJsonContent instance(json_content);
+    auto next_url = instance.NextUrl();
+    REQUIRE(next_url.has_value());
+    REQUIRE(next_url.value() == "https://example.com/sap/opu/odata/TYED/MySvc/MySet?$skiptoken=page2");
+}
+
 TEST_CASE("Test OData v2 Error handling - missing results array", "[odata_content_v2]")
 {
     std::cout << std::endl;
