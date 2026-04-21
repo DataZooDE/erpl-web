@@ -288,10 +288,13 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         // Process the result
         ProcessRequestResult(result, "initial_load");
         
-        // Update OData client with pre-fetched initial response
+        // Update OData client with pre-fetched initial response.
+        // Use accumulated_raw_content when pagination was followed (contains all pages'
+        // records merged into one response body); fall back to the last page otherwise.
         if (result.response) {
-            // For initial load, we use the original URL with pre-fetched content
-            std::string response_content = result.response->RawContent();
+            std::string response_content = !result.accumulated_raw_content.empty()
+                ? result.accumulated_raw_content
+                : result.response->RawContent();
             UpdateODataClientWithResponse(entity_set_url_, response_content);
             return true;
         }
@@ -327,12 +330,16 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
         // Process the result
         ProcessRequestResult(result, "delta_fetch");
         
-        // Update OData client with pre-fetched delta response
+        // Update OData client with pre-fetched delta response.
+        // Use accumulated_raw_content when pagination was followed (contains all pages'
+        // records merged into one response body); fall back to the last page otherwise.
         if (result.response) {
             std::string delta_url = !result.extracted_delta_url.empty()
                 ? result.extracted_delta_url
                 : OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
-            std::string response_content = result.response->RawContent();
+            std::string response_content = !result.accumulated_raw_content.empty()
+                ? result.accumulated_raw_content
+                : result.response->RawContent();
             ERPL_TRACE_INFO("ODP_BIND_DATA", "Using constructed delta URL for response injection: " + delta_url);
             UpdateODataClientWithResponse(delta_url, response_content);
             return true;

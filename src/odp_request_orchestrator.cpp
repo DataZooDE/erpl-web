@@ -34,32 +34,43 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteInitialL
     
     auto result = ExecuteRequest(request, "initial_load");
 
-    // Diagnostic: follow pagination to last page to ensure we see the final delta link
+    // Follow server-driven pagination (__next inside d), accumulating rows from all
+    // pages. The last page's delta link is used for change tracking.
     try {
         if (result.response) {
+            std::vector<std::string> page_contents;
+            page_contents.push_back(result.response->RawContent());
+
             std::optional<std::string> next_url = result.response->NextUrl();
-            idx_t pages_followed = 0;
-            while (next_url.has_value() && !next_url->empty() && pages_followed < 1000) {
+            while (next_url.has_value() && !next_url->empty()) {
                 ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Following next page: " + next_url.value());
                 auto next_res = ExecuteNextPage(next_url.value());
                 if (!next_res.response) {
                     break;
                 }
-                // Replace with the latest page so that token extraction uses the last page
+                page_contents.push_back(next_res.response->RawContent());
+
+                // Keep latest page in result for delta token/link extraction
                 result.response = next_res.response;
                 result.http_status_code = next_res.http_status_code;
                 result.response_size_bytes += next_res.response_size_bytes;
                 result.has_more_pages = next_res.has_more_pages;
 
                 next_url = next_res.response->NextUrl();
-                pages_followed++;
             }
 
-            // Re-extract token and delta link from the last page
+            // Merge all pages into a single response body when pagination was followed
+            if (page_contents.size() > 1) {
+                result.accumulated_raw_content = MergeV2Pages(page_contents);
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+                    "Merged %zu pagination pages into single response (%zu bytes)",
+                    page_contents.size(), result.accumulated_raw_content.size()));
+            }
+
+            // Extract token and delta link from the last page
             auto raw_token = ExtractDeltaToken(*result.response);
             auto delta_link_url = ExtractDeltaUrl(*result.response);
             if (!raw_token.empty()) {
-                // Log raw token and normalized token (strip surrounding quotes if present)
                 std::string normalized = raw_token;
                 if (!normalized.empty() && (normalized.front() == '\'' || normalized.front() == '"') &&
                     normalized.back() == normalized.front()) {
@@ -82,7 +93,7 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteInitialL
             }
         }
     } catch (const std::exception &e) {
-        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", std::string("Pagination diagnostic failed: ") + e.what());
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", std::string("Pagination accumulation failed: ") + e.what());
     }
 
     return result;
@@ -110,8 +121,54 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFet
     
     // Create delta fetch request
     HttpRequest request = http_factory_->CreateDeltaFetchRequest(delta_url, max_page_size);
-    
-    return ExecuteRequest(request, "delta_fetch");
+
+    auto result = ExecuteRequest(request, "delta_fetch");
+
+    // Follow server-driven pagination (__next inside d), accumulating rows from all pages.
+    // Large delta batches can be paginated by SAP just like initial loads.
+    try {
+        if (result.response) {
+            std::vector<std::string> page_contents;
+            page_contents.push_back(result.response->RawContent());
+
+            std::optional<std::string> next_url = result.response->NextUrl();
+            while (next_url.has_value() && !next_url->empty()) {
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Delta fetch following next page: " + next_url.value());
+                auto next_res = ExecuteNextPage(next_url.value());
+                if (!next_res.response) {
+                    break;
+                }
+                page_contents.push_back(next_res.response->RawContent());
+                result.response = next_res.response;
+                result.http_status_code = next_res.http_status_code;
+                result.response_size_bytes += next_res.response_size_bytes;
+                result.has_more_pages = next_res.has_more_pages;
+                next_url = next_res.response->NextUrl();
+            }
+
+            if (page_contents.size() > 1) {
+                result.accumulated_raw_content = MergeV2Pages(page_contents);
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+                    "Delta fetch merged %zu pagination pages (%zu bytes)",
+                    page_contents.size(), result.accumulated_raw_content.size()));
+            }
+
+            // Re-extract delta token from last page
+            auto raw_token = ExtractDeltaToken(*result.response);
+            if (!raw_token.empty()) {
+                std::string normalized = raw_token;
+                if (!normalized.empty() && (normalized.front() == '\'' || normalized.front() == '"') &&
+                    normalized.back() == normalized.front()) {
+                    normalized = normalized.substr(1, normalized.size() - 2);
+                }
+                result.extracted_delta_token = normalized;
+            }
+        }
+    } catch (const std::exception& e) {
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", std::string("Delta fetch pagination failed: ") + e.what());
+    }
+
+    return result;
 }
 
 OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteNextPage(const std::string& next_url) {
@@ -473,6 +530,77 @@ std::string OdpRequestOrchestrator::EnsureJsonFormat(const std::string& url) {
 
 bool OdpRequestOrchestrator::HasJsonFormat(const std::string& url) {
     return url.find("$format=json") != std::string::npos;
+}
+
+std::string OdpRequestOrchestrator::MergeV2Pages(const std::vector<std::string>& page_contents) {
+    if (page_contents.empty()) {
+        return R"({"d":{"results":[]}})";
+    }
+    if (page_contents.size() == 1) {
+        return page_contents[0];
+    }
+
+    // Accumulate "results" arrays from all pages.
+    // All non-pagination properties from the last page (e.g. __delta, __count) are
+    // copied into the merged output. __count is repeated on every page with the same
+    // total value, so taking it from the last page is correct. __next is intentionally
+    // excluded as it is a per-page navigation link that must not appear in merged output.
+    duckdb_yyjson::yyjson_mut_doc* merged_doc = duckdb_yyjson::yyjson_mut_doc_new(nullptr);
+    duckdb_yyjson::yyjson_mut_val* merged_root = duckdb_yyjson::yyjson_mut_obj(merged_doc);
+    duckdb_yyjson::yyjson_mut_doc_set_root(merged_doc, merged_root);
+    duckdb_yyjson::yyjson_mut_val* merged_d = duckdb_yyjson::yyjson_mut_obj(merged_doc);
+    duckdb_yyjson::yyjson_mut_obj_add_val(merged_doc, merged_root, "d", merged_d);
+    duckdb_yyjson::yyjson_mut_val* merged_results = duckdb_yyjson::yyjson_mut_arr(merged_doc);
+    duckdb_yyjson::yyjson_mut_obj_add_val(merged_doc, merged_d, "results", merged_results);
+
+    for (size_t i = 0; i < page_contents.size(); ++i) {
+        const auto& content = page_contents[i];
+        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+        if (!doc) {
+            continue;
+        }
+        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto d_obj = root ? duckdb_yyjson::yyjson_obj_get(root, "d") : nullptr;
+        if (d_obj) {
+            // Append all records from this page's results array
+            auto results = duckdb_yyjson::yyjson_obj_get(d_obj, "results");
+            if (results && duckdb_yyjson::yyjson_is_arr(results)) {
+                size_t idx = 0, max_idx = 0;
+                duckdb_yyjson::yyjson_val* item = nullptr;
+                yyjson_arr_foreach(results, idx, max_idx, item) {
+                    duckdb_yyjson::yyjson_mut_arr_append(merged_results,
+                        duckdb_yyjson::yyjson_val_mut_copy(merged_doc, item));
+                }
+            }
+            // On the last page: copy all d-level properties except results and __next.
+            // Properties like __delta and __count carry global (not per-page) values and
+            // are present on every page — taking them from the last page is correct.
+            if (i == page_contents.size() - 1) {
+                size_t obj_idx = 0, obj_max = 0;
+                duckdb_yyjson::yyjson_val* key = nullptr;
+                duckdb_yyjson::yyjson_val* val = nullptr;
+                yyjson_obj_foreach(d_obj, obj_idx, obj_max, key, val) {
+                    const char* key_str = duckdb_yyjson::yyjson_get_str(key);
+                    if (!key_str) continue;
+                    if (strcmp(key_str, "results") == 0) continue;
+                    if (strcmp(key_str, "__next") == 0) continue;
+                    duckdb_yyjson::yyjson_mut_obj_add_val(merged_doc, merged_d, key_str,
+                        duckdb_yyjson::yyjson_val_mut_copy(merged_doc, val));
+                }
+            }
+        }
+        duckdb_yyjson::yyjson_doc_free(doc);
+    }
+
+    size_t json_len = 0;
+    char* json_str = duckdb_yyjson::yyjson_mut_write(merged_doc, 0, &json_len);
+    std::string merged_json(json_str ? json_str : R"({"d":{"results":[]}})");
+    if (json_str) {
+        free(json_str);
+    }
+    duckdb_yyjson::yyjson_mut_doc_free(merged_doc);
+
+    return merged_json;
 }
 
 } // namespace erpl_web

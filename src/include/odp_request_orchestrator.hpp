@@ -30,12 +30,15 @@ public:
         bool has_more_pages;
         int http_status_code;
         size_t response_size_bytes;
-        
-        OdpRequestResult() 
+        // Merged JSON content from all pagination pages (set when server-driven paging
+        // was followed). Use instead of response->RawContent() when non-empty.
+        std::string accumulated_raw_content;
+
+        OdpRequestResult()
             : preference_applied(false)
             , has_more_pages(false)
             , http_status_code(0)
-            , response_size_bytes(0) 
+            , response_size_bytes(0)
         {}
     };
 
@@ -139,6 +142,11 @@ public:
     static std::string EnsureJsonFormat(const std::string& url);
     static bool HasJsonFormat(const std::string& url);
     static bool ValidatePreferenceApplied(const HttpResponse& response);
+
+    // Merge OData v2 JSON pages into a single response body containing all records.
+    // Extracts the "results" array from each page and combines them, preserving
+    // the __delta link from the final page. Public for testing.
+    static std::string MergeV2Pages(const std::vector<std::string>& page_contents);
 };
 
 } // namespace erpl_web

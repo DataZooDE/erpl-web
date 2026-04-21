@@ -216,13 +216,14 @@ TEST_CASE("OdpRequestOrchestrator - HTTP Response Validation", "[odp_validation]
 TEST_CASE("OdpRequestOrchestrator - Request Result Structure", "[odp_result_structure]") {
     SECTION("Default request result") {
         OdpRequestOrchestrator::OdpRequestResult result;
-        
+
         REQUIRE(!result.response);
         REQUIRE(result.extracted_delta_token.empty());
         REQUIRE(!result.preference_applied);
         REQUIRE(!result.has_more_pages);
         REQUIRE(result.http_status_code == 0);
         REQUIRE(result.response_size_bytes == 0);
+        REQUIRE(result.accumulated_raw_content.empty());
     }
     
     SECTION("Request result with data") {
@@ -238,6 +239,88 @@ TEST_CASE("OdpRequestOrchestrator - Request Result Structure", "[odp_result_stru
         REQUIRE(result.has_more_pages);
         REQUIRE(result.http_status_code == 200);
         REQUIRE(result.response_size_bytes == 1024);
+    }
+}
+
+TEST_CASE("OdpRequestOrchestrator - MergeV2Pages", "[odp_merge_pages]") {
+    SECTION("Single page returns unchanged") {
+        std::string page = R"({"d":{"results":[{"ID":"1","Name":"Foo"}],"__delta":"https://example.com/EntitySet?!deltatoken=tok1"}})";
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({page});
+        REQUIRE(merged == page);
+    }
+
+    SECTION("Empty page list returns empty results") {
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({});
+        REQUIRE(merged.find("\"results\"") != std::string::npos);
+    }
+
+    SECTION("Two pages — records from both pages are present in merged output") {
+        std::string page1 = R"({"d":{"results":[{"ID":"REC001","Name":"A"},{"ID":"REC002","Name":"B"},{"ID":"REC003","Name":"C"}],"__next":"https://example.com/EntitySet?$skiptoken=MOCK_3"}})";
+        std::string page2 = R"({"d":{"results":[{"ID":"REC004","Name":"D"},{"ID":"REC005","Name":"E"},{"ID":"REC006","Name":"F"}],"__delta":"https://example.com/EntitySet?!deltatoken=final-token"}})";
+
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({page1, page2});
+
+        // All 6 records must be present
+        REQUIRE(merged.find("REC001") != std::string::npos);
+        REQUIRE(merged.find("REC002") != std::string::npos);
+        REQUIRE(merged.find("REC003") != std::string::npos);
+        REQUIRE(merged.find("REC004") != std::string::npos);
+        REQUIRE(merged.find("REC005") != std::string::npos);
+        REQUIRE(merged.find("REC006") != std::string::npos);
+
+        // Delta link from last page must be preserved
+        REQUIRE(merged.find("final-token") != std::string::npos);
+        REQUIRE(merged.find("__delta") != std::string::npos);
+
+        // Intermediate __next must not bleed through
+        REQUIRE(merged.find("__next") == std::string::npos);
+    }
+
+    SECTION("Three pages — all records accumulated, delta from last page") {
+        std::string page1 = R"({"d":{"results":[{"ID":"REC001"},{"ID":"REC002"},{"ID":"REC003"}],"__next":"https://example.com/EntitySet?$skiptoken=MOCK_3"}})";
+        std::string page2 = R"({"d":{"results":[{"ID":"REC004"},{"ID":"REC005"},{"ID":"REC006"}],"__next":"https://example.com/EntitySet?$skiptoken=MOCK_6"}})";
+        std::string page3 = R"({"d":{"results":[{"ID":"REC007"},{"ID":"REC008"},{"ID":"REC009"}],"__delta":"https://example.com/EntitySet?!deltatoken=abc-123"}})";
+
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({page1, page2, page3});
+
+        for (int i = 1; i <= 9; ++i) {
+            std::string id = "REC00" + std::to_string(i);
+            REQUIRE(merged.find(id) != std::string::npos);
+        }
+        REQUIRE(merged.find("abc-123") != std::string::npos);
+        REQUIRE(merged.find("__delta") != std::string::npos);
+        REQUIRE(merged.find("__next") == std::string::npos);
+    }
+
+    SECTION("Last page without delta link — no __delta in merged output") {
+        std::string page1 = R"({"d":{"results":[{"ID":"REC001"}],"__next":"https://example.com/EntitySet?$skiptoken=MOCK_1"}})";
+        std::string page2 = R"({"d":{"results":[{"ID":"REC002"}]}})";
+
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({page1, page2});
+
+        REQUIRE(merged.find("REC001") != std::string::npos);
+        REQUIRE(merged.find("REC002") != std::string::npos);
+        REQUIRE(merged.find("__delta") == std::string::npos);
+    }
+
+    SECTION("__count from last page is preserved in merged output") {
+        // OData v2 $inlinecount=allpages repeats __count on every page with the same
+        // total value. The merged output must carry it through from the last page.
+        std::string page1 = R"({"d":{"results":[{"ID":"REC001"},{"ID":"REC002"}],"__count":"4","__next":"https://example.com/EntitySet?$skiptoken=MOCK_2"}})";
+        std::string page2 = R"({"d":{"results":[{"ID":"REC003"},{"ID":"REC004"}],"__count":"4","__delta":"https://example.com/EntitySet?!deltatoken=tok-final"}})";
+
+        std::string merged = OdpRequestOrchestrator::MergeV2Pages({page1, page2});
+
+        // All records present
+        REQUIRE(merged.find("REC001") != std::string::npos);
+        REQUIRE(merged.find("REC004") != std::string::npos);
+
+        // __count must be preserved
+        REQUIRE(merged.find("__count") != std::string::npos);
+        REQUIRE(merged.find("\"4\"") != std::string::npos);
+
+        // __next must not bleed through
+        REQUIRE(merged.find("__next") == std::string::npos);
     }
 }
 
