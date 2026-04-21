@@ -25,10 +25,19 @@ SELECT 1 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/
 1
 
 # Test v2 endpoint without explicit version path (default $count disabled)
+# NOTE: this endpoint paginates at 20 records per page but does NOT follow __next,
+# so it intentionally returns only the first page (server behaviour without Prefer header).
 query I
 SELECT COUNT(*) FROM odata_read('https://services.odata.org/northwind/northwind.svc/Customers');
 ----
 20
+
+# Test that all pagination pages are accumulated: Northwind V2 Customers has 91 records
+# served in pages of 20 via __next inside d. Without accumulation only 20 are returned.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers');
+----
+91
 
 # Test expand on V2 entity set
 query I

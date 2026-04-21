@@ -37,6 +37,16 @@ SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/Z_OD
 ----
 132
 
+# Verify that all pagination pages are accumulated during initial load.
+# This entity set must span more than one SAP server page (use an entity set
+# with > page_size records, e.g. one that SAP returns with __next inside d).
+# Without accumulation only the last page's records are returned.
+# Run against ABAP Trial: ERPL_SAP_BASE_URL=http://localhost:50000 ERPL_SAP_PASSWORD=ABAPtr2023#00
+query I
+SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/Z_ODP_BW_1_SRV/FactsOf0D_NW_C01', secret='odp_odata_read', max_page_size=50);
+----
+132
+
 
 
 
