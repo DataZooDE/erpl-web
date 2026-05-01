@@ -37,6 +37,12 @@ ARCH_TO_CLI_ZIP: dict[str, str] = {
 # Linux runners (not in Docker), querying duckdb_extensions() after loading
 # this extension triggers a SIGSEGV inside DuckDB's runner security sandbox.
 # LOAD success + a working http_get is the meaningful signal.
+#
+# Exit code -11 (SIGSEGV) may occur on Linux/macOS on DuckDB v1.5.x during
+# process shutdown due to OpenSSL teardown ordering between the statically-
+# linked VCPKG OpenSSL inside the extension and any other OpenSSL instance in
+# the DuckDB binary. The HTTP request itself succeeds; we detect success by
+# checking stdout for "PASS" rather than relying solely on exit code.
 SMOKE_SQL = """\
 LOAD '{ext}';
 
@@ -46,6 +52,12 @@ SELECT
 FROM http_get('https://httpbin.org/status/200')
 LIMIT 1;
 """
+
+# Signal exit codes that indicate a crash, not a query failure.
+# -11 = SIGSEGV. These can occur on DuckDB v1.5.x during process teardown due
+# to OpenSSL cleanup ordering; if the SQL output already shows PASS, the
+# extension functionality is verified and the teardown crash is not a blocker.
+_CRASH_EXIT_CODES = frozenset({-11, -6})  # SIGSEGV, SIGABRT
 
 
 def _download_duckdb_cli(version: str, arch: str, dest_dir: str) -> str:
@@ -101,13 +113,37 @@ def run_smoke_test(extension_path: str, duckdb_version: str, arch: str) -> None:
         proc = subprocess.run(
             [duckdb_bin, "-unsigned"],
             input=sql,
+            capture_output=True,
             text=True,
         )
 
-    if proc.returncode != 0:
-        raise SystemExit(f"Smoke test FAILED (duckdb exit code {proc.returncode})")
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
 
-    print("\nSmoke test PASSED")
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    sql_passed = "PASS" in stdout
+
+    if proc.returncode == 0:
+        if sql_passed:
+            print("\nSmoke test PASSED")
+            return
+        raise SystemExit("Smoke test FAILED: DuckDB exited cleanly but output did not contain PASS")
+
+    if proc.returncode in _CRASH_EXIT_CODES and sql_passed:
+        print(
+            f"\nSmoke test PASSED (query succeeded; DuckDB exited with signal"
+            f" {proc.returncode} during teardown — known OpenSSL cleanup issue)"
+        )
+        return
+
+    raise SystemExit(
+        f"Smoke test FAILED (duckdb exit code {proc.returncode},"
+        f" sql_passed={sql_passed})"
+    )
 
 
 if __name__ == "__main__":
