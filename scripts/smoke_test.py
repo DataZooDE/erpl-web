@@ -115,6 +115,8 @@ def run_smoke_test(extension_path: str, duckdb_version: str, arch: str) -> None:
             input=sql,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
     stdout = proc.stdout or ""
