@@ -21,6 +21,13 @@ import tempfile
 import urllib.request
 import zipfile
 
+# Windows consoles default to CP1252; DuckDB's table output uses UTF-8
+# box-drawing characters that CP1252 cannot encode.  Reconfigure stdout/stderr
+# to UTF-8 once at import time so all print() calls work on every platform.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 ARCH_TO_CLI_ZIP: dict[str, str] = {
     "linux_amd64": "duckdb_cli-linux-amd64.zip",
     "linux_arm64": "duckdb_cli-linux-aarch64.zip",
