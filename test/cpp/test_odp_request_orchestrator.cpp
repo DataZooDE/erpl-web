@@ -272,3 +272,26 @@ TEST_CASE("OdpRequestOrchestrator - URL Format Utilities", "[odp_url_format]") {
         REQUIRE(!OdpRequestOrchestrator::HasJsonFormat("https://test.com/EntitySet?$format=xml"));
     }
 }
+
+TEST_CASE("OdpRequestOrchestrator - NormalizeDeltaToken", "[odp_normalize_token]") {
+    SECTION("Token without quotes is returned unchanged") {
+        REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("abc123") == "abc123");
+    }
+
+    SECTION("Token wrapped in single quotes is stripped") {
+        REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("'abc123'") == "abc123");
+    }
+
+    SECTION("Token wrapped in double quotes is stripped") {
+        REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("\"abc123\"") == "abc123");
+    }
+
+    SECTION("Empty token returns empty") {
+        REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("").empty());
+    }
+
+    SECTION("Mismatched quotes are not stripped") {
+        // Opening single quote, closing double quote — not a valid pair, leave unchanged
+        REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("'abc123\"") == "'abc123\"");
+    }
+}

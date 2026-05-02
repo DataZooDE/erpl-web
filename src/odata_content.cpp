@@ -1079,12 +1079,23 @@ std::optional<std::string> ODataJsonContentMixin::GetNextUrl(yyjson_val* root) {
         return yyjson_get_str(next_link);
     }
     
-    // Check for v2 next link
+    // Check for OData v2 __next link at root level (non-standard placement)
     auto next_link_v2 = yyjson_obj_get(root, "__next");
     if (next_link_v2 && yyjson_is_str(next_link_v2)) {
         return yyjson_get_str(next_link_v2);
     }
-    
+
+    // Check for OData v2 __next link inside the "d" wrapper (standard SAP ODP placement).
+    // Per the OData v2 JSON verbose format specification and confirmed with real SAP ODP
+    // responses, __next lives inside d: {"d": {"results": [...], "__next": "..."}}.
+    auto d_obj = yyjson_obj_get(root, "d");
+    if (d_obj) {
+        auto next_link_in_d = yyjson_obj_get(d_obj, "__next");
+        if (next_link_in_d && yyjson_is_str(next_link_in_d)) {
+            return yyjson_get_str(next_link_in_d);
+        }
+    }
+
     return std::nullopt;
 }
 

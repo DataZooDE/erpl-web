@@ -32,60 +32,9 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteInitialL
     // Create initial load request with change tracking
     HttpRequest request = http_factory_->CreateInitialLoadRequest(url, max_page_size);
     
-    auto result = ExecuteRequest(request, "initial_load");
-
-    // Diagnostic: follow pagination to last page to ensure we see the final delta link
-    try {
-        if (result.response) {
-            std::optional<std::string> next_url = result.response->NextUrl();
-            idx_t pages_followed = 0;
-            while (next_url.has_value() && !next_url->empty() && pages_followed < 1000) {
-                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Following next page: " + next_url.value());
-                auto next_res = ExecuteNextPage(next_url.value());
-                if (!next_res.response) {
-                    break;
-                }
-                // Replace with the latest page so that token extraction uses the last page
-                result.response = next_res.response;
-                result.http_status_code = next_res.http_status_code;
-                result.response_size_bytes += next_res.response_size_bytes;
-                result.has_more_pages = next_res.has_more_pages;
-
-                next_url = next_res.response->NextUrl();
-                pages_followed++;
-            }
-
-            // Re-extract token and delta link from the last page
-            auto raw_token = ExtractDeltaToken(*result.response);
-            auto delta_link_url = ExtractDeltaUrl(*result.response);
-            if (!raw_token.empty()) {
-                // Log raw token and normalized token (strip surrounding quotes if present)
-                std::string normalized = raw_token;
-                if (!normalized.empty() && (normalized.front() == '\'' || normalized.front() == '"') &&
-                    normalized.back() == normalized.front()) {
-                    normalized = normalized.substr(1, normalized.size() - 2);
-                }
-                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
-                    "Delta token (raw): %s | (normalized): %s",
-                    raw_token.substr(0, 64), normalized.substr(0, 64)));
-                result.extracted_delta_token = normalized;
-            }
-            if (!delta_link_url.empty()) {
-                auto normalized_url = NormalizeDeltaUrl(delta_link_url);
-                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Found v2 delta link URL: " + delta_link_url);
-                if (normalized_url != delta_link_url) {
-                    ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Normalized delta link URL: " + normalized_url);
-                }
-                result.extracted_delta_url = normalized_url;
-            } else {
-                ERPL_TRACE_WARN("ODP_ORCHESTRATOR", "No delta token found after following pagination to last page");
-            }
-        }
-    } catch (const std::exception &e) {
-        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", std::string("Pagination diagnostic failed: ") + e.what());
-    }
-
-    return result;
+    // Return the first page only. The caller (OdpODataReadBindData) is responsible for
+    // following __next links page by page and accumulating rows incrementally.
+    return ExecuteRequest(request, "initial_load");
 }
 
 OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFetch(
@@ -473,6 +422,15 @@ std::string OdpRequestOrchestrator::EnsureJsonFormat(const std::string& url) {
 
 bool OdpRequestOrchestrator::HasJsonFormat(const std::string& url) {
     return url.find("$format=json") != std::string::npos;
+}
+
+std::string OdpRequestOrchestrator::NormalizeDeltaToken(const std::string& raw) {
+    if (!raw.empty() &&
+        (raw.front() == '\'' || raw.front() == '"') &&
+        raw.back() == raw.front()) {
+        return raw.substr(1, raw.size() - 2);
+    }
+    return raw;
 }
 
 } // namespace erpl_web

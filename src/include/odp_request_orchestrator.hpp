@@ -139,6 +139,9 @@ public:
     static std::string EnsureJsonFormat(const std::string& url);
     static bool HasJsonFormat(const std::string& url);
     static bool ValidatePreferenceApplied(const HttpResponse& response);
+
+    // Strip surrounding single/double quotes from a raw delta token if present.
+    static std::string NormalizeDeltaToken(const std::string& raw);
 };
 
 } // namespace erpl_web
