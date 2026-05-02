@@ -21,14 +21,15 @@ test_debug_sap: ${EXTENSION_CONFIG_STEP}
 	ERPL_SAP_BASE_URL='http://localhost:50000' ERPL_SAP_PASSWORD='ABAPtr2023#00' ./build/debug/test/unittest "[sap]"
 
 # Run Microsoft 365 / Graph API integration tests against a real tenant.
-# Requires three environment variables sourced from an Azure App Registration
-# with application permissions granted and admin-consented:
-#   ERPL_MS_TENANT_ID    - Directory (tenant) ID from the App Registration overview
-#   ERPL_MS_CLIENT_ID    - Application (client) ID from the App Registration overview
-#   ERPL_MS_CLIENT_SECRET - Client secret value (not the secret ID)
+# Requires environment variables sourced from an Azure App Registration with
+# application permissions granted and admin-consented. See .env.microsoft.
+#   ERPL_MS_TENANT_ID           - Directory (tenant) ID
+#   ERPL_MS_CLIENT_ID           - Application (client) ID
+#   ERPL_MS_CLIENT_SECRET       - Client secret value (not the secret ID)
+#   ERPL_MS_SHAREPOINT_SITE_ID  - SharePoint site composite ID for SP tests
+#   ERPL_MS_SHAREPOINT_LIST_ID  - SharePoint list ID within that site for SP tests
 # Usage:
-#   export ERPL_MS_TENANT_ID=<guid> ERPL_MS_CLIENT_ID=<guid> ERPL_MS_CLIENT_SECRET=<value>
-#   make test_debug_ms
+#   source .env.microsoft && make test_debug_ms
 test_debug_ms: ${EXTENSION_CONFIG_STEP}
 	./build/debug/test/unittest "test/sql/graph_entra_integration.test"
 	./build/debug/test/unittest "test/sql/graph_planner_integration.test"

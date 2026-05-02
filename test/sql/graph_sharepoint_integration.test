@@ -1,7 +1,6 @@
 # name: test/sql/graph_sharepoint_integration.test
-# description: Integration tests for Microsoft Graph SharePoint
+# description: Integration tests for Microsoft Graph SharePoint Lists
 # group: [erpl_web]
-# note: Requires Sites.Read.All application permission in Azure AD
 
 require erpl_web
 
@@ -11,9 +10,13 @@ require-env ERPL_MS_CLIENT_ID
 
 require-env ERPL_MS_CLIENT_SECRET
 
+require-env ERPL_MS_SHAREPOINT_SITE_ID
+
+require-env ERPL_MS_SHAREPOINT_LIST_ID
+
 # Create secret with real credentials
 statement ok
-CREATE SECRET ms_graph_sharepoint_test (
+CREATE SECRET ms_graph_sp_test (
     TYPE microsoft_graph,
     PROVIDER client_credentials,
     tenant_id '${ERPL_MS_TENANT_ID}',
@@ -21,13 +24,13 @@ CREATE SECRET ms_graph_sharepoint_test (
     client_secret '${ERPL_MS_CLIENT_SECRET}'
 );
 
-# Test: graph_show_sites can be called (may return 0 rows if no sites)
+# Test: graph_show_sites returns at least one site
 query I
-SELECT COUNT(*) >= 0 FROM graph_show_sites();
+SELECT COUNT(*) > 0 FROM graph_show_sites();
 ----
 true
 
-# Test: graph_show_sites has expected columns
+# Test: graph_show_sites returns expected columns
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_sites())
@@ -36,39 +39,72 @@ SELECT COUNT(*) FROM (
 ----
 5
 
-# Test: graph_show_sites with search query can be called
+# Test: all sites have a non-empty id
 query I
-SELECT COUNT(*) >= 0 FROM graph_show_sites('test');
+SELECT COUNT(*) = 0 FROM graph_show_sites() WHERE id IS NULL OR id = '';
 ----
 true
 
-# Test: graph_show_lists function exists (requires site_id to call)
+# Test: graph_show_lists returns data for the test site
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_show_lists';
+SELECT COUNT(*) > 0 FROM graph_show_lists('${ERPL_MS_SHAREPOINT_SITE_ID}');
 ----
-1
+true
 
-# Test: graph_show_lists has expected columns (using describe with dummy values)
+# Test: graph_show_lists returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_lists('dummy-site-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_lists('${ERPL_MS_SHAREPOINT_SITE_ID}'))
     WHERE column_name IN ('id', 'name', 'display_name', 'description', 'web_url', 'created_at', 'modified_at')
 );
 ----
 7
 
-# Test: graph_describe_list function exists
+# Test: graph_describe_list returns column schema for the test list
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_describe_list';
+SELECT COUNT(*) > 0 FROM graph_describe_list(
+    '${ERPL_MS_SHAREPOINT_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_LIST_ID}'
+);
 ----
-1
+true
 
-# Test: graph_list_items function exists
+# Test: graph_describe_list returns expected columns
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_list_items';
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_describe_list(
+            '${ERPL_MS_SHAREPOINT_SITE_ID}',
+            '${ERPL_MS_SHAREPOINT_LIST_ID}'
+        )
+    )
+    WHERE column_name IN ('name', 'display_name', 'column_type', 'description', 'required')
+);
+----
+5
+
+# Test: graph_list_items works without duplicate-column error
+# (regression test: SharePoint returns field "ID" which collides case-insensitively with "id")
+query I
+SELECT COUNT(*) >= 0 FROM graph_list_items(
+    '${ERPL_MS_SHAREPOINT_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_LIST_ID}'
+);
+----
+true
+
+# Test: graph_list_items result always has an id column (not a duplicate col1/col2)
+query I
+SELECT COUNT(*) FROM (
+    DESCRIBE SELECT * FROM graph_list_items(
+        '${ERPL_MS_SHAREPOINT_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_LIST_ID}'
+    )
+)
+WHERE column_name = 'id';
 ----
 1
 
 # Cleanup
 statement ok
-DROP SECRET ms_graph_sharepoint_test;
+DROP SECRET ms_graph_sp_test;

@@ -5,6 +5,8 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
+#include <algorithm>
+#include <unordered_set>
 
 using namespace duckdb_yyjson;
 
@@ -474,6 +476,9 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
     return_types.push_back(LogicalType::VARCHAR);
     bind_data->column_names.push_back("id");
 
+    // Track seen names (lowercase) to prevent duplicate column errors
+    std::unordered_set<std::string> seen_names = {"id"};
+
     if (col_arr && yyjson_is_arr(col_arr)) {
         size_t idx, max;
         yyjson_val *col;
@@ -491,6 +496,11 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
                     col_name == "AppAuthor" || col_name == "AppEditor") {
                     continue;
                 }
+
+                // Skip case-insensitive duplicates (e.g. "ID" collides with "id")
+                std::string lower_name = col_name;
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                if (!seen_names.insert(lower_name).second) continue;
 
                 names.push_back(col_name);
                 return_types.push_back(LogicalType::VARCHAR);
