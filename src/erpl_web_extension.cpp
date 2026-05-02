@@ -40,6 +40,9 @@
 #include "telemetry.hpp"
 #include "tracing.hpp"
 
+// Needed for OPENSSL_init_ssl / OPENSSL_INIT_NO_ATEXIT
+#include <openssl/ssl.h>
+
 // Windows headers may redefine macros after our tracing.hpp include
 #ifdef _WIN32
 #ifdef DEBUG
@@ -816,6 +819,17 @@ static void RegisterTracingPragmas(ExtensionLoader &loader)
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
+    // Suppress OpenSSL's atexit cleanup handler.
+    // The extension is a dlopen'd shared library; DuckDB calls dlclose() during
+    // shutdown before global atexit handlers run.  If OpenSSL registered an
+    // atexit pointing into our .so, it fires after the library is unmapped →
+    // SIGSEGV on Linux/macOS with DuckDB v1.5.x.  Pre-initialising with
+    // OPENSSL_INIT_NO_ATEXIT prevents that registration.  The call is idempotent
+    // and has no effect if OpenSSL was already initialised by the host process.
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+    OPENSSL_init_ssl(OPENSSL_INIT_NO_ATEXIT, nullptr);
+#endif
+
     auto &instance = loader.GetDatabaseInstance();
 
     loader.SetDescription(

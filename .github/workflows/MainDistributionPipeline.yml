@@ -29,9 +29,18 @@ jobs:
       vcpkg_commit: 84bab45d415d22042bd0b9081aea57f362da3f35
       exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads;'
 
+  duckdb-v152-smoke-test:
+    name: Smoke test (v1.5.2)
+    needs: duckdb-v152-build
+    uses: ./.github/workflows/_extension_smoke_test.yml
+    with:
+      duckdb_version: v1.5.2
+      extension_name: erpl_web
+      exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads;'
+
   duckdb-v152-deploy:
     name: Deploy extension binaries (v1.5.2)
-    needs: duckdb-v152-build
+    needs: [duckdb-v152-build, duckdb-v152-smoke-test]
     uses: ./.github/workflows/_extension_deploy.yml
     secrets: inherit
     with:
@@ -53,9 +62,18 @@ jobs:
       vcpkg_commit: ce613c41372b23b1f51333815feb3edd87ef8a8b
       exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads;'
 
+  duckdb-v144-smoke-test:
+    name: Smoke test (v1.4.4)
+    needs: duckdb-v144-build
+    uses: ./.github/workflows/_extension_smoke_test.yml
+    with:
+      duckdb_version: v1.4.4
+      extension_name: erpl_web
+      exclude_archs: 'windows_amd64_rtools;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads;'
+
   duckdb-v144-deploy:
     name: Deploy extension binaries (v1.4.4)
-    needs: duckdb-v144-build
+    needs: [duckdb-v144-build, duckdb-v144-smoke-test]
     uses: ./.github/workflows/_extension_deploy.yml
     secrets: inherit
     with:

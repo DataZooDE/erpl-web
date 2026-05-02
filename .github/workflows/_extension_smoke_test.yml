@@ -1,0 +1,76 @@
+#
+# Reusable workflow: post-build smoke test for the erpl_web DuckDB extension.
+#
+# Downloads the official DuckDB CLI binary for the target version from GitHub
+# releases, then loads the built extension artifact and runs a minimal
+# end-to-end test (load extension + real HTTP request). Mirrors exactly what
+# a user would do when installing the extension.
+#
+# Call this workflow AFTER the build job and BEFORE the deploy job so that a
+# broken extension on any platform blocks deployment.
+#
+
+name: Extension Smoke Test
+
+on:
+  workflow_call:
+    inputs:
+      extension_name:
+        required: true
+        type: string
+      duckdb_version:
+        required: true
+        type: string
+      # ';' separated list of architectures excluded from the build job.
+      # Must match the build job's exclude_archs so we don't try to download
+      # an artifact that was never produced.
+      exclude_archs:
+        required: false
+        type: string
+        default: ""
+      # Postfix added to artifact names. Must match the build job's setting.
+      artifact_postfix:
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  smoke-test:
+    name: Smoke test (${{ matrix.arch }})
+    strategy:
+      # Run all platforms even if one fails so we see the full picture
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux_amd64
+            runner: ubuntu-24.04
+          - arch: osx_arm64
+            runner: macos-latest
+          - arch: windows_amd64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download extension artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.extension_name }}-${{ inputs.duckdb_version }}-extension-${{ matrix.arch }}${{ inputs.artifact_postfix }}
+          path: ./extension_artifact
+
+      - name: Run smoke test (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          EXTENSION_PATH="$(pwd)/extension_artifact/${{ inputs.extension_name }}.duckdb_extension"
+          python3 scripts/smoke_test.py \
+            "${EXTENSION_PATH}" \
+            "${{ inputs.duckdb_version }}" \
+            "${{ matrix.arch }}"
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ext = Join-Path $PWD "extension_artifact\${{ inputs.extension_name }}.duckdb_extension"
+          python scripts/smoke_test.py "$ext" "${{ inputs.duckdb_version }}" "${{ matrix.arch }}"
