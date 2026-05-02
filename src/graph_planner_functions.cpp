@@ -415,8 +415,8 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(planner_plans);
         FunctionDescription desc;
         desc.description = "List all Microsoft Planner plans in a Microsoft 365 group.";
-        desc.parameter_names = {"group_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"group_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_planner_plans('group-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "planner"};
         info.descriptions.push_back(std::move(desc));
@@ -429,8 +429,8 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(planner_buckets);
         FunctionDescription desc;
         desc.description = "List all buckets in a Microsoft Planner plan.";
-        desc.parameter_names = {"plan_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"plan_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_planner_buckets('plan-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "planner"};
         info.descriptions.push_back(std::move(desc));
@@ -443,8 +443,8 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(planner_tasks);
         FunctionDescription desc;
         desc.description = "List all tasks in a Microsoft Planner plan.";
-        desc.parameter_names = {"plan_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"plan_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_planner_tasks('plan-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "planner"};
         info.descriptions.push_back(std::move(desc));

@@ -4,11 +4,11 @@
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.2+-green.svg)](https://duckdb.org)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-# ERPL Web — DuckDB HTTP + OData + Delta Sharing + SAP Datasphere + SAP Analytics Cloud Extension
+# ERPL Web — DuckDB HTTP + OData + Delta Sharing + SAP + Microsoft 365 Extension
 
-ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, read Delta Sharing tables, and work with SAP Datasphere and SAP Analytics Cloud assets directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
+ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST APIs, query OData v2/v4 services, read Delta Sharing tables, work with SAP Datasphere and SAP Analytics Cloud, and query Microsoft 365 services (Graph API, Entra ID, Business Central, Dataverse) directly from SQL. It brings secure OAuth2, DuckDB Secrets integration, predicate pushdown, robust tracing, and smart caching into a single, easy-to-use package.
 
-- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB Delta Sharing, DuckDB Delta Lake, Databricks Delta, DuckDB SAP Datasphere, DuckDB SAP Analytics Cloud, OAuth2 for DuckDB, OData ATTACH, Delta Sharing ATTACH, query APIs from SQL.
+- SEO topics: DuckDB HTTP client, DuckDB REST, DuckDB OData v2/v4, DuckDB Delta Sharing, DuckDB Delta Lake, Databricks Delta, DuckDB SAP Datasphere, DuckDB SAP Analytics Cloud, DuckDB Microsoft 365, DuckDB Microsoft Graph API, DuckDB Entra ID, DuckDB Business Central, OAuth2 for DuckDB, OData ATTACH, Delta Sharing ATTACH, query APIs from SQL.
 
 ## ✨ Highlights
 
@@ -17,6 +17,8 @@ ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST API
 - Delta Sharing: Query Databricks, SAP, and other Delta Sharing protocol-compliant services via Parquet files
 - SAP Datasphere: List spaces/assets, describe assets, and read relational/analytical data
 - SAP Analytics Cloud: Query models, stories, discover dimensions/measures with automatic schema
+- Microsoft 365: Query Entra ID users/groups, SharePoint, Teams, Outlook, Planner, and Excel via Graph API
+- Microsoft Dynamics 365: Read Business Central ERP and Dataverse/CRM data from SQL
 - OAuth2 + Secrets: Secure flows with refresh, client credentials, and secret providers
 - Tracing: Deep, configurable tracing for debugging and performance tuning
 - Caching + Resilience: Response caching, metadata caching, and retry logic
@@ -172,6 +174,28 @@ FROM delta_share_show_tables('./profile.json', 'delta_sharing', 'default');
 - ✅ Works with all profile types (local, HTTP, S3)
 - ✅ Helps explore available data
 - ⚠️ ATTACH support for Delta Sharing (`ATTACH ... TYPE delta_share`) is planned but not yet implemented
+
+### Microsoft 365 in minutes
+
+Query your organization's users, SharePoint lists, or Teams data in three steps:
+
+```sql
+-- 1. Create a secret (Azure App Registration with client credentials)
+CREATE SECRET ms (
+  TYPE microsoft_graph,
+  tenant_id 'your-tenant-id',
+  client_id 'your-client-id',
+  client_secret 'your-client-secret'
+);
+
+-- 2. Query Entra ID users
+SELECT display_name, mail, department FROM graph_users();
+
+-- 3. Query SharePoint list items
+SELECT * FROM graph_list_items('your-site-id', 'your-list-id');
+```
+
+---
 
 ### SAP Datasphere in minutes
 
@@ -599,6 +623,278 @@ SELECT * FROM sac.Stories WHERE Owner = 'john.doe@company.com';
 - `sac_read_story_data(story_id)`
   - Named parameters: `secret` VARCHAR
   - Returns: Data used in story visualizations
+
+---
+
+## 🔷 Microsoft 365 & Dynamics 365
+
+ERPL Web provides native SQL access to Microsoft 365 services via the Microsoft Graph API, as well as Microsoft Dynamics 365 Business Central and Dataverse (CRM). Authentication uses standard OAuth2 client credentials.
+
+### Authentication
+
+Two secret types cover all Microsoft services:
+
+**`TYPE microsoft_graph`** — for all Graph API functions (SharePoint, Teams, Excel, Planner, Outlook, Entra ID):
+```sql
+CREATE SECRET ms_graph (
+  TYPE microsoft_graph,
+  tenant_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_secret 'your-client-secret'
+);
+```
+
+**`TYPE microsoft_entra`** — for Entra ID with explicit scope control (also used for Business Central):
+```sql
+CREATE SECRET ms_entra (
+  TYPE microsoft_entra,
+  tenant_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_secret 'your-client-secret',
+  scope 'https://graph.microsoft.com/.default'   -- optional, defaults to Graph
+);
+```
+
+**`TYPE business_central`** — for Business Central ERP:
+```sql
+CREATE SECRET ms_bc (
+  TYPE business_central,
+  tenant_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  environment 'production',                        -- or 'sandbox'
+  client_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_secret 'your-client-secret'
+);
+```
+
+**`TYPE dataverse`** — for Dynamics 365 CRM / Dataverse:
+```sql
+CREATE SECRET ms_crm (
+  TYPE dataverse,
+  tenant_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  environment_url 'https://myorg.crm.dynamics.com',
+  client_id 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  client_secret 'your-client-secret'
+);
+```
+
+Required Azure App Registration permissions per service are listed in each section below.
+
+---
+
+### Entra ID (Users, Groups, Devices)
+
+Required permissions: `User.Read.All`, `Group.Read.All`, `Device.Read.All` (Application, admin-consented).
+`graph_signin_logs()` additionally requires `AuditLog.Read.All` and Azure AD Premium P1/P2.
+
+```sql
+-- All users in the directory
+SELECT id, display_name, mail, job_title, department, account_enabled
+FROM graph_users();
+
+-- All security groups
+SELECT id, display_name, mail_enabled, security_enabled
+FROM graph_groups()
+WHERE security_enabled = true;
+
+-- Registered devices
+SELECT id, display_name, operating_system, os_version, trust_type
+FROM graph_devices();
+
+-- Sign-in audit log (Azure AD Premium required)
+SELECT user_display_name, app_display_name, ip_address, status, created_at
+FROM graph_signin_logs()
+WHERE status != 'Success'
+ORDER BY created_at DESC;
+```
+
+Functions: `graph_users([secret])`, `graph_groups([secret])`, `graph_devices([secret])`, `graph_signin_logs([secret])`
+
+---
+
+### Planner (Tasks & Plans)
+
+Required permissions: `Tasks.Read.All`, `Group.Read.All` (Application).
+
+```sql
+-- Plans for a Microsoft 365 group
+SELECT id, title, owner_group_id, created_at
+FROM graph_planner_plans('your-group-id');
+
+-- Buckets in a plan
+SELECT id, name, plan_id, order_hint
+FROM graph_planner_buckets('your-plan-id');
+
+-- Tasks in a plan
+SELECT id, title, bucket_id, percent_complete, priority, due_at
+FROM graph_planner_tasks('your-plan-id')
+WHERE percent_complete < 100
+ORDER BY due_at;
+```
+
+Functions: `graph_planner_plans(group_id, [secret])`, `graph_planner_buckets(plan_id, [secret])`, `graph_planner_tasks(plan_id, [secret])`
+
+---
+
+### SharePoint Lists
+
+Required permissions: `Sites.Read.All` (Application).
+
+```sql
+-- Discover accessible sites
+SELECT id, display_name, web_url
+FROM graph_show_sites();
+
+-- Lists in a site
+SELECT id, name, display_name, item_count
+FROM graph_show_lists('your-site-id');
+
+-- Schema of a list
+SELECT column_name, column_type, required
+FROM graph_describe_list('your-site-id', 'your-list-id');
+
+-- Items in a list
+SELECT * FROM graph_list_items('your-site-id', 'your-list-id')
+WHERE status = 'Active';
+```
+
+Functions: `graph_show_sites([secret])`, `graph_show_lists(site_id, [secret])`, `graph_describe_list(site_id, list_id, [secret])`, `graph_list_items(site_id, list_id, [secret])`
+
+---
+
+### Excel (OneDrive / SharePoint)
+
+Required permissions: `Files.Read.All` (Application) or delegated user token.
+
+```sql
+-- Files accessible in OneDrive/SharePoint
+SELECT name, file_path, size, last_modified
+FROM graph_list_files();
+
+-- Worksheets in a workbook
+SELECT id, name, position
+FROM graph_excel_worksheets('/sites/Finance/Shared Documents/Budget.xlsx');
+
+-- Named tables in a workbook
+SELECT id, name, row_count
+FROM graph_excel_tables('/sites/Finance/Shared Documents/Budget.xlsx');
+
+-- Read table data
+SELECT * FROM graph_excel_table_data(
+  '/sites/Finance/Shared Documents/Budget.xlsx',
+  'SalesData'
+);
+
+-- Read a cell range
+SELECT * FROM graph_excel_range(
+  '/sites/Finance/Shared Documents/Budget.xlsx',
+  'Sheet1'
+);
+```
+
+Functions: `graph_list_files([secret])`, `graph_excel_worksheets(file_path, [secret])`, `graph_excel_tables(file_path, [secret])`, `graph_excel_table_data(file_path, table_name, [secret])`, `graph_excel_range(file_path, sheet_name, [secret])`
+
+---
+
+### Outlook (Calendar, Contacts, Mail)
+
+Required permissions: `Calendars.Read`, `Contacts.Read`, `Mail.Read` (Delegated or Application with admin consent).
+
+```sql
+-- Calendar events
+SELECT subject, start, "end", location, organizer
+FROM graph_calendar_events()
+ORDER BY start DESC;
+
+-- Contacts
+SELECT display_name, email_addresses, company_name, job_title
+FROM graph_contacts();
+
+-- Email messages (metadata only, no body content)
+SELECT subject, "from", received_date_time, importance, is_read
+FROM graph_messages()
+WHERE received_date_time >= CURRENT_DATE - INTERVAL 7 DAYS
+ORDER BY received_date_time DESC;
+```
+
+Functions: `graph_calendar_events([secret])`, `graph_contacts([secret])`, `graph_messages([secret])`
+
+---
+
+### Teams (Channels & Messages)
+
+Required permissions: `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `TeamMember.Read.All` (Application).
+
+```sql
+-- Teams the user belongs to
+SELECT id, display_name, description
+FROM graph_my_teams();
+
+-- Channels in a team
+SELECT id, display_name, membership_type
+FROM graph_team_channels('your-team-id');
+
+-- Members of a team
+SELECT id, display_name, roles
+FROM graph_team_members('your-team-id');
+
+-- Messages in a channel
+SELECT id, subject, body, created_at, from_user
+FROM graph_channel_messages('your-team-id', 'your-channel-id')
+ORDER BY created_at DESC;
+```
+
+Functions: `graph_my_teams([secret])`, `graph_team_channels(team_id, [secret])`, `graph_team_members(team_id, [secret])`, `graph_channel_messages(team_id, channel_id, [secret])`
+
+---
+
+### Business Central (ERP)
+
+Required permissions: Azure App Registration with `API.ReadWrite.All` and a corresponding Entra application record in Business Central with assigned permission sets.
+
+```sql
+-- Companies in the environment
+SELECT id, display_name, business_profile_id
+FROM bc_show_companies();
+
+-- Available OData entity sets
+SELECT entity_name, entity_url, description
+FROM bc_show_entities();
+
+-- Schema of an entity
+SELECT property_name, property_type, is_key, nullable
+FROM bc_describe('customers');
+
+-- Query data with pushdown
+SELECT number, display_name, email, balance_due
+FROM bc_read('customers')
+WHERE balance_due > 1000;
+```
+
+Functions: `bc_show_companies([secret])`, `bc_show_entities([secret])`, `bc_describe(entity, [secret])`, `bc_read(entity, [secret, company, expand])`
+
+---
+
+### Dataverse / Dynamics 365 CRM
+
+Required permissions: `Dynamics CRM — user_impersonation` (Delegated) or service principal with Dataverse system user.
+
+```sql
+-- Available entities
+SELECT logical_name, display_name, object_type_code
+FROM crm_show_entities();
+
+-- Schema of an entity
+SELECT attribute_name, attribute_type, is_primary_key
+FROM crm_describe('accounts');
+
+-- Query CRM records
+SELECT name, emailaddress1, telephone1, revenue
+FROM crm_read('accounts')
+WHERE statecode = 0  -- Active records only
+ORDER BY revenue DESC;
+```
+
+Functions: `crm_show_entities([secret])`, `crm_describe(entity, [secret])`, `crm_read(entity, [secret])`
 
 ---
 
