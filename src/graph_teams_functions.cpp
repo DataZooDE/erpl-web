@@ -514,8 +514,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(team_channels_func);
         FunctionDescription desc;
         desc.description = "List all channels in a Microsoft Teams team.";
-        desc.parameter_names = {"team_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"team_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_team_channels('team-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
@@ -527,8 +527,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(team_members_func);
         FunctionDescription desc;
         desc.description = "List all members of a Microsoft Teams team.";
-        desc.parameter_names = {"team_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"team_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_team_members('team-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
@@ -540,8 +540,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(channel_messages_func);
         FunctionDescription desc;
         desc.description = "List messages in a Microsoft Teams channel.";
-        desc.parameter_names = {"team_id", "channel_id"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_names = {"team_id", "channel_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_channel_messages('team-id', 'channel-id', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));

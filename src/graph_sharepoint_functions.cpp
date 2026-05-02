@@ -630,8 +630,8 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(show_lists);
         FunctionDescription desc;
         desc.description = "List all lists in a SharePoint site.";
-        desc.parameter_names = {"site_id"};
-        desc.parameter_types = {LogicalType::VARCHAR};
+        desc.parameter_names = {"site_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_show_lists('site-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -645,8 +645,8 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(describe_list);
         FunctionDescription desc;
         desc.description = "Describe the column schema of a SharePoint list.";
-        desc.parameter_names = {"site_id", "list_id"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_names = {"site_id", "list_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_describe_list('site-id', 'list-id', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -660,8 +660,8 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(list_items);
         FunctionDescription desc;
         desc.description = "Read all items from a SharePoint list.";
-        desc.parameter_names = {"site_id", "list_id"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_names = {"site_id", "list_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_list_items('site-id', 'list-id', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
