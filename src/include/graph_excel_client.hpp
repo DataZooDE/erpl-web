@@ -80,6 +80,10 @@ public:
     // Build URL for listing files in a subfolder of a specific drive
     // /drives/{drive-id}/root:/{folder-path}:/children
     static std::string BuildDriveFolderChildrenWithDriveUrl(const std::string &drive_id, const std::string &folder_path);
+
+    // Build URL for drive item by path using the site's default drive (WAC-compatible)
+    // /sites/{site-id}/drive/root:/{path}:
+    static std::string BuildSiteDefaultDriveItemByPathUrl(const std::string &site_id, const std::string &path);
 };
 
 // Represents an Excel table's data
@@ -130,6 +134,11 @@ private:
     std::shared_ptr<HttpClient> http_client;
 
     std::string DoGraphGet(const std::string &url);
+
+    // Resolve a file path to a WAC-compatible workbook item URL via the site's default drive.
+    // When drive_id is provided, resolves the site coordinates from /drives/{id}?$select=sharePointIds.
+    // When drive_id is empty, falls back to /me/drive path (delegated auth only).
+    std::string ResolveWorkbookItemUrl(const std::string &file_path, const std::string &drive_id);
 };
 
 } // namespace erpl_web

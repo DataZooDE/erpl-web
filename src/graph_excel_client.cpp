@@ -1,5 +1,8 @@
 #include "graph_excel_client.hpp"
 #include "tracing.hpp"
+#include "yyjson.hpp"
+
+#include <stdexcept>
 
 namespace erpl_web {
 
@@ -89,6 +92,14 @@ std::string GraphExcelUrlBuilder::BuildDriveFolderChildrenWithDriveUrl(const std
     return GetBaseUrl() + "/drives/" + drive_id + "/root:/" + clean_path + ":/children";
 }
 
+std::string GraphExcelUrlBuilder::BuildSiteDefaultDriveItemByPathUrl(const std::string &site_id, const std::string &path) {
+    std::string clean_path = path;
+    if (!clean_path.empty() && clean_path[0] == '/') {
+        clean_path = clean_path.substr(1);
+    }
+    return GetBaseUrl() + "/sites/" + site_id + "/drive/root:/" + clean_path + ":";
+}
+
 // GraphExcelClient implementation
 GraphExcelClient::GraphExcelClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
@@ -127,6 +138,70 @@ std::string GraphExcelClient::DoGraphGet(const std::string &url) {
     return response->Content();
 }
 
+std::string GraphExcelClient::ResolveWorkbookItemUrl(const std::string &file_path, const std::string &drive_id) {
+    if (drive_id.empty()) {
+        // Delegated auth: /me/drive path is WAC-compatible
+        return GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+    }
+
+    // App auth: /drives/{id} triggers WAC failure; resolve the site coordinates
+    // so we can use /sites/{site-id}/drive/root:/{path}: instead.
+    ERPL_TRACE_DEBUG("GRAPH_EXCEL", "Resolving SharePoint site coordinates for drive: " + drive_id);
+    const std::string metadata_url = GraphExcelUrlBuilder::GetBaseUrl()
+        + "/drives/" + drive_id + "?$select=id,sharePointIds";
+
+    const std::string json_body = DoGraphGet(metadata_url);
+
+    duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
+    if (!doc) {
+        throw std::runtime_error("Failed to parse sharePointIds response for drive: " + drive_id);
+    }
+
+    duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    duckdb_yyjson::yyjson_val *sp_ids = duckdb_yyjson::yyjson_obj_get(root, "sharePointIds");
+
+    std::string site_id;
+    if (sp_ids) {
+        duckdb_yyjson::yyjson_val *site_url_val = duckdb_yyjson::yyjson_obj_get(sp_ids, "siteUrl");
+        duckdb_yyjson::yyjson_val *site_guid_val = duckdb_yyjson::yyjson_obj_get(sp_ids, "siteId");
+        duckdb_yyjson::yyjson_val *web_guid_val  = duckdb_yyjson::yyjson_obj_get(sp_ids, "webId");
+
+        if (site_url_val && site_guid_val && web_guid_val) {
+            std::string site_url  = duckdb_yyjson::yyjson_get_str(site_url_val);
+            std::string site_guid = duckdb_yyjson::yyjson_get_str(site_guid_val);
+            std::string web_guid  = duckdb_yyjson::yyjson_get_str(web_guid_val);
+
+            // Extract hostname from siteUrl (e.g. "https://tenant.sharepoint.com/sites/team" → "tenant.sharepoint.com")
+            std::string hostname = site_url;
+            const std::string https_prefix = "https://";
+            const std::string http_prefix  = "http://";
+            if (hostname.rfind(https_prefix, 0) == 0) {
+                hostname = hostname.substr(https_prefix.size());
+            } else if (hostname.rfind(http_prefix, 0) == 0) {
+                hostname = hostname.substr(http_prefix.size());
+            }
+            // Trim any path component — site_id uses only the hostname
+            const auto slash_pos = hostname.find('/');
+            if (slash_pos != std::string::npos) {
+                hostname = hostname.substr(0, slash_pos);
+            }
+
+            site_id = hostname + "," + site_guid + "," + web_guid;
+        }
+    }
+
+    duckdb_yyjson::yyjson_doc_free(doc);
+
+    if (site_id.empty()) {
+        throw std::runtime_error(
+            "Could not resolve SharePoint site coordinates for drive '" + drive_id +
+            "'. The drive may not be a SharePoint drive, or the token lacks Sites.Read.All.");
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_EXCEL", "Resolved site_id: " + site_id);
+    return GraphExcelUrlBuilder::BuildSiteDefaultDriveItemByPathUrl(site_id, file_path);
+}
+
 std::string GraphExcelClient::ListDriveFiles(const std::string &folder_path, const std::string &drive_id) {
     std::string url;
     if (!drive_id.empty()) {
@@ -156,9 +231,7 @@ std::string GraphExcelClient::GetTableRows(const std::string &item_id, const std
 }
 
 std::string GraphExcelClient::GetTableRowsByPath(const std::string &file_path, const std::string &table_name, const std::string &drive_id) {
-    auto item_url = drive_id.empty()
-        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
-        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
+    auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(workbook_url, table_name);
     return DoGraphGet(rows_url);
@@ -172,9 +245,7 @@ std::string GraphExcelClient::GetUsedRange(const std::string &item_id, const std
 }
 
 std::string GraphExcelClient::GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &drive_id) {
-    auto item_url = drive_id.empty()
-        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
-        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
+    auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildUsedRangeUrl(workbook_url, sheet_name);
     return DoGraphGet(range_url);
@@ -188,9 +259,7 @@ std::string GraphExcelClient::GetRange(const std::string &item_id, const std::st
 }
 
 std::string GraphExcelClient::GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range, const std::string &drive_id) {
-    auto item_url = drive_id.empty()
-        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
-        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
+    auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildRangeUrl(workbook_url, sheet_name, range);
     return DoGraphGet(range_url);
@@ -204,9 +273,7 @@ std::string GraphExcelClient::ListTables(const std::string &item_id) {
 }
 
 std::string GraphExcelClient::ListTablesByPath(const std::string &file_path, const std::string &drive_id) {
-    auto item_url = drive_id.empty()
-        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
-        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
+    auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto tables_url = GraphExcelUrlBuilder::BuildTablesUrl(workbook_url);
     return DoGraphGet(tables_url);
@@ -220,9 +287,7 @@ std::string GraphExcelClient::ListWorksheets(const std::string &item_id) {
 }
 
 std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id) {
-    auto item_url = drive_id.empty()
-        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
-        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
+    auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
     return DoGraphGet(worksheets_url);
