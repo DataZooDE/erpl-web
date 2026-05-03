@@ -68,6 +68,18 @@ public:
     // Build URL for listing files in a SharePoint site drive
     // /sites/{site-id}/drive/root/children
     static std::string BuildSiteDriveRootChildrenUrl(const std::string &site_id);
+
+    // Build URL for drive item by path using a drive ID (app-auth compatible)
+    // /drives/{drive-id}/root:/{path}:
+    static std::string BuildDriveItemByPathWithDriveUrl(const std::string &drive_id, const std::string &path);
+
+    // Build URL for listing files in the root of a specific drive
+    // /drives/{drive-id}/root/children
+    static std::string BuildDriveRootChildrenWithDriveUrl(const std::string &drive_id);
+
+    // Build URL for listing files in a subfolder of a specific drive
+    // /drives/{drive-id}/root:/{folder-path}:/children
+    static std::string BuildDriveFolderChildrenWithDriveUrl(const std::string &drive_id, const std::string &folder_path);
 };
 
 // Represents an Excel table's data
@@ -89,29 +101,29 @@ class GraphExcelClient {
 public:
     GraphExcelClient(std::shared_ptr<HttpAuthParams> auth_params);
 
-    // List files in OneDrive or SharePoint
-    std::string ListDriveFiles(const std::string &folder_path = "");
+    // List files in OneDrive or a specific drive (pass drive_id for app-auth)
+    std::string ListDriveFiles(const std::string &folder_path = "", const std::string &drive_id = "");
     std::string ListSiteFiles(const std::string &site_id, const std::string &folder_path = "");
 
-    // Get table data from an Excel workbook
+    // Get table data from an Excel workbook (pass drive_id for app-auth)
     std::string GetTableRows(const std::string &item_id, const std::string &table_name);
-    std::string GetTableRowsByPath(const std::string &file_path, const std::string &table_name);
+    std::string GetTableRowsByPath(const std::string &file_path, const std::string &table_name, const std::string &drive_id = "");
 
-    // Get worksheet data
+    // Get worksheet data (pass drive_id for app-auth)
     std::string GetUsedRange(const std::string &item_id, const std::string &sheet_name);
-    std::string GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name);
+    std::string GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &drive_id = "");
 
-    // Get specific range data
+    // Get specific range data (pass drive_id for app-auth)
     std::string GetRange(const std::string &item_id, const std::string &sheet_name, const std::string &range);
-    std::string GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range);
+    std::string GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range, const std::string &drive_id = "");
 
-    // List tables in a workbook
+    // List tables in a workbook (pass drive_id for app-auth)
     std::string ListTables(const std::string &item_id);
-    std::string ListTablesByPath(const std::string &file_path);
+    std::string ListTablesByPath(const std::string &file_path, const std::string &drive_id = "");
 
-    // List worksheets in a workbook
+    // List worksheets in a workbook (pass drive_id for app-auth)
     std::string ListWorksheets(const std::string &item_id);
-    std::string ListWorksheetsByPath(const std::string &file_path);
+    std::string ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id = "");
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;

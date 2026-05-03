@@ -19,6 +19,7 @@ using namespace duckdb;
 struct ListFilesBindData : public TableFunctionData {
     std::string secret_name;
     std::string folder_path;
+    std::string drive_id;
     std::string json_response;
     bool done = false;
 };
@@ -26,6 +27,7 @@ struct ListFilesBindData : public TableFunctionData {
 struct ExcelTablesBindData : public TableFunctionData {
     std::string secret_name;
     std::string file_path;
+    std::string drive_id;
     std::string json_response;
     bool done = false;
 };
@@ -33,6 +35,7 @@ struct ExcelTablesBindData : public TableFunctionData {
 struct ExcelWorksheetsBindData : public TableFunctionData {
     std::string secret_name;
     std::string file_path;
+    std::string drive_id;
     std::string json_response;
     bool done = false;
 };
@@ -42,6 +45,7 @@ struct ExcelRangeBindData : public TableFunctionData {
     std::string file_path;
     std::string sheet_name;
     std::string range;  // Optional, empty means usedRange
+    std::string drive_id;
     std::string json_response;
     bool done = false;
 };
@@ -50,6 +54,7 @@ struct ExcelTableDataBindData : public TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string table_name;
+    std::string drive_id;
     std::string json_response;
     bool done = false;
 };
@@ -99,12 +104,12 @@ unique_ptr<FunctionData> GraphExcelFunctions::ListFilesBind(
         bind_data->folder_path = input.inputs[0].GetValue<std::string>();
     }
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
+    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
+        bind_data->drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+    }
 
     // Return schema: id, name, webUrl, size, createdDateTime, lastModifiedDateTime, mimeType, isFolder
     names = {"id", "name", "web_url", "size", "created_at", "modified_at", "mime_type", "is_folder"};
@@ -138,7 +143,7 @@ void GraphExcelFunctions::ListFilesScan(
     if (bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphExcelClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListDriveFiles(bind_data.folder_path);
+        bind_data.json_response = client.ListDriveFiles(bind_data.folder_path, bind_data.drive_id);
     }
 
     // Parse JSON response
@@ -236,12 +241,12 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTablesBind(
     }
     bind_data->file_path = input.inputs[0].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
+    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
+        bind_data->drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+    }
 
     // Return schema: name, id, showHeaders, showTotals
     names = {"name", "id", "show_headers", "show_totals"};
@@ -270,7 +275,7 @@ void GraphExcelFunctions::ExcelTablesScan(
     if (bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphExcelClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListTablesByPath(bind_data.file_path);
+        bind_data.json_response = client.ListTablesByPath(bind_data.file_path, bind_data.drive_id);
     }
 
     yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
@@ -341,12 +346,12 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelWorksheetsBind(
     }
     bind_data->file_path = input.inputs[0].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
+    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
+        bind_data->drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+    }
 
     // Return schema: name, id, position, visibility
     names = {"name", "id", "position", "visibility"};
@@ -375,7 +380,7 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
     if (bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphExcelClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListWorksheetsByPath(bind_data.file_path);
+        bind_data.json_response = client.ListWorksheetsByPath(bind_data.file_path, bind_data.drive_id);
     }
 
     yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
@@ -452,21 +457,21 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         bind_data->range = input.inputs[2].GetValue<std::string>();
     }
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
+    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
+        bind_data->drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+    }
 
     // Fetch the range data to determine column count
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphExcelClient client(auth_info.auth_params);
 
     if (bind_data->range.empty()) {
-        bind_data->json_response = client.GetUsedRangeByPath(bind_data->file_path, bind_data->sheet_name);
+        bind_data->json_response = client.GetUsedRangeByPath(bind_data->file_path, bind_data->sheet_name, bind_data->drive_id);
     } else {
-        bind_data->json_response = client.GetRangeByPath(bind_data->file_path, bind_data->sheet_name, bind_data->range);
+        bind_data->json_response = client.GetRangeByPath(bind_data->file_path, bind_data->sheet_name, bind_data->range, bind_data->drive_id);
     }
 
     // Parse to determine schema
@@ -601,17 +606,17 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTableDataBind(
     bind_data->file_path = input.inputs[0].GetValue<std::string>();
     bind_data->table_name = input.inputs[1].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
+    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
+        bind_data->drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+    }
 
     // Fetch the table data to determine schema
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphExcelClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetTableRowsByPath(bind_data->file_path, bind_data->table_name);
+    bind_data->json_response = client.GetTableRowsByPath(bind_data->file_path, bind_data->table_name, bind_data->drive_id);
 
     // Parse to determine schema from first row
     yyjson_doc *doc = yyjson_read(bind_data->json_response.c_str(), bind_data->json_response.length(), 0);
@@ -748,12 +753,13 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
         list_files.varargs = LogicalType::VARCHAR;
         list_files.named_parameters["secret"] = LogicalType::VARCHAR;
+        list_files.named_parameters["drive_id"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(list_files);
         FunctionDescription desc;
-        desc.description = "List files in OneDrive/SharePoint accessible via Microsoft Graph.";
+        desc.description = "List files in OneDrive/SharePoint accessible via Microsoft Graph. Pass drive_id for app-only (client_credentials) authentication.";
         desc.parameter_names = {};
         desc.parameter_types = {};
-        desc.examples = {"SELECT * FROM graph_list_files(secret := 'ms_graph')"};
+        desc.examples = {"SELECT * FROM graph_list_files(drive_id := 'b!abc...', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -762,12 +768,13 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR},
                                    ExcelTablesScan, ExcelTablesBind);
         excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
+        excel_tables.named_parameters["drive_id"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_tables);
         FunctionDescription desc;
-        desc.description = "List all named tables in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
-        desc.parameter_names = {"file_path", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_excel_tables('/path/to/workbook.xlsx', secret := 'ms_graph')"};
+        desc.description = "List all named tables in a Microsoft Excel workbook stored in OneDrive/SharePoint. Pass drive_id for app-only (client_credentials) authentication.";
+        desc.parameter_names = {"file_path", "secret", "drive_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_tables('test.xlsx', drive_id := 'b!abc...', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -776,12 +783,13 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR},
                                        ExcelWorksheetsScan, ExcelWorksheetsBind);
         excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
+        excel_worksheets.named_parameters["drive_id"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_worksheets);
         FunctionDescription desc;
-        desc.description = "List all worksheets in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
-        desc.parameter_names = {"file_path", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_excel_worksheets('/path/to/workbook.xlsx', secret := 'ms_graph')"};
+        desc.description = "List all worksheets in a Microsoft Excel workbook stored in OneDrive/SharePoint. Pass drive_id for app-only (client_credentials) authentication.";
+        desc.parameter_names = {"file_path", "secret", "drive_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_worksheets('test.xlsx', drive_id := 'b!abc...', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -792,12 +800,13 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
                                   ExcelRangeScan, ExcelRangeBind);
         excel_range.varargs = LogicalType::VARCHAR;
         excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
+        excel_range.named_parameters["drive_id"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_range);
         FunctionDescription desc;
-        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
-        desc.parameter_names = {"file_path", "sheet_name", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_excel_range('/path/to/workbook.xlsx', 'Sheet1', secret := 'ms_graph')"};
+        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook stored in OneDrive/SharePoint. Pass drive_id for app-only (client_credentials) authentication.";
+        desc.parameter_names = {"file_path", "sheet_name", "secret", "drive_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_range('test.xlsx', 'Sheet1', drive_id := 'b!abc...', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -807,12 +816,13 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
                                        {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                        ExcelTableDataScan, ExcelTableDataBind);
         excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
+        excel_table_data.named_parameters["drive_id"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_table_data);
         FunctionDescription desc;
-        desc.description = "Read all rows from a named table in a Microsoft Excel workbook stored in OneDrive/SharePoint.";
-        desc.parameter_names = {"file_path", "table_name", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_excel_table_data('/path/to/workbook.xlsx', 'SalesData', secret := 'ms_graph')"};
+        desc.description = "Read all rows from a named table in a Microsoft Excel workbook stored in OneDrive/SharePoint. Pass drive_id for app-only (client_credentials) authentication.";
+        desc.parameter_names = {"file_path", "table_name", "secret", "drive_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive_id := 'b!abc...', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

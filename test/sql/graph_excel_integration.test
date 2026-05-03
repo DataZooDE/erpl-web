@@ -1,8 +1,6 @@
 # name: test/sql/graph_excel_integration.test
-# description: Integration tests for Microsoft Graph Excel/OneDrive
+# description: Integration tests for Microsoft Graph Excel Workbooks
 # group: [erpl_web]
-# note: Excel/OneDrive functions require delegated authentication
-#       Use authorization_code provider or set ERPL_MS_DELEGATED_ACCESS_TOKEN
 
 require erpl_web
 
@@ -10,53 +8,140 @@ require-env ERPL_MS_TENANT_ID
 
 require-env ERPL_MS_CLIENT_ID
 
-require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
+require-env ERPL_MS_CLIENT_SECRET
 
-require-env ERPL_MS_DELEGATED_EXPIRES_AT
+require-env ERPL_MS_EXCEL_SITE_ID
 
-# Create secret with delegated (user) credentials
+require-env ERPL_MS_EXCEL_DRIVE_ID
+
+require-env ERPL_MS_EXCEL_FILE_PATH
+
+# Create secret with real credentials
 statement ok
 CREATE SECRET ms_graph_excel_test (
     TYPE microsoft_graph,
-    PROVIDER config,
+    PROVIDER client_credentials,
     tenant_id '${ERPL_MS_TENANT_ID}',
     client_id '${ERPL_MS_CLIENT_ID}',
-    access_token '${ERPL_MS_DELEGATED_ACCESS_TOKEN}',
-    expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
 );
 
-# Test: graph_list_files returns data (may be empty if no files in root)
+# Test: graph_show_drives returns document library drives for the test site
 query I
-SELECT COUNT(*) >= 0 FROM graph_list_files();
+SELECT COUNT(*) > 0 FROM graph_show_drives('${ERPL_MS_EXCEL_SITE_ID}');
 ----
 true
 
-# Test: graph_list_files has expected columns
+# Test: graph_show_drives returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_list_files())
-    WHERE column_name IN ('id', 'name', 'size', 'created_at', 'modified_at', 'web_url', 'mime_type')
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_drives('${ERPL_MS_EXCEL_SITE_ID}'))
+    WHERE column_name IN ('id', 'name', 'drive_type', 'web_url', 'created_at', 'modified_at')
 );
 ----
-7
+6
 
-# Test: graph_excel_tables function exists
+# Test: graph_list_files returns the test Excel file
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_tables';
+SELECT COUNT(*) > 0 FROM graph_list_files(
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
 ----
-1
+true
 
-# Test: graph_excel_worksheets function exists
+# Test: graph_list_files returns expected columns
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_worksheets';
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_list_files(drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}')
+    )
+    WHERE column_name IN ('id', 'name', 'web_url', 'size', 'created_at', 'modified_at', 'mime_type', 'is_folder')
+);
 ----
-1
+8
 
-# Test: graph_excel_range function exists
+# Test: all listed files have a non-empty id and name
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_range';
+SELECT COUNT(*) = 0 FROM graph_list_files(drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}')
+WHERE id IS NULL OR id = '' OR name IS NULL OR name = '';
 ----
-1
+true
+
+# Test: graph_excel_worksheets returns worksheets for the test file
+query I
+SELECT COUNT(*) > 0 FROM graph_excel_worksheets(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
+----
+true
+
+# Test: graph_excel_worksheets returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_excel_worksheets(
+            '${ERPL_MS_EXCEL_FILE_PATH}',
+            drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+        )
+    )
+    WHERE column_name IN ('name', 'id', 'position', 'visibility')
+);
+----
+4
+
+# Test: all worksheets have a non-empty name
+query I
+SELECT COUNT(*) = 0 FROM graph_excel_worksheets(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+)
+WHERE name IS NULL OR name = '';
+----
+true
+
+# Test: graph_excel_tables returns named tables for the test file
+query I
+SELECT COUNT(*) > 0 FROM graph_excel_tables(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
+----
+true
+
+# Test: graph_excel_tables returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_excel_tables(
+            '${ERPL_MS_EXCEL_FILE_PATH}',
+            drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+        )
+    )
+    WHERE column_name IN ('name', 'id', 'show_headers', 'show_totals')
+);
+----
+4
+
+# Test: graph_excel_range reads data from the SalesData sheet
+query I
+SELECT COUNT(*) > 0 FROM graph_excel_range(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    'SalesData',
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
+----
+true
+
+# Test: graph_excel_table_data reads rows from the SalesTable
+query I
+SELECT COUNT(*) > 0 FROM graph_excel_table_data(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    'SalesTable',
+    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
+----
+true
 
 # Cleanup
 statement ok

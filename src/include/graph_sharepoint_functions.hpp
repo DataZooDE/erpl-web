@@ -23,6 +23,18 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
+    // graph_show_drives(site_id) - List drives (document libraries) in a SharePoint site
+    static duckdb::unique_ptr<duckdb::FunctionData> ShowDrivesBind(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionBindInput &input,
+        duckdb::vector<duckdb::LogicalType> &return_types,
+        duckdb::vector<std::string> &names);
+
+    static void ShowDrivesScan(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionInput &data,
+        duckdb::DataChunk &output);
+
     // graph_show_lists(secret_name, site_id) - List SharePoint lists in a site
     static duckdb::unique_ptr<duckdb::FunctionData> ShowListsBind(
         duckdb::ClientContext &context,

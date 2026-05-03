@@ -28,6 +28,11 @@ test_debug_sap: ${EXTENSION_CONFIG_STEP}
 #   ERPL_MS_CLIENT_SECRET       - Client secret value (not the secret ID)
 #   ERPL_MS_SHAREPOINT_SITE_ID  - SharePoint site composite ID for SP tests
 #   ERPL_MS_SHAREPOINT_LIST_ID  - SharePoint list ID within that site for SP tests
+#   ERPL_MS_PLANNER_GROUP_ID    - Microsoft 365 group ID for Planner tests
+#   ERPL_MS_PLANNER_PLAN_ID     - Planner plan ID within that group
+#   ERPL_MS_EXCEL_SITE_ID       - SharePoint site ID containing the Excel test file
+#   ERPL_MS_EXCEL_DRIVE_ID      - Drive ID within that site (from graph_show_drives)
+#   ERPL_MS_EXCEL_FILE_PATH     - Relative path to .xlsx file within the drive
 # Usage:
 #   source .env.microsoft && make test_debug_ms
 test_debug_ms: ${EXTENSION_CONFIG_STEP}

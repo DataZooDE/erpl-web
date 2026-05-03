@@ -45,67 +45,7 @@ std::string ToHexDump(const std::string& data, size_t max_bytes = 500) {
     return hex.str();
 }
 
-// Convert data to printable ASCII (replacing non-printable chars)
-std::string ToPrintableAscii(const std::string& data, size_t max_bytes = 500) {
-    std::string result;
-    size_t bytes_to_show = std::min(data.size(), max_bytes);
-    result.reserve(bytes_to_show);
-    for (size_t i = 0; i < bytes_to_show; i++) {
-        char c = data[i];
-        if (c >= 32 && c < 127) {
-            result += c;
-        } else if (c == '\r') {
-            result += "\\r";
-        } else if (c == '\n') {
-            result += "\\n\n";  // Add actual newline for readability
-        } else if (c == '\t') {
-            result += "\\t";
-        } else {
-            result += '.';  // Non-printable placeholder
-        }
-    }
-    return result;
-}
 
-// Debug header writer that logs headers before writing them
-ssize_t DebugHeaderWriter(duckdb_httplib_openssl::Stream& strm, duckdb_httplib_openssl::Headers& headers) {
-    // Build the header string that will be written
-    std::ostringstream header_data;
-    for (const auto& h : headers) {
-        header_data << h.first << ": " << h.second << "\r\n";
-    }
-    header_data << "\r\n";
-
-    std::string headers_str = header_data.str();
-
-    // Log the headers in multiple formats for debugging
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "=== HEADERS BEING SENT ===");
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "Header count: " + std::to_string(headers.size()));
-
-    // Log each header individually
-    for (const auto& h : headers) {
-        std::string header_line = h.first + ": " + (h.second.empty() ? "(empty)" : h.second);
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "  " + header_line);
-    }
-
-    // Log as hex dump (what actually goes on the wire)
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "Headers hex: " + ToHexDump(headers_str));
-
-    // Log as ASCII
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "Headers ASCII:\n" + ToPrintableAscii(headers_str));
-
-    // Now write the headers using the standard format
-    ssize_t write_len = 0;
-    for (const auto& x : headers) {
-        auto len = strm.write(x.first + ": " + x.second + "\r\n");
-        if (len < 0) { return len; }
-        write_len += len;
-    }
-    auto len = strm.write("\r\n");
-    if (len < 0) { return len; }
-    write_len += len;
-    return write_len;
-}
 
 } // anonymous namespace
 
@@ -1069,25 +1009,36 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
     // Control URL encoding behavior
     c->set_url_encode(http_params.url_encode);
 
-    // Wire-level debugging: set custom header writer to capture exact bytes being sent
-    c->set_header_writer(DebugHeaderWriter);
+    // Prevent TLS close_notify wait from blocking for 30 seconds during client destruction.
+    // httplib's SSLClient::~SSLClient calls SSL_shutdown twice — the second call blocks
+    // waiting for the peer's close_notify alert. Microsoft servers (graph.microsoft.com,
+    // login.microsoftonline.com) don't respond promptly, causing a 30s hang per request.
+    // SSL_CTX_set_quiet_shutdown(1) makes SSL_shutdown return immediately without waiting.
+    {
+        auto ssl_ctx = c->ssl_context();
+        if (ssl_ctx) {
+            SSL_CTX_set_quiet_shutdown(ssl_ctx, 1);
+        }
+    }
 
     // Set logger to capture complete request/response for debugging
-    c->set_logger([](const duckdb_httplib_openssl::Request& req, const duckdb_httplib_openssl::Response& res) {
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "=== REQUEST COMPLETE ===");
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Request: " + req.method + " " + req.path);
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body length: " + std::to_string(req.body.size()));
-        if (!req.body.empty()) {
-            ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body: " + req.body.substr(0, 500) +
-                           (req.body.size() > 500 ? "..." : ""));
-        }
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "=== RESPONSE ===");
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response status: " + std::to_string(res.status));
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response content-type: " + res.get_header_value("Content-Type"));
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body length: " + std::to_string(res.body.size()));
-        ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body preview: " + res.body.substr(0, 200) +
-                       (res.body.size() > 200 ? "..." : ""));
-    });
+    if (ErplTracer::Instance().IsEnabled()) {
+        c->set_logger([](const duckdb_httplib_openssl::Request& req, const duckdb_httplib_openssl::Response& res) {
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "=== REQUEST COMPLETE ===");
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Request: " + req.method + " " + req.path);
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body length: " + std::to_string(req.body.size()));
+            if (!req.body.empty()) {
+                ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body: " + req.body.substr(0, 500) +
+                               (req.body.size() > 500 ? "..." : ""));
+            }
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "=== RESPONSE ===");
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response status: " + std::to_string(res.status));
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response content-type: " + res.get_header_value("Content-Type"));
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body length: " + std::to_string(res.body.size()));
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body preview: " + res.body.substr(0, 200) +
+                           (res.body.size() > 200 ? "..." : ""));
+        });
+    }
 
 	return c;
 }

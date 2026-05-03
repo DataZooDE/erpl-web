@@ -69,6 +69,26 @@ std::string GraphExcelUrlBuilder::BuildSiteDriveRootChildrenUrl(const std::strin
     return GetBaseUrl() + "/sites/" + site_id + "/drive/root/children";
 }
 
+std::string GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(const std::string &drive_id, const std::string &path) {
+    std::string clean_path = path;
+    if (!clean_path.empty() && clean_path[0] == '/') {
+        clean_path = clean_path.substr(1);
+    }
+    return GetBaseUrl() + "/drives/" + drive_id + "/root:/" + clean_path + ":";
+}
+
+std::string GraphExcelUrlBuilder::BuildDriveRootChildrenWithDriveUrl(const std::string &drive_id) {
+    return GetBaseUrl() + "/drives/" + drive_id + "/root/children";
+}
+
+std::string GraphExcelUrlBuilder::BuildDriveFolderChildrenWithDriveUrl(const std::string &drive_id, const std::string &folder_path) {
+    std::string clean_path = folder_path;
+    if (!clean_path.empty() && clean_path[0] == '/') {
+        clean_path = clean_path.substr(1);
+    }
+    return GetBaseUrl() + "/drives/" + drive_id + "/root:/" + clean_path + ":/children";
+}
+
 // GraphExcelClient implementation
 GraphExcelClient::GraphExcelClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
@@ -107,9 +127,15 @@ std::string GraphExcelClient::DoGraphGet(const std::string &url) {
     return response->Content();
 }
 
-std::string GraphExcelClient::ListDriveFiles(const std::string &folder_path) {
+std::string GraphExcelClient::ListDriveFiles(const std::string &folder_path, const std::string &drive_id) {
     std::string url;
-    if (folder_path.empty()) {
+    if (!drive_id.empty()) {
+        if (folder_path.empty()) {
+            url = GraphExcelUrlBuilder::BuildDriveRootChildrenWithDriveUrl(drive_id);
+        } else {
+            url = GraphExcelUrlBuilder::BuildDriveFolderChildrenWithDriveUrl(drive_id, folder_path);
+        }
+    } else if (folder_path.empty()) {
         url = GraphExcelUrlBuilder::BuildDriveRootChildrenUrl();
     } else {
         url = GraphExcelUrlBuilder::BuildDriveFolderChildrenUrl(folder_path);
@@ -129,8 +155,10 @@ std::string GraphExcelClient::GetTableRows(const std::string &item_id, const std
     return DoGraphGet(rows_url);
 }
 
-std::string GraphExcelClient::GetTableRowsByPath(const std::string &file_path, const std::string &table_name) {
-    auto item_url = GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+std::string GraphExcelClient::GetTableRowsByPath(const std::string &file_path, const std::string &table_name, const std::string &drive_id) {
+    auto item_url = drive_id.empty()
+        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
+        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(workbook_url, table_name);
     return DoGraphGet(rows_url);
@@ -143,8 +171,10 @@ std::string GraphExcelClient::GetUsedRange(const std::string &item_id, const std
     return DoGraphGet(range_url);
 }
 
-std::string GraphExcelClient::GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name) {
-    auto item_url = GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+std::string GraphExcelClient::GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &drive_id) {
+    auto item_url = drive_id.empty()
+        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
+        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildUsedRangeUrl(workbook_url, sheet_name);
     return DoGraphGet(range_url);
@@ -157,8 +187,10 @@ std::string GraphExcelClient::GetRange(const std::string &item_id, const std::st
     return DoGraphGet(range_url);
 }
 
-std::string GraphExcelClient::GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range) {
-    auto item_url = GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+std::string GraphExcelClient::GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range, const std::string &drive_id) {
+    auto item_url = drive_id.empty()
+        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
+        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildRangeUrl(workbook_url, sheet_name, range);
     return DoGraphGet(range_url);
@@ -171,8 +203,10 @@ std::string GraphExcelClient::ListTables(const std::string &item_id) {
     return DoGraphGet(tables_url);
 }
 
-std::string GraphExcelClient::ListTablesByPath(const std::string &file_path) {
-    auto item_url = GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+std::string GraphExcelClient::ListTablesByPath(const std::string &file_path, const std::string &drive_id) {
+    auto item_url = drive_id.empty()
+        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
+        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto tables_url = GraphExcelUrlBuilder::BuildTablesUrl(workbook_url);
     return DoGraphGet(tables_url);
@@ -185,8 +219,10 @@ std::string GraphExcelClient::ListWorksheets(const std::string &item_id) {
     return DoGraphGet(worksheets_url);
 }
 
-std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path) {
-    auto item_url = GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path);
+std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id) {
+    auto item_url = drive_id.empty()
+        ? GraphExcelUrlBuilder::BuildDriveItemByPathUrl(file_path)
+        : GraphExcelUrlBuilder::BuildDriveItemByPathWithDriveUrl(drive_id, file_path);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
     return DoGraphGet(worksheets_url);

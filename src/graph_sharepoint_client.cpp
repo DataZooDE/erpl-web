@@ -62,6 +62,10 @@ std::string GraphSharePointUrlBuilder::BuildFollowedSitesUrl() {
     return GetBaseUrl() + "/me/followedSites";
 }
 
+std::string GraphSharePointUrlBuilder::BuildSiteDrivesUrl(const std::string &site_id) {
+    return GetBaseUrl() + "/sites/" + site_id + "/drives";
+}
+
 std::string GraphSharePointUrlBuilder::BuildSiteByPathUrl(const std::string &hostname, const std::string &site_path) {
     if (site_path.empty()) {
         return GetBaseUrl() + "/sites/" + hostname;
@@ -129,6 +133,11 @@ std::string GraphSharePointClient::GetSite(const std::string &site_id) {
 
 std::string GraphSharePointClient::GetSiteByPath(const std::string &hostname, const std::string &site_path) {
     auto url = GraphSharePointUrlBuilder::BuildSiteByPathUrl(hostname, site_path);
+    return DoGraphGet(url);
+}
+
+std::string GraphSharePointClient::ListDrives(const std::string &site_id) {
+    auto url = GraphSharePointUrlBuilder::BuildSiteDrivesUrl(site_id);
     return DoGraphGet(url);
 }
 

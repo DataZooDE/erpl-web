@@ -56,6 +56,10 @@ public:
     // Build URL for getting site by hostname and path
     // /sites/{hostname}:/{site-path}
     static std::string BuildSiteByPathUrl(const std::string &hostname, const std::string &site_path);
+
+    // Build URL for listing drives (document libraries) in a site
+    // /sites/{site-id}/drives
+    static std::string BuildSiteDrivesUrl(const std::string &site_id);
 };
 
 // Client for Microsoft Graph SharePoint API operations
@@ -68,6 +72,9 @@ public:
     std::string GetFollowedSites();
     std::string GetSite(const std::string &site_id);
     std::string GetSiteByPath(const std::string &hostname, const std::string &site_path);
+
+    // Drive (document library) operations
+    std::string ListDrives(const std::string &site_id);
 
     // List operations
     std::string ListLists(const std::string &site_id);

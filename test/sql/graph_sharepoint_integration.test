@@ -1,5 +1,5 @@
 # name: test/sql/graph_sharepoint_integration.test
-# description: Integration tests for Microsoft Graph SharePoint Lists
+# description: Integration tests for Microsoft Graph SharePoint Lists and Drives
 # group: [erpl_web]
 
 require erpl_web
@@ -104,6 +104,28 @@ SELECT COUNT(*) FROM (
 WHERE column_name = 'id';
 ----
 1
+
+# Test: graph_show_drives returns document library drives for the test site
+query I
+SELECT COUNT(*) > 0 FROM graph_show_drives('${ERPL_MS_SHAREPOINT_SITE_ID}');
+----
+true
+
+# Test: graph_show_drives returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_show_drives('${ERPL_MS_SHAREPOINT_SITE_ID}'))
+    WHERE column_name IN ('id', 'name', 'drive_type', 'web_url', 'created_at', 'modified_at')
+);
+----
+6
+
+# Test: all drives have non-empty id and name
+query I
+SELECT COUNT(*) = 0 FROM graph_show_drives('${ERPL_MS_SHAREPOINT_SITE_ID}')
+WHERE id IS NULL OR id = '' OR name IS NULL OR name = '';
+----
+true
 
 # Cleanup
 statement ok

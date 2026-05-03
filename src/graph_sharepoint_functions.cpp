@@ -32,6 +32,13 @@ struct ShowListsBindData : public TableFunctionData {
     bool done = false;
 };
 
+struct ShowDrivesBindData : public TableFunctionData {
+    std::string secret_name;
+    std::string site_id;
+    std::string json_response;
+    bool done = false;
+};
+
 struct DescribeListBindData : public TableFunctionData {
     std::string secret_name;
     std::string site_id;
@@ -613,6 +620,118 @@ void GraphSharePointFunctions::ListItemsScan(
 }
 
 // ============================================================================
+// graph_show_drives - List document library drives in a SharePoint site
+// ============================================================================
+
+unique_ptr<FunctionData> GraphSharePointFunctions::ShowDrivesBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    auto bind_data = make_uniq<ShowDrivesBindData>();
+
+    if (input.inputs.empty()) {
+        throw BinderException("graph_show_drives requires a site_id parameter");
+    }
+    bind_data->site_id = input.inputs[0].GetValue<std::string>();
+
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+
+    names = {"id", "name", "drive_type", "web_url", "created_at", "modified_at"};
+    return_types = {
+        LogicalType::VARCHAR,   // id
+        LogicalType::VARCHAR,   // name
+        LogicalType::VARCHAR,   // drive_type
+        LogicalType::VARCHAR,   // web_url
+        LogicalType::VARCHAR,   // created_at
+        LogicalType::VARCHAR    // modified_at
+    };
+
+    return std::move(bind_data);
+}
+
+void GraphSharePointFunctions::ShowDrivesScan(
+    ClientContext &context,
+    TableFunctionInput &data,
+    DataChunk &output) {
+
+    auto &bind_data = data.bind_data->CastNoConst<ShowDrivesBindData>();
+
+    if (bind_data.done) {
+        output.SetCardinality(0);
+        return;
+    }
+
+    if (bind_data.json_response.empty()) {
+        auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
+        GraphSharePointClient client(auth_info.auth_params);
+        bind_data.json_response = client.ListDrives(bind_data.site_id);
+    }
+
+    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
+    if (!doc) {
+        throw InvalidInputException("Failed to parse Graph API response");
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value_arr = yyjson_obj_get(root, "value");
+
+    if (!value_arr || !yyjson_is_arr(value_arr)) {
+        yyjson_doc_free(doc);
+        bind_data.done = true;
+        output.SetCardinality(0);
+        return;
+    }
+
+    size_t count = yyjson_arr_size(value_arr);
+    if (count > STANDARD_VECTOR_SIZE) {
+        count = STANDARD_VECTOR_SIZE;
+    }
+
+    output.SetCardinality(count);
+
+    size_t idx, max;
+    yyjson_val *item;
+    idx_t row = 0;
+
+    yyjson_arr_foreach(value_arr, idx, max, item) {
+        if (row >= count) { break; }
+
+        yyjson_val *id_val = yyjson_obj_get(item, "id");
+        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
+            Value(yyjson_get_str(id_val)) : Value());
+
+        yyjson_val *name_val = yyjson_obj_get(item, "name");
+        output.SetValue(1, row, name_val && yyjson_is_str(name_val) ?
+            Value(yyjson_get_str(name_val)) : Value());
+
+        yyjson_val *type_val = yyjson_obj_get(item, "driveType");
+        output.SetValue(2, row, type_val && yyjson_is_str(type_val) ?
+            Value(yyjson_get_str(type_val)) : Value());
+
+        yyjson_val *url_val = yyjson_obj_get(item, "webUrl");
+        output.SetValue(3, row, url_val && yyjson_is_str(url_val) ?
+            Value(yyjson_get_str(url_val)) : Value());
+
+        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
+        output.SetValue(4, row, created_val && yyjson_is_str(created_val) ?
+            Value(yyjson_get_str(created_val)) : Value());
+
+        yyjson_val *modified_val = yyjson_obj_get(item, "lastModifiedDateTime");
+        output.SetValue(5, row, modified_val && yyjson_is_str(modified_val) ?
+            Value(yyjson_get_str(modified_val)) : Value());
+
+        row++;
+    }
+
+    yyjson_doc_free(doc);
+    bind_data.done = true;
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -629,6 +748,20 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {};
         desc.parameter_types = {};
         desc.examples = {"SELECT * FROM graph_show_sites(secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction show_drives("graph_show_drives", {LogicalType::VARCHAR},
+                                  ShowDrivesScan, ShowDrivesBind);
+        show_drives.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(show_drives);
+        FunctionDescription desc;
+        desc.description = "List document library drives in a SharePoint site. Use graph_show_sites() to find the site_id.";
+        desc.parameter_names = {"site_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {"SELECT * FROM graph_show_drives('site-id', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
