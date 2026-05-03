@@ -52,7 +52,7 @@ std::string GraphExcelUrlBuilder::BuildWorksheetUrl(const std::string &workbook_
 
 std::string GraphExcelUrlBuilder::BuildUsedRangeUrl(const std::string &workbook_url, const std::string &sheet_name) {
     // $select eliminates unused 2D arrays (text, formulas, formulasLocal, formulasR1C1, …)
-    // reducing the JSON payload to ~3/7 of the full response for large sheets.
+    // reducing the JSON payload to ~43% of the full response for large sheets.
     return workbook_url + "/worksheets/" + GraphClient::UrlEncode(sheet_name) +
            "/usedRange?$select=values,valueTypes,numberFormat";
 }
