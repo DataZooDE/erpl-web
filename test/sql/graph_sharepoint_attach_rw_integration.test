@@ -1,0 +1,52 @@
+# name: test/sql/graph_sharepoint_attach_rw_integration.test
+# description: Integration tests for sharepoint_lists StorageExtension (ATTACH + read)
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+require-env ERPL_MS_CLIENT_ID
+require-env ERPL_MS_CLIENT_SECRET
+require-env ERPL_MS_SHAREPOINT_SITE_NAME
+
+# Create credential secret
+statement ok
+CREATE SECRET ms_sp_attach_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# ============================================================================
+# Phase 1a: ATTACH creates a proper catalog (not views)
+# ============================================================================
+
+statement ok
+ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sptest (TYPE sharepoint_lists, SECRET 'ms_sp_attach_test');
+
+# SHOW TABLES must enumerate lists from the site
+query I
+SELECT count(*) > 0 FROM (SHOW TABLES IN sptest);
+----
+true
+
+# At least the standard system tables should be absent — it is a remote catalog
+query I
+SELECT count(*) FROM (SHOW TABLES IN sptest) WHERE name = 'sqlite_master';
+----
+0
+
+# DESCRIBE works on any list (we can't know the list name ahead of time,
+# so we verify describe returns rows for the first table we find)
+query I
+SELECT count(*) > 0 FROM (
+    SELECT table_name FROM (SHOW TABLES IN sptest) LIMIT 1
+) t, LATERAL (DESCRIBE sptest.${t.table_name}) d;
+----
+true
+
+# Detach cleanly
+statement ok
+DETACH sptest;

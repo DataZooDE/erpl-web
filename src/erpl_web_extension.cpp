@@ -33,7 +33,7 @@
 #include "graph_excel_secret.hpp"
 #include "graph_excel_functions.hpp"
 #include "graph_sharepoint_functions.hpp"
-#include "graph_sharepoint_attach_functions.hpp"
+#include "graph_sharepoint_storage.hpp"
 #include "graph_planner_functions.hpp"
 #include "graph_outlook_functions.hpp"
 #include "graph_entra_functions.hpp"
@@ -777,7 +777,14 @@ static void RegisterGraphSharePointFunctions(ExtensionLoader &loader)
 {
     // Register Microsoft Graph SharePoint table functions
     erpl_web::GraphSharePointFunctions::Register(loader);
-    erpl_web::GraphSharePointAttachFunctions::Register(loader);
+
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+    auto &callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
+    callback_manager.Register("sharepoint_lists", shared_ptr<StorageExtension>(erpl_web::CreateSharePointStorageExtension().release()));
+#else
+    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+    config.storage_extensions["sharepoint_lists"] = erpl_web::CreateSharePointStorageExtension();
+#endif
 }
 
 static void RegisterGraphPlannerFunctions(ExtensionLoader &loader)
