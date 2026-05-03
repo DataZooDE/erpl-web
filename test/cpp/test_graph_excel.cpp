@@ -71,13 +71,13 @@ TEST_CASE("GraphExcelUrlBuilder - BuildWorksheetUrl", "[graph_excel][url_builder
 TEST_CASE("GraphExcelUrlBuilder - BuildUsedRangeUrl", "[graph_excel][url_builder]") {
     std::string workbook_url = "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook";
     auto url = GraphExcelUrlBuilder::BuildUsedRangeUrl(workbook_url, "Sheet1");
-    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/worksheets/Sheet1/usedRange");
+    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/worksheets/Sheet1/usedRange?$select=values,valueTypes,numberFormat");
 }
 
 TEST_CASE("GraphExcelUrlBuilder - BuildRangeUrl", "[graph_excel][url_builder]") {
     std::string workbook_url = "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook";
     auto url = GraphExcelUrlBuilder::BuildRangeUrl(workbook_url, "Sheet1", "A1:D10");
-    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/worksheets/Sheet1/range(address='A1:D10')");
+    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/worksheets/Sheet1/range(address='A1:D10')?$select=values,valueTypes,numberFormat");
 }
 
 TEST_CASE("GraphExcelUrlBuilder - BuildDriveRootChildrenUrl", "[graph_excel][url_builder]") {
