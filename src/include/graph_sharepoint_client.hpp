@@ -85,6 +85,13 @@ public:
     std::string GetListItems(const std::string &site_id, const std::string &list_id,
                              const std::string &select = "", int top = 0);
 
+    // Name-to-ID resolution: accepts friendly names or raw IDs transparently
+    std::string ResolveSiteId(const std::string &name_or_id);
+    std::string ResolveDriveId(const std::string &site_id, const std::string &name_or_id);
+
+    static bool LooksLikeSiteId(const std::string &s);
+    static bool LooksLikeDriveId(const std::string &s);
+
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<HttpClient> http_client;

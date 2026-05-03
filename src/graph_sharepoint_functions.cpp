@@ -184,18 +184,18 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ShowListsBind(
 
     auto bind_data = make_uniq<ShowListsBindData>();
 
-    // site_id is required positional parameter
-    if (input.inputs.empty()) {
-        throw BinderException("graph_show_lists requires a site_id parameter");
+    // Accept either a positional site_id or named site := 'name'
+    if (input.named_parameters.find("site") != input.named_parameters.end()) {
+        bind_data->site_id = input.named_parameters.at("site").GetValue<std::string>();
+    } else if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
+        bind_data->site_id = input.inputs[0].GetValue<std::string>();
+    } else {
+        throw BinderException("graph_show_lists requires either a positional site_id or site := 'name'");
     }
-    bind_data->site_id = input.inputs[0].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
     }
-    bind_data->secret_name = secret_name;
 
     // Return schema: id, name, displayName, webUrl, createdDateTime, lastModifiedDateTime
     names = {"id", "name", "display_name", "description", "web_url", "created_at", "modified_at"};
@@ -227,7 +227,7 @@ void GraphSharePointFunctions::ShowListsScan(
     if (bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListLists(bind_data.site_id);
+        bind_data.json_response = client.ListLists(client.ResolveSiteId(bind_data.site_id));
     }
 
     yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
@@ -631,10 +631,14 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ShowDrivesBind(
 
     auto bind_data = make_uniq<ShowDrivesBindData>();
 
-    if (input.inputs.empty()) {
-        throw BinderException("graph_show_drives requires a site_id parameter");
+    // Accept either a positional site_id or named site := 'name'
+    if (input.named_parameters.find("site") != input.named_parameters.end()) {
+        bind_data->site_id = input.named_parameters.at("site").GetValue<std::string>();
+    } else if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
+        bind_data->site_id = input.inputs[0].GetValue<std::string>();
+    } else {
+        throw BinderException("graph_show_drives requires either a positional site_id or site := 'name'");
     }
-    bind_data->site_id = input.inputs[0].GetValue<std::string>();
 
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
@@ -668,7 +672,7 @@ void GraphSharePointFunctions::ShowDrivesScan(
     if (bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListDrives(bind_data.site_id);
+        bind_data.json_response = client.ListDrives(client.ResolveSiteId(bind_data.site_id));
     }
 
     yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
@@ -753,29 +757,37 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction show_drives("graph_show_drives", {LogicalType::VARCHAR},
-                                  ShowDrivesScan, ShowDrivesBind);
+        TableFunction show_drives("graph_show_drives", {}, ShowDrivesScan, ShowDrivesBind);
+        show_drives.varargs = LogicalType::VARCHAR;
         show_drives.named_parameters["secret"] = LogicalType::VARCHAR;
+        show_drives.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(show_drives);
         FunctionDescription desc;
-        desc.description = "List document library drives in a SharePoint site. Use graph_show_sites() to find the site_id.";
-        desc.parameter_names = {"site_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_show_drives('site-id', secret := 'ms_graph')"};
+        desc.description = "List document library drives in a SharePoint site. Accepts a composite site_id or a friendly site name.";
+        desc.parameter_names = {"site_id", "secret", "site"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_show_drives('site-id,guid,guid', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_drives(site := 'Finance', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction show_lists("graph_show_lists", {LogicalType::VARCHAR},
-                                 ShowListsScan, ShowListsBind);
+        TableFunction show_lists("graph_show_lists", {}, ShowListsScan, ShowListsBind);
+        show_lists.varargs = LogicalType::VARCHAR;
         show_lists.named_parameters["secret"] = LogicalType::VARCHAR;
+        show_lists.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(show_lists);
         FunctionDescription desc;
-        desc.description = "List all lists in a SharePoint site.";
-        desc.parameter_names = {"site_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_show_lists('site-id-here', secret := 'ms_graph')"};
+        desc.description = "List all lists in a SharePoint site. Accepts a composite site_id or a friendly site name.";
+        desc.parameter_names = {"site_id", "secret", "site"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_show_lists('site-id-here', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_lists(site := 'Finance', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

@@ -1,5 +1,9 @@
 #include "graph_sharepoint_client.hpp"
 #include "tracing.hpp"
+#include "duckdb/common/exception.hpp"
+#include "yyjson.hpp"
+
+using namespace duckdb_yyjson;
 
 namespace erpl_web {
 
@@ -160,6 +164,124 @@ std::string GraphSharePointClient::GetListItems(const std::string &site_id, cons
                                                  const std::string &select, int top) {
     auto url = GraphSharePointUrlBuilder::BuildListItemsWithSelectUrl(site_id, list_id, select, top);
     return DoGraphGet(url);
+}
+
+bool GraphSharePointClient::LooksLikeSiteId(const std::string &s) {
+    return s.find(',') != std::string::npos;
+}
+
+bool GraphSharePointClient::LooksLikeDriveId(const std::string &s) {
+    // SharePoint drive IDs start with 'b!' (base64-encoded)
+    if (s.size() >= 2 && s[0] == 'b' && s[1] == '!') {
+        return true;
+    }
+    // Or they can be bare GUIDs: 36 chars with dashes at positions 8, 13, 18, 23
+    if (s.size() == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-') {
+        return true;
+    }
+    return false;
+}
+
+std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) {
+    if (LooksLikeSiteId(name_or_id)) {
+        return name_or_id;
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving site name to ID: " + name_or_id);
+    auto json = SearchSites(name_or_id);
+
+    yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+    if (!doc) {
+        throw duckdb::InvalidInputException("Failed to parse site search response for: %s", name_or_id.c_str());
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value_arr = yyjson_obj_get(root, "value");
+
+    if (!value_arr || !yyjson_is_arr(value_arr) || yyjson_arr_size(value_arr) == 0) {
+        yyjson_doc_free(doc);
+        throw duckdb::InvalidInputException("No SharePoint site found matching: %s", name_or_id.c_str());
+    }
+
+    yyjson_val *first = yyjson_arr_get_first(value_arr);
+    yyjson_val *id_val = yyjson_obj_get(first, "id");
+
+    std::string resolved;
+    if (id_val && yyjson_is_str(id_val)) {
+        resolved = yyjson_get_str(id_val);
+    }
+    yyjson_doc_free(doc);
+
+    if (resolved.empty()) {
+        throw duckdb::InvalidInputException("Site search returned no id for: %s", name_or_id.c_str());
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolved site '" + name_or_id + "' → " + resolved);
+    return resolved;
+}
+
+std::string GraphSharePointClient::ResolveDriveId(const std::string &site_id, const std::string &name_or_id) {
+    if (LooksLikeDriveId(name_or_id)) {
+        return name_or_id;
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving drive name to ID: " + name_or_id);
+    auto json = ListDrives(site_id);
+
+    yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+    if (!doc) {
+        throw duckdb::InvalidInputException("Failed to parse drives response for site: %s", site_id.c_str());
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value_arr = yyjson_obj_get(root, "value");
+
+    if (!value_arr || !yyjson_is_arr(value_arr)) {
+        yyjson_doc_free(doc);
+        throw duckdb::InvalidInputException("No drives found for site: %s", site_id.c_str());
+    }
+
+    if (name_or_id.empty()) {
+        // Auto-select when there is exactly one drive
+        if (yyjson_arr_size(value_arr) == 1) {
+            yyjson_val *only = yyjson_arr_get_first(value_arr);
+            yyjson_val *id_val = yyjson_obj_get(only, "id");
+            std::string resolved;
+            if (id_val && yyjson_is_str(id_val)) {
+                resolved = yyjson_get_str(id_val);
+            }
+            yyjson_doc_free(doc);
+            ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Auto-selected single drive → " + resolved);
+            return resolved;
+        }
+        yyjson_doc_free(doc);
+        throw duckdb::InvalidInputException(
+            "Multiple drives found for site '%s'. Specify a drive name via the 'drive' parameter.", site_id.c_str());
+    }
+
+    size_t idx, max;
+    yyjson_val *item;
+    std::string resolved;
+
+    yyjson_arr_foreach(value_arr, idx, max, item) {
+        yyjson_val *name_val = yyjson_obj_get(item, "name");
+        if (name_val && yyjson_is_str(name_val) && name_or_id == yyjson_get_str(name_val)) {
+            yyjson_val *id_val = yyjson_obj_get(item, "id");
+            if (id_val && yyjson_is_str(id_val)) {
+                resolved = yyjson_get_str(id_val);
+            }
+            break;
+        }
+    }
+    yyjson_doc_free(doc);
+
+    if (resolved.empty()) {
+        throw duckdb::InvalidInputException("No drive named '%s' found in site '%s'.",
+                                            name_or_id.c_str(), site_id.c_str());
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolved drive '" + name_or_id + "' → " + resolved);
+    return resolved;
 }
 
 } // namespace erpl_web
