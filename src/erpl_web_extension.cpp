@@ -33,6 +33,7 @@
 #include "graph_excel_secret.hpp"
 #include "graph_excel_functions.hpp"
 #include "graph_sharepoint_functions.hpp"
+#include "graph_sharepoint_attach_functions.hpp"
 #include "graph_planner_functions.hpp"
 #include "graph_outlook_functions.hpp"
 #include "graph_entra_functions.hpp"
@@ -776,6 +777,7 @@ static void RegisterGraphSharePointFunctions(ExtensionLoader &loader)
 {
     // Register Microsoft Graph SharePoint table functions
     erpl_web::GraphSharePointFunctions::Register(loader);
+    erpl_web::GraphSharePointAttachFunctions::Register(loader);
 }
 
 static void RegisterGraphPlannerFunctions(ExtensionLoader &loader)

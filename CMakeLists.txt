@@ -137,6 +137,7 @@ set(EXTENSION_SOURCES
     src/graph_excel_functions.cpp
     src/graph_sharepoint_client.cpp
     src/graph_sharepoint_functions.cpp
+    src/graph_sharepoint_attach_functions.cpp
     src/graph_planner_client.cpp
     src/graph_planner_functions.cpp
     src/graph_outlook_client.cpp
