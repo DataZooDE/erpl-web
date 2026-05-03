@@ -17,7 +17,7 @@ ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST API
 - Delta Sharing: Query Databricks, SAP, and other Delta Sharing protocol-compliant services via Parquet files
 - SAP Datasphere: List spaces/assets, describe assets, and read relational/analytical data
 - SAP Analytics Cloud: Query models, stories, discover dimensions/measures with automatic schema
-- Microsoft 365: Query Entra ID users/groups, SharePoint, Teams, Outlook, Planner, and Excel via Graph API
+- Microsoft 365: Query Entra ID users/groups, SharePoint lists/Excel, Teams, Outlook, Planner via Graph API; attach a whole site as views with `sharepoint_attach`
 - Microsoft Dynamics 365: Read Business Central ERP and Dataverse/CRM data from SQL
 - OAuth2 + Secrets: Secure flows with refresh, client credentials, and secret providers
 - Tracing: Deep, configurable tracing for debugging and performance tuning
@@ -191,8 +191,11 @@ CREATE SECRET ms (
 -- 2. Query Entra ID users
 SELECT display_name, mail, department FROM graph_users();
 
--- 3. Query SharePoint list items
-SELECT * FROM graph_list_items('your-site-id', 'your-list-id');
+-- 3. Attach a SharePoint site as views (lists auto-inferred, or add drive for Excel)
+SELECT success FROM sharepoint_attach('Finance', secret := 'ms');
+
+-- 4. Query the attached views directly
+SELECT * FROM project_tracker WHERE status = 'Active';
 ```
 
 ---
@@ -739,14 +742,20 @@ Functions: `graph_planner_plans(group_id, [secret])`, `graph_planner_buckets(pla
 
 Required permissions: `Sites.Read.All` (Application).
 
+Site and drive arguments accept either a **friendly name** (e.g. `'Finance'`) or the raw composite ID — the API resolves names automatically.
+
 ```sql
 -- Discover accessible sites
 SELECT id, display_name, web_url
 FROM graph_show_sites();
 
--- Lists in a site
+-- Document library drives in a site (by name or ID)
+SELECT id, name, drive_type, web_url
+FROM graph_show_drives(site := 'Finance', secret := 'ms_graph');
+
+-- Lists in a site (by name or ID)
 SELECT id, name, display_name, item_count
-FROM graph_show_lists('your-site-id');
+FROM graph_show_lists(site := 'Finance', secret := 'ms_graph');
 
 -- Schema of a list
 SELECT column_name, column_type, required
@@ -757,41 +766,108 @@ SELECT * FROM graph_list_items('your-site-id', 'your-list-id')
 WHERE status = 'Active';
 ```
 
-Functions: `graph_show_sites([secret])`, `graph_show_lists(site_id, [secret])`, `graph_describe_list(site_id, list_id, [secret])`, `graph_list_items(site_id, list_id, [secret])`
+Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id, list_id, [secret])`, `graph_list_items(site_id, list_id, [secret])`
+
+---
+
+### SharePoint Attach
+
+Attach all lists (or all Excel workbooks) from a SharePoint site as DuckDB views in one call. Views are lazy — no data is fetched at attach time; the API is only hit when a view is queried.
+
+Required permissions: `Sites.Read.All` for lists; `Files.ReadWrite.All` + WAC for Excel.
+
+```sql
+-- Attach all SharePoint lists as views (auto-inferred when no drive given)
+SELECT success FROM sharepoint_attach('Finance', secret := 'ms_graph');
+
+-- Attach all Excel workbook worksheets from a document library
+SELECT success FROM sharepoint_attach('Finance',
+  drive   := 'Documents',
+  secret  := 'ms_graph'
+);
+
+-- Attach only named Excel tables (not worksheets)
+SELECT success FROM sharepoint_attach('Finance',
+  drive   := 'Documents',
+  content := 'tables',
+  secret  := 'ms_graph'
+);
+
+-- Attach both lists AND Excel sheets; replace existing views
+SELECT success FROM sharepoint_attach('Finance',
+  drive     := 'Documents',
+  content   := 'both',
+  secret    := 'ms_graph',
+  overwrite := true
+);
+```
+
+After attaching, views are available directly in the current schema:
+
+```sql
+-- Example: a list named "Project Tracker" becomes:
+SELECT * FROM project_tracker;
+
+-- Example: Budget.xlsx Sheet1 becomes:
+SELECT * FROM budget_sheet1;
+```
+
+**`content` values:**
+
+| Value | What is attached |
+|-------|-----------------|
+| `'lists'` | SharePoint lists (default when no `drive` is given) |
+| `'excel'` | All `.xlsx` worksheets in the drive (default when `drive` is given) |
+| `'tables'` | Only named Excel tables (not raw worksheets) |
+| `'both'` | SharePoint lists + Excel worksheets |
+
+Function: `sharepoint_attach(site, [secret, drive, content, overwrite])`
 
 ---
 
 ### Excel (OneDrive / SharePoint)
 
-Required permissions: `Files.Read.All` (Application) or delegated user token.
+Required permissions: `Files.ReadWrite.All` (Application). Note: the Microsoft Graph WAC (Web Application Companion) service requires write permission even for read-only access to Excel data.
+
+File paths and drive locations accept either a **friendly name** (`site := 'Finance'`, `drive := 'Documents'`) or raw IDs (`drive_id := 'b!...'`).
 
 ```sql
--- Files accessible in OneDrive/SharePoint
+-- Files accessible in OneDrive/SharePoint (by name or raw drive_id)
 SELECT name, file_path, size, last_modified
-FROM graph_list_files();
+FROM graph_list_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph');
 
 -- Worksheets in a workbook
 SELECT id, name, position
-FROM graph_excel_worksheets('/sites/Finance/Shared Documents/Budget.xlsx');
+FROM graph_excel_worksheets('Budget.xlsx',
+  site   := 'Finance',
+  drive  := 'Documents',
+  secret := 'ms_graph'
+);
 
 -- Named tables in a workbook
 SELECT id, name, row_count
-FROM graph_excel_tables('/sites/Finance/Shared Documents/Budget.xlsx');
+FROM graph_excel_tables('Budget.xlsx',
+  site   := 'Finance',
+  drive  := 'Documents',
+  secret := 'ms_graph'
+);
 
 -- Read table data
-SELECT * FROM graph_excel_table_data(
-  '/sites/Finance/Shared Documents/Budget.xlsx',
-  'SalesData'
+SELECT * FROM graph_excel_table_data('Budget.xlsx', 'SalesData',
+  site   := 'Finance',
+  drive  := 'Documents',
+  secret := 'ms_graph'
 );
 
 -- Read a cell range
-SELECT * FROM graph_excel_range(
-  '/sites/Finance/Shared Documents/Budget.xlsx',
-  'Sheet1'
+SELECT * FROM graph_excel_range('Budget.xlsx', 'Sheet1',
+  site   := 'Finance',
+  drive  := 'Documents',
+  secret := 'ms_graph'
 );
 ```
 
-Functions: `graph_list_files([secret])`, `graph_excel_worksheets(file_path, [secret])`, `graph_excel_tables(file_path, [secret])`, `graph_excel_table_data(file_path, table_name, [secret])`, `graph_excel_range(file_path, sheet_name, [secret])`
+Functions: `graph_list_files([secret, drive_id, site, drive])`, `graph_excel_worksheets(file_path, [secret, drive_id, site, drive])`, `graph_excel_tables(file_path, [secret, drive_id, site, drive])`, `graph_excel_table_data(file_path, table_name, [secret, drive_id, site, drive])`, `graph_excel_range(file_path, sheet_name, [secret, drive_id, site, drive])`
 
 ---
 
