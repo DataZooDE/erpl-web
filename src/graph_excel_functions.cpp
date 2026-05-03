@@ -93,34 +93,43 @@ static std::vector<std::string> ParseJsonStringArray(yyjson_val *arr) {
 static std::string ResolveGraphDriveId(ClientContext &context,
                                        const std::string &secret_name,
                                        const TableFunctionBindInput &input) {
-    if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
-        const std::string drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
-        // If the value looks like a web URL, resolve it to a real drive ID
-        if (drive_id.rfind("https://", 0) == 0 || drive_id.rfind("http://", 0) == 0) {
-            auto auth_info = ResolveGraphAuth(context, secret_name);
-            GraphSharePointClient sp_client(auth_info.auth_params);
-            return sp_client.ResolveDriveIdFromUrl(drive_id);
-        }
-        return drive_id;
-    }
-
-    const bool has_site = input.named_parameters.find("site") != input.named_parameters.end();
     const bool has_drive = input.named_parameters.find("drive") != input.named_parameters.end();
+    const bool has_site  = input.named_parameters.find("site")  != input.named_parameters.end();
 
-    if (!has_site && !has_drive) {
+    if (!has_drive && !has_site) {
         return "";
     }
-    if (!has_site) {
-        throw BinderException("The 'drive' parameter requires 'site' to be specified for name resolution");
+
+    if (has_drive) {
+        const std::string drive_param = input.named_parameters.at("drive").GetValue<std::string>();
+
+        // Raw drive ID (b!...) — use directly, no API call needed
+        if (GraphSharePointClient::LooksLikeDriveId(drive_param)) {
+            return drive_param;
+        }
+
+        // Web URL — resolve by matching webUrl field across the site's drives
+        if (drive_param.rfind("https://", 0) == 0 || drive_param.rfind("http://", 0) == 0) {
+            auto auth_info = ResolveGraphAuth(context, secret_name);
+            GraphSharePointClient sp_client(auth_info.auth_params);
+            return sp_client.ResolveDriveIdFromUrl(drive_param);
+        }
+
+        // Display name — requires site for lookup
+        if (!has_site) {
+            throw BinderException(
+                "The 'drive' parameter requires 'site' when specifying a drive by name. "
+                "Pass a drive ID (b!...) or URL (https://...) to omit 'site'.");
+        }
     }
 
-    const std::string site_param = input.named_parameters.at("site").GetValue<std::string>();
+    // Name-based or auto-select: resolve site first, then drive within it
+    auto auth_info = ResolveGraphAuth(context, secret_name);
+    GraphSharePointClient sp_client(auth_info.auth_params);
+    const std::string site_param  = input.named_parameters.at("site").GetValue<std::string>();
     const std::string drive_param = has_drive
         ? input.named_parameters.at("drive").GetValue<std::string>()
         : "";
-
-    auto auth_info = ResolveGraphAuth(context, secret_name);
-    GraphSharePointClient sp_client(auth_info.auth_params);
     const std::string site_id = sp_client.ResolveSiteId(site_param);
     return sp_client.ResolveDriveId(site_id, drive_param);
 }
@@ -781,16 +790,16 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
         list_files.varargs = LogicalType::VARCHAR;
         list_files.named_parameters["secret"] = LogicalType::VARCHAR;
-        list_files.named_parameters["drive_id"] = LogicalType::VARCHAR;
-        list_files.named_parameters["site"] = LogicalType::VARCHAR;
         list_files.named_parameters["drive"] = LogicalType::VARCHAR;
+        list_files.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(list_files);
         FunctionDescription desc;
-        desc.description = "List files in OneDrive/SharePoint. Use drive_id for a raw ID or site + drive for name-based lookup.";
+        desc.description = "List files in OneDrive/SharePoint. Pass a drive ID (b!...), web URL, or name + site.";
         desc.parameter_names = {};
         desc.parameter_types = {};
         desc.examples = {
-            "SELECT * FROM graph_list_files(drive_id := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_list_files(drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_list_files(drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_list_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
@@ -801,17 +810,17 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction excel_tables("graph_excel_tables", {LogicalType::VARCHAR},
                                    ExcelTablesScan, ExcelTablesBind);
         excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
-        excel_tables.named_parameters["drive_id"] = LogicalType::VARCHAR;
-        excel_tables.named_parameters["site"] = LogicalType::VARCHAR;
         excel_tables.named_parameters["drive"] = LogicalType::VARCHAR;
+        excel_tables.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_tables);
         FunctionDescription desc;
-        desc.description = "List all named tables in a Microsoft Excel workbook. Use drive_id or site + drive for location.";
-        desc.parameter_names = {"file_path", "secret", "drive_id", "site", "drive"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+        desc.description = "List all named tables in a Microsoft Excel workbook.";
+        desc.parameter_names = {"file_path", "secret", "drive", "site"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_tables('test.xlsx', drive_id := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_tables('test.xlsx', drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_tables('test.xlsx', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_tables('test.xlsx', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
@@ -822,17 +831,17 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         TableFunction excel_worksheets("graph_excel_worksheets", {LogicalType::VARCHAR},
                                        ExcelWorksheetsScan, ExcelWorksheetsBind);
         excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
-        excel_worksheets.named_parameters["drive_id"] = LogicalType::VARCHAR;
-        excel_worksheets.named_parameters["site"] = LogicalType::VARCHAR;
         excel_worksheets.named_parameters["drive"] = LogicalType::VARCHAR;
+        excel_worksheets.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_worksheets);
         FunctionDescription desc;
-        desc.description = "List all worksheets in a Microsoft Excel workbook. Use drive_id or site + drive for location.";
-        desc.parameter_names = {"file_path", "secret", "drive_id", "site", "drive"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+        desc.description = "List all worksheets in a Microsoft Excel workbook.";
+        desc.parameter_names = {"file_path", "secret", "drive", "site"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_worksheets('test.xlsx', drive_id := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_worksheets('test.xlsx', drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_worksheets('test.xlsx', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_worksheets('test.xlsx', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
@@ -845,17 +854,17 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
                                   ExcelRangeScan, ExcelRangeBind);
         excel_range.varargs = LogicalType::VARCHAR;
         excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
-        excel_range.named_parameters["drive_id"] = LogicalType::VARCHAR;
-        excel_range.named_parameters["site"] = LogicalType::VARCHAR;
         excel_range.named_parameters["drive"] = LogicalType::VARCHAR;
+        excel_range.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_range);
         FunctionDescription desc;
-        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook. Use drive_id or site + drive for location.";
-        desc.parameter_names = {"file_path", "sheet_name", "secret", "drive_id", "site", "drive"};
+        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook.";
+        desc.parameter_names = {"file_path", "sheet_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                 LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+                                 LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_range('test.xlsx', 'Sheet1', drive_id := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_range('test.xlsx', 'Sheet1', drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_range('test.xlsx', 'Sheet1', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_range('test.xlsx', 'Sheet1', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
@@ -867,17 +876,17 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
                                        {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                        ExcelTableDataScan, ExcelTableDataBind);
         excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
-        excel_table_data.named_parameters["drive_id"] = LogicalType::VARCHAR;
-        excel_table_data.named_parameters["site"] = LogicalType::VARCHAR;
         excel_table_data.named_parameters["drive"] = LogicalType::VARCHAR;
+        excel_table_data.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_table_data);
         FunctionDescription desc;
-        desc.description = "Read all rows from a named table in a Microsoft Excel workbook. Use drive_id or site + drive for location.";
-        desc.parameter_names = {"file_path", "table_name", "secret", "drive_id", "site", "drive"};
+        desc.description = "Read all rows from a named table in a Microsoft Excel workbook.";
+        desc.parameter_names = {"file_path", "table_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                 LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+                                 LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive_id := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
