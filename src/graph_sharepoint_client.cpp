@@ -187,6 +187,46 @@ std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) 
         return name_or_id;
     }
 
+    // Accept web URLs: https://tenant.sharepoint.com  or  https://tenant.sharepoint.com/sites/name
+    const std::string https_prefix = "https://";
+    const std::string http_prefix  = "http://";
+    if (name_or_id.rfind(https_prefix, 0) == 0 || name_or_id.rfind(http_prefix, 0) == 0) {
+        ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving site URL to ID: " + name_or_id);
+
+        std::string rest = name_or_id.rfind(https_prefix, 0) == 0
+            ? name_or_id.substr(https_prefix.size())
+            : name_or_id.substr(http_prefix.size());
+
+        // Split off trailing slash
+        if (!rest.empty() && rest.back() == '/') {
+            rest.pop_back();
+        }
+
+        const auto slash_pos = rest.find('/');
+        std::string hostname  = (slash_pos == std::string::npos) ? rest : rest.substr(0, slash_pos);
+        std::string site_path = (slash_pos == std::string::npos) ? "" : rest.substr(slash_pos);
+
+        auto json = GetSiteByPath(hostname, site_path);
+
+        yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+        if (!doc) {
+            throw duckdb::InvalidInputException("Failed to parse site response for URL: %s", name_or_id.c_str());
+        }
+        yyjson_val *root = yyjson_doc_get_root(doc);
+        yyjson_val *id_val = yyjson_obj_get(root, "id");
+        std::string resolved;
+        if (id_val && yyjson_is_str(id_val)) {
+            resolved = yyjson_get_str(id_val);
+        }
+        yyjson_doc_free(doc);
+
+        if (resolved.empty()) {
+            throw duckdb::InvalidInputException("Could not resolve site ID for URL: %s", name_or_id.c_str());
+        }
+        ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolved URL '" + name_or_id + "' → " + resolved);
+        return resolved;
+    }
+
     ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving site name to ID: " + name_or_id);
     auto json = SearchSites(name_or_id);
 
