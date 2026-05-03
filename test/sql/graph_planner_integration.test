@@ -1,7 +1,6 @@
 # name: test/sql/graph_planner_integration.test
 # description: Integration tests for Microsoft Graph Planner
 # group: [erpl_web]
-# note: Requires Tasks.Read.All application permission in Azure AD
 
 require erpl_web
 
@@ -10,6 +9,10 @@ require-env ERPL_MS_TENANT_ID
 require-env ERPL_MS_CLIENT_ID
 
 require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_PLANNER_GROUP_ID
+
+require-env ERPL_MS_PLANNER_PLAN_ID
 
 # Create secret with real credentials
 statement ok
@@ -21,51 +24,84 @@ CREATE SECRET ms_graph_planner_test (
     client_secret '${ERPL_MS_CLIENT_SECRET}'
 );
 
-# Test: graph_planner_plans can be called (may return 0 rows if no plans)
-# Using a known group ID from the tenant
+# Test: graph_planner_plans returns at least one plan for the test group
 query I
-SELECT COUNT(*) >= 0 FROM graph_planner_plans('13009691-7f30-41e4-98f0-9f2623f6d7c9');
+SELECT COUNT(*) > 0 FROM graph_planner_plans('${ERPL_MS_PLANNER_GROUP_ID}');
 ----
 true
 
-# Test: graph_planner_plans has expected columns
+# Test: graph_planner_plans returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_plans('dummy-group-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_plans('${ERPL_MS_PLANNER_GROUP_ID}'))
     WHERE column_name IN ('id', 'title', 'owner_group_id', 'created_at')
 );
 ----
 4
 
-# Test: graph_planner_buckets function exists
+# Test: all plans have a non-empty id
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_buckets';
+SELECT COUNT(*) = 0 FROM graph_planner_plans('${ERPL_MS_PLANNER_GROUP_ID}') WHERE id IS NULL OR id = '';
 ----
-1
+true
 
-# Test: graph_planner_buckets has expected columns
+# Test: graph_planner_buckets returns buckets for the test plan
+query I
+SELECT COUNT(*) > 0 FROM graph_planner_buckets('${ERPL_MS_PLANNER_PLAN_ID}');
+----
+true
+
+# Test: graph_planner_buckets returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_buckets('dummy-plan-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_buckets('${ERPL_MS_PLANNER_PLAN_ID}'))
     WHERE column_name IN ('id', 'name', 'plan_id', 'order_hint')
 );
 ----
 4
 
-# Test: graph_planner_tasks function exists
+# Test: all buckets belong to the test plan
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_planner_tasks';
+SELECT COUNT(*) = 0 FROM graph_planner_buckets('${ERPL_MS_PLANNER_PLAN_ID}')
+WHERE plan_id != '${ERPL_MS_PLANNER_PLAN_ID}';
 ----
-1
+true
 
-# Test: graph_planner_tasks has expected columns
+# Test: graph_planner_tasks returns tasks for the test plan
+query I
+SELECT COUNT(*) > 0 FROM graph_planner_tasks('${ERPL_MS_PLANNER_PLAN_ID}');
+----
+true
+
+# Test: graph_planner_tasks returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_tasks('dummy-plan-id'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_planner_tasks('${ERPL_MS_PLANNER_PLAN_ID}'))
     WHERE column_name IN ('id', 'title', 'plan_id', 'bucket_id', 'percent_complete', 'priority', 'created_at', 'due_at')
 );
 ----
 8
+
+# Test: all tasks have a non-empty id and title
+query I
+SELECT COUNT(*) = 0 FROM graph_planner_tasks('${ERPL_MS_PLANNER_PLAN_ID}')
+WHERE id IS NULL OR id = '' OR title IS NULL OR title = '';
+----
+true
+
+# Test: all tasks belong to the test plan
+query I
+SELECT COUNT(*) = 0 FROM graph_planner_tasks('${ERPL_MS_PLANNER_PLAN_ID}')
+WHERE plan_id != '${ERPL_MS_PLANNER_PLAN_ID}';
+----
+true
+
+# Test: percent_complete is in valid range [0, 100]
+query I
+SELECT COUNT(*) = 0 FROM graph_planner_tasks('${ERPL_MS_PLANNER_PLAN_ID}')
+WHERE percent_complete < 0 OR percent_complete > 100;
+----
+true
 
 # Cleanup
 statement ok
