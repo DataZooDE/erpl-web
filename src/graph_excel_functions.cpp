@@ -50,6 +50,7 @@ struct ExcelRangeBindData : public TableFunctionData {
     std::string drive_id;
     std::string json_response;
     vector<LogicalType> column_types;  // per-column types inferred from valueTypes
+    size_t current_row = 1;            // next row to emit; 1 = row 0 (header) already consumed
     bool done = false;
 };
 
@@ -707,21 +708,18 @@ void GraphExcelFunctions::ExcelRangeScan(
 
     yyjson_val *types_arr = yyjson_obj_get(root, "valueTypes");
 
-    size_t total_rows = yyjson_arr_size(values_arr);
-    // Skip header row
-    size_t data_rows = total_rows > 1 ? total_rows - 1 : 0;
+    const size_t total_rows = yyjson_arr_size(values_arr);
+    const size_t start_row  = bind_data.current_row;  // row 0 = header, already skipped
 
-    if (data_rows > STANDARD_VECTOR_SIZE) {
-        data_rows = STANDARD_VECTOR_SIZE;
-    }
+    const size_t remaining = (start_row < total_rows) ? (total_rows - start_row) : 0;
+    const size_t data_rows = std::min(remaining, static_cast<size_t>(STANDARD_VECTOR_SIZE));
 
     output.SetCardinality(data_rows);
 
     const size_t col_count = output.ColumnCount();
 
     for (size_t row_idx = 0; row_idx < data_rows; row_idx++) {
-        // Skip first row (headers), get row at row_idx + 1
-        const size_t src_row = row_idx + 1;
+        const size_t src_row = start_row + row_idx;
         yyjson_val *row_arr = yyjson_arr_get(values_arr, src_row);
         yyjson_val *type_row = (types_arr && yyjson_is_arr(types_arr))
             ? yyjson_arr_get(types_arr, src_row)
@@ -794,8 +792,12 @@ void GraphExcelFunctions::ExcelRangeScan(
         }
     }
 
+    bind_data.current_row += data_rows;
+    if (bind_data.current_row >= total_rows) {
+        bind_data.done = true;
+    }
+
     yyjson_doc_free(doc);
-    bind_data.done = true;
 }
 
 // ============================================================================
