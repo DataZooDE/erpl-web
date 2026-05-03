@@ -94,7 +94,14 @@ static std::string ResolveGraphDriveId(ClientContext &context,
                                        const std::string &secret_name,
                                        const TableFunctionBindInput &input) {
     if (input.named_parameters.find("drive_id") != input.named_parameters.end()) {
-        return input.named_parameters.at("drive_id").GetValue<std::string>();
+        const std::string drive_id = input.named_parameters.at("drive_id").GetValue<std::string>();
+        // If the value looks like a web URL, resolve it to a real drive ID
+        if (drive_id.rfind("https://", 0) == 0 || drive_id.rfind("http://", 0) == 0) {
+            auto auth_info = ResolveGraphAuth(context, secret_name);
+            GraphSharePointClient sp_client(auth_info.auth_params);
+            return sp_client.ResolveDriveIdFromUrl(drive_id);
+        }
+        return drive_id;
     }
 
     const bool has_site = input.named_parameters.find("site") != input.named_parameters.end();

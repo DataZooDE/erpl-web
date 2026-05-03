@@ -260,6 +260,70 @@ std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) 
     return resolved;
 }
 
+std::string GraphSharePointClient::ResolveDriveIdFromUrl(const std::string &web_url) {
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving drive ID from web URL: " + web_url);
+
+    // Extract hostname to resolve the containing site
+    const std::string https_prefix = "https://";
+    const std::string http_prefix  = "http://";
+    std::string rest = web_url.rfind(https_prefix, 0) == 0
+        ? web_url.substr(https_prefix.size())
+        : web_url.substr(http_prefix.size());
+
+    const auto slash_pos = rest.find('/');
+    const std::string hostname = (slash_pos == std::string::npos) ? rest : rest.substr(0, slash_pos);
+
+    // Resolve the root site for this hostname, then list its drives
+    const std::string site_id = ResolveSiteId("https://" + hostname);
+    const auto json = ListDrives(site_id);
+
+    yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+    if (!doc) {
+        throw duckdb::InvalidInputException("Failed to parse drives response when resolving URL: %s", web_url.c_str());
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value_arr = yyjson_obj_get(root, "value");
+
+    std::string resolved;
+    if (value_arr && yyjson_is_arr(value_arr)) {
+        size_t idx, max;
+        yyjson_val *item;
+        yyjson_arr_foreach(value_arr, idx, max, item) {
+            yyjson_val *url_val = yyjson_obj_get(item, "webUrl");
+            if (!url_val || !yyjson_is_str(url_val)) {
+                continue;
+            }
+            // Compare URLs case-insensitively after removing trailing slashes
+            std::string candidate = yyjson_get_str(url_val);
+            if (!candidate.empty() && candidate.back() == '/') {
+                candidate.pop_back();
+            }
+            std::string input_url = web_url;
+            if (!input_url.empty() && input_url.back() == '/') {
+                input_url.pop_back();
+            }
+            if (candidate == input_url) {
+                yyjson_val *id_val = yyjson_obj_get(item, "id");
+                if (id_val && yyjson_is_str(id_val)) {
+                    resolved = yyjson_get_str(id_val);
+                }
+                break;
+            }
+        }
+    }
+    yyjson_doc_free(doc);
+
+    if (resolved.empty()) {
+        throw duckdb::InvalidInputException(
+            "No drive found with web URL '%s'. Use graph_show_drives() to list available drives.",
+            web_url.c_str());
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolved drive URL '" + web_url + "' → " + resolved);
+    return resolved;
+}
+
 std::string GraphSharePointClient::ResolveDriveId(const std::string &site_id, const std::string &name_or_id) {
     if (LooksLikeDriveId(name_or_id)) {
         return name_or_id;
