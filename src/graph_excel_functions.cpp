@@ -4,6 +4,7 @@
 #include "graph_excel_secret.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/types/date.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 
@@ -64,6 +65,35 @@ struct ExcelTableDataBindData : public TableFunctionData {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+// Year tokens (y/Y) only appear in date format codes, never in pure number/time formats.
+// This is the reliable server-side signal that a cell column holds date values.
+static bool IsDateFormatCode(const char *fmt) {
+    if (!fmt) {
+        return false;
+    }
+    bool in_literal = false;
+    char literal_char = 0;
+    for (const char *p = fmt; *p; ++p) {
+        // Skip quoted literals: "..." or '...'
+        if (*p == '"' || *p == '\'') {
+            if (!in_literal) {
+                in_literal = true;
+                literal_char = *p;
+            } else if (*p == literal_char) {
+                in_literal = false;
+            }
+            continue;
+        }
+        if (in_literal) {
+            continue;
+        }
+        if (*p == 'y' || *p == 'Y') {
+            return true;
+        }
+    }
+    return false;
+}
 
 static std::vector<std::string> ParseJsonStringArray(yyjson_val *arr) {
     std::vector<std::string> result;
@@ -597,6 +627,34 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         }
     }
 
+    // Detect date columns via numberFormat: a column with a date format code (contains
+    // year token 'y'/'Y') should be returned as DATE regardless of valueTypes kind.
+    // This covers both: real Excel serial dates (valueTypes="Double") and ISO date strings
+    // typed into date-formatted cells (valueTypes="String").
+    yyjson_val *nfmt_arr = yyjson_obj_get(root, "numberFormat");
+    std::vector<bool> col_is_date(col_count, false);
+
+    if (nfmt_arr && yyjson_is_arr(nfmt_arr)) {
+        for (size_t r = 1; r < total_rows; r++) {
+            yyjson_val *fmt_row = yyjson_arr_get(nfmt_arr, r);
+            if (!fmt_row || !yyjson_is_arr(fmt_row)) {
+                continue;
+            }
+            for (size_t c = 0; c < col_count; c++) {
+                if (col_is_date[c]) {
+                    continue;
+                }
+                yyjson_val *fmt_val = yyjson_arr_get(fmt_row, c);
+                if (!fmt_val || !yyjson_is_str(fmt_val)) {
+                    continue;
+                }
+                if (IsDateFormatCode(yyjson_get_str(fmt_val))) {
+                    col_is_date[c] = true;
+                }
+            }
+        }
+    }
+
     for (size_t i = 0; i < col_count; i++) {
         if (i < headers.size() && !headers[i].empty()) {
             names.push_back(headers[i]);
@@ -605,7 +663,9 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         }
 
         LogicalType col_type = LogicalType::VARCHAR;
-        if (col_kinds[i] == ColKind::Double) {
+        if (col_is_date[i]) {
+            col_type = LogicalType::DATE;
+        } else if (col_kinds[i] == ColKind::Double) {
             col_type = LogicalType::DOUBLE;
         } else if (col_kinds[i] == ColKind::Boolean) {
             col_type = LogicalType::BOOLEAN;
@@ -695,7 +755,27 @@ void GraphExcelFunctions::ExcelRangeScan(
                 ? bind_data.column_types[col]
                 : LogicalType::VARCHAR;
 
-            if (col_type.id() == LogicalTypeId::DOUBLE && yyjson_is_num(cell_val)) {
+            if (col_type.id() == LogicalTypeId::DATE) {
+                // Excel serial date (stored as Double) or ISO string from date-formatted cell
+                if (yyjson_is_num(cell_val)) {
+                    // Excel date serial: day 1 = Jan 1 1900; Unix epoch = serial 25569
+                    const int32_t epoch_days = static_cast<int32_t>(yyjson_get_num(cell_val)) - 25569;
+                    output.SetValue(col, row_idx, Value::DATE(date_t(epoch_days)));
+                } else if (yyjson_is_str(cell_val)) {
+                    const char *s = yyjson_get_str(cell_val);
+                    date_t parsed;
+                    idx_t pos = 0;
+                    bool special = false;
+                    const auto rc = Date::TryConvertDate(s, strlen(s), pos, parsed, special);
+                    if (rc == DateCastResult::SUCCESS) {
+                        output.SetValue(col, row_idx, Value::DATE(parsed));
+                    } else {
+                        output.SetValue(col, row_idx, Value());
+                    }
+                } else {
+                    output.SetValue(col, row_idx, Value());
+                }
+            } else if (col_type.id() == LogicalTypeId::DOUBLE && yyjson_is_num(cell_val)) {
                 output.SetValue(col, row_idx, Value::DOUBLE(yyjson_get_num(cell_val)));
             } else if (col_type.id() == LogicalTypeId::BOOLEAN && yyjson_is_bool(cell_val)) {
                 output.SetValue(col, row_idx, Value::BOOLEAN(yyjson_get_bool(cell_val)));
