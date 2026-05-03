@@ -1,4 +1,5 @@
 #include "graph_excel_functions.hpp"
+#include "graph_client.hpp"
 #include "graph_excel_client.hpp"
 #include "graph_sharepoint_client.hpp"
 #include "graph_excel_secret.hpp"
@@ -23,6 +24,7 @@ struct ListFilesBindData : public TableFunctionData {
     std::string folder_path;
     std::string drive_id;
     std::string json_response;
+    idx_t current_idx = 0;
     bool done = false;
 };
 
@@ -31,6 +33,7 @@ struct ExcelTablesBindData : public TableFunctionData {
     std::string file_path;
     std::string drive_id;
     std::string json_response;
+    idx_t current_idx = 0;
     bool done = false;
 };
 
@@ -39,6 +42,7 @@ struct ExcelWorksheetsBindData : public TableFunctionData {
     std::string file_path;
     std::string drive_id;
     std::string json_response;
+    idx_t current_idx = 0;
     bool done = false;
 };
 
@@ -50,7 +54,10 @@ struct ExcelRangeBindData : public TableFunctionData {
     std::string drive_id;
     std::string json_response;
     vector<LogicalType> column_types;  // per-column types inferred from valueTypes
-    size_t current_row = 1;            // next row to emit; 1 = row 0 (header) already consumed
+    // JSON is parsed once on first scan call, then freed. cached_rows[row][col].
+    std::vector<std::vector<duckdb::Value>> cached_rows;
+    size_t current_row = 0;  // index into cached_rows
+    bool rows_cached = false;
     bool done = false;
 };
 
@@ -60,6 +67,7 @@ struct ExcelTableDataBindData : public TableFunctionData {
     std::string table_name;
     std::string drive_id;
     std::string json_response;
+    idx_t current_idx = 0;
     bool done = false;
 };
 
@@ -96,28 +104,51 @@ static bool IsDateFormatCode(const char *fmt) {
     return false;
 }
 
-static std::vector<std::string> ParseJsonStringArray(yyjson_val *arr) {
-    std::vector<std::string> result;
-    if (!arr || !yyjson_is_arr(arr)) {
-        return result;
+// Convert a single yyjson cell value to a DuckDB Value of the given column type.
+static duckdb::Value ExtractCellValue(yyjson_val *cell_val, yyjson_val *cell_type_val,
+                                      const LogicalType &col_type) {
+    const bool is_empty = !cell_val || yyjson_is_null(cell_val) ||
+                          (cell_type_val && yyjson_is_str(cell_type_val) &&
+                           std::string(yyjson_get_str(cell_type_val)) == "Empty");
+    if (is_empty) {
+        return Value();
     }
 
-    size_t idx, max;
-    yyjson_val *val;
-    yyjson_arr_foreach(arr, idx, max, val) {
-        if (yyjson_is_str(val)) {
-            result.push_back(yyjson_get_str(val));
-        } else if (yyjson_is_null(val)) {
-            result.push_back("");
-        } else if (yyjson_is_num(val)) {
-            result.push_back(std::to_string(yyjson_get_num(val)));
-        } else if (yyjson_is_bool(val)) {
-            result.push_back(yyjson_get_bool(val) ? "true" : "false");
-        } else {
-            result.push_back("");
+    if (col_type.id() == LogicalTypeId::DATE) {
+        if (yyjson_is_num(cell_val)) {
+            const int32_t epoch_days = static_cast<int32_t>(yyjson_get_num(cell_val)) - 25569;
+            return Value::DATE(date_t(epoch_days));
         }
+        if (yyjson_is_str(cell_val)) {
+            const char *s = yyjson_get_str(cell_val);
+            date_t parsed;
+            idx_t pos = 0;
+            bool special = false;
+            if (Date::TryConvertDate(s, strlen(s), pos, parsed, special) == DateCastResult::SUCCESS) {
+                return Value::DATE(parsed);
+            }
+        }
+        return Value();
     }
-    return result;
+
+    if (col_type.id() == LogicalTypeId::DOUBLE && yyjson_is_num(cell_val)) {
+        return Value::DOUBLE(yyjson_get_num(cell_val));
+    }
+    if (col_type.id() == LogicalTypeId::BOOLEAN && yyjson_is_bool(cell_val)) {
+        return Value::BOOLEAN(yyjson_get_bool(cell_val));
+    }
+
+    // Fallback: stringify
+    if (yyjson_is_str(cell_val)) {
+        return Value(std::string(yyjson_get_str(cell_val)));
+    }
+    if (yyjson_is_num(cell_val)) {
+        return Value(std::to_string(yyjson_get_num(cell_val)));
+    }
+    if (yyjson_is_bool(cell_val)) {
+        return Value(yyjson_get_bool(cell_val) ? "true" : "false");
+    }
+    return Value();
 }
 
 // Resolves a Graph drive ID from either an explicit drive_id named param or
@@ -239,19 +270,11 @@ void GraphExcelFunctions::ListFilesScan(
         return;
     }
 
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
+    const size_t total = yyjson_arr_size(value_arr);
     idx_t row = 0;
 
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
+    while (bind_data.current_idx < total && row < STANDARD_VECTOR_SIZE) {
+        yyjson_val *item = yyjson_arr_get(value_arr, bind_data.current_idx);
 
         // id
         yyjson_val *id_val = yyjson_obj_get(item, "id");
@@ -294,10 +317,12 @@ void GraphExcelFunctions::ListFilesScan(
         output.SetValue(7, row, Value::BOOLEAN(folder_obj != nullptr));
 
         row++;
+        bind_data.current_idx++;
     }
 
     yyjson_doc_free(doc);
-    bind_data.done = true;
+    bind_data.done = bind_data.current_idx >= total;
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -368,14 +393,11 @@ void GraphExcelFunctions::ExcelTablesScan(
         return;
     }
 
-    size_t count = yyjson_arr_size(value_arr);
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
+    const size_t total = yyjson_arr_size(value_arr);
     idx_t row = 0;
 
-    yyjson_arr_foreach(value_arr, idx, max, item) {
+    while (bind_data.current_idx < total && row < STANDARD_VECTOR_SIZE) {
+        yyjson_val *item = yyjson_arr_get(value_arr, bind_data.current_idx);
         // name
         yyjson_val *name_val = yyjson_obj_get(item, "name");
         output.SetValue(0, row, name_val && yyjson_is_str(name_val) ?
@@ -397,10 +419,12 @@ void GraphExcelFunctions::ExcelTablesScan(
             Value::BOOLEAN(yyjson_get_bool(totals_val)) : Value());
 
         row++;
+        bind_data.current_idx++;
     }
 
     yyjson_doc_free(doc);
-    bind_data.done = true;
+    bind_data.done = bind_data.current_idx >= total;
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -471,14 +495,11 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
         return;
     }
 
-    size_t count = yyjson_arr_size(value_arr);
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
+    const size_t total = yyjson_arr_size(value_arr);
     idx_t row = 0;
 
-    yyjson_arr_foreach(value_arr, idx, max, item) {
+    while (bind_data.current_idx < total && row < STANDARD_VECTOR_SIZE) {
+        yyjson_val *item = yyjson_arr_get(value_arr, bind_data.current_idx);
         // name
         yyjson_val *name_val = yyjson_obj_get(item, "name");
         output.SetValue(0, row, name_val && yyjson_is_str(name_val) ?
@@ -500,10 +521,12 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
             Value(yyjson_get_str(vis_val)) : Value());
 
         row++;
+        bind_data.current_idx++;
     }
 
     yyjson_doc_free(doc);
-    bind_data.done = true;
+    bind_data.done = bind_data.current_idx >= total;
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -580,7 +603,7 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
     }
 
     // Use first row as headers
-    auto headers = ParseJsonStringArray(first_row);
+    auto headers = GraphJsonStringArray(first_row);
 
     // Infer column types from valueTypes (parallel 2D array from Graph API)
     // Each cell is one of "String", "Double", "Boolean", "Empty"
@@ -691,113 +714,72 @@ void GraphExcelFunctions::ExcelRangeScan(
         return;
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
-    }
-
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *values_arr = yyjson_obj_get(root, "values");
-
-    if (!values_arr || !yyjson_is_arr(values_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    yyjson_val *types_arr = yyjson_obj_get(root, "valueTypes");
-
-    const size_t total_rows = yyjson_arr_size(values_arr);
-    const size_t start_row  = bind_data.current_row;  // row 0 = header, already skipped
-
-    const size_t remaining = (start_row < total_rows) ? (total_rows - start_row) : 0;
-    const size_t data_rows = std::min(remaining, static_cast<size_t>(STANDARD_VECTOR_SIZE));
-
-    output.SetCardinality(data_rows);
-
-    const size_t col_count = output.ColumnCount();
-
-    for (size_t row_idx = 0; row_idx < data_rows; row_idx++) {
-        const size_t src_row = start_row + row_idx;
-        yyjson_val *row_arr = yyjson_arr_get(values_arr, src_row);
-        yyjson_val *type_row = (types_arr && yyjson_is_arr(types_arr))
-            ? yyjson_arr_get(types_arr, src_row)
-            : nullptr;
-
-        if (!row_arr || !yyjson_is_arr(row_arr)) {
-            for (size_t col = 0; col < col_count; col++) {
-                output.SetValue(col, row_idx, Value());
-            }
-            continue;
+    // Parse the JSON response exactly once and cache all rows as DuckDB Values.
+    // This avoids reparsing the same (potentially large) JSON string on every scan call.
+    if (!bind_data.rows_cached) {
+        yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
+        if (!doc) {
+            throw InvalidInputException("Failed to parse Graph API response");
         }
 
-        for (size_t col = 0; col < col_count; col++) {
-            yyjson_val *cell_val  = yyjson_arr_get(row_arr, col);
-            yyjson_val *cell_type = (type_row && yyjson_is_arr(type_row))
-                ? yyjson_arr_get(type_row, col)
+        yyjson_val *root       = yyjson_doc_get_root(doc);
+        yyjson_val *values_arr = yyjson_obj_get(root, "values");
+
+        if (!values_arr || !yyjson_is_arr(values_arr)) {
+            yyjson_doc_free(doc);
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
+
+        yyjson_val *types_arr  = yyjson_obj_get(root, "valueTypes");
+        const size_t total_rows = yyjson_arr_size(values_arr);
+        const size_t col_count  = bind_data.column_types.size();
+
+        // Skip header row (index 0), extract data rows into cache
+        bind_data.cached_rows.reserve(total_rows > 1 ? total_rows - 1 : 0);
+        for (size_t r = 1; r < total_rows; r++) {
+            yyjson_val *row_arr  = yyjson_arr_get(values_arr, r);
+            yyjson_val *type_row = (types_arr && yyjson_is_arr(types_arr))
+                ? yyjson_arr_get(types_arr, r)
                 : nullptr;
 
-            // Treat Empty cells or missing cells as NULL
-            bool is_empty = !cell_val || yyjson_is_null(cell_val);
-            if (!is_empty && cell_type && yyjson_is_str(cell_type)) {
-                is_empty = (std::string(yyjson_get_str(cell_type)) == "Empty");
+            std::vector<duckdb::Value> row_vals;
+            row_vals.reserve(col_count);
+            for (size_t c = 0; c < col_count; c++) {
+                yyjson_val *cell_val  = (row_arr  && yyjson_is_arr(row_arr))  ? yyjson_arr_get(row_arr,  c) : nullptr;
+                yyjson_val *cell_type = (type_row && yyjson_is_arr(type_row)) ? yyjson_arr_get(type_row, c) : nullptr;
+                row_vals.push_back(ExtractCellValue(cell_val, cell_type, bind_data.column_types[c]));
             }
+            bind_data.cached_rows.push_back(std::move(row_vals));
+        }
 
-            if (is_empty) {
-                output.SetValue(col, row_idx, Value());
-                continue;
-            }
+        yyjson_doc_free(doc);
+        // Free the raw JSON — no longer needed
+        bind_data.json_response.clear();
+        bind_data.json_response.shrink_to_fit();
+        bind_data.rows_cached = true;
+    }
 
-            const LogicalType &col_type = (col < bind_data.column_types.size())
-                ? bind_data.column_types[col]
-                : LogicalType::VARCHAR;
+    // Serve rows from cache in STANDARD_VECTOR_SIZE chunks
+    const size_t start     = bind_data.current_row;
+    const size_t remaining = (start < bind_data.cached_rows.size())
+        ? bind_data.cached_rows.size() - start : 0;
+    const size_t data_rows = std::min(remaining, static_cast<size_t>(STANDARD_VECTOR_SIZE));
+    const size_t col_count = output.ColumnCount();
 
-            if (col_type.id() == LogicalTypeId::DATE) {
-                // Excel serial date (stored as Double) or ISO string from date-formatted cell
-                if (yyjson_is_num(cell_val)) {
-                    // Excel date serial: day 1 = Jan 1 1900; Unix epoch = serial 25569
-                    const int32_t epoch_days = static_cast<int32_t>(yyjson_get_num(cell_val)) - 25569;
-                    output.SetValue(col, row_idx, Value::DATE(date_t(epoch_days)));
-                } else if (yyjson_is_str(cell_val)) {
-                    const char *s = yyjson_get_str(cell_val);
-                    date_t parsed;
-                    idx_t pos = 0;
-                    bool special = false;
-                    const auto rc = Date::TryConvertDate(s, strlen(s), pos, parsed, special);
-                    if (rc == DateCastResult::SUCCESS) {
-                        output.SetValue(col, row_idx, Value::DATE(parsed));
-                    } else {
-                        output.SetValue(col, row_idx, Value());
-                    }
-                } else {
-                    output.SetValue(col, row_idx, Value());
-                }
-            } else if (col_type.id() == LogicalTypeId::DOUBLE && yyjson_is_num(cell_val)) {
-                output.SetValue(col, row_idx, Value::DOUBLE(yyjson_get_num(cell_val)));
-            } else if (col_type.id() == LogicalTypeId::BOOLEAN && yyjson_is_bool(cell_val)) {
-                output.SetValue(col, row_idx, Value::BOOLEAN(yyjson_get_bool(cell_val)));
-            } else {
-                // Fallback: stringify whatever is in the cell
-                if (yyjson_is_str(cell_val)) {
-                    output.SetValue(col, row_idx, Value(std::string(yyjson_get_str(cell_val))));
-                } else if (yyjson_is_num(cell_val)) {
-                    output.SetValue(col, row_idx, Value(std::to_string(yyjson_get_num(cell_val))));
-                } else if (yyjson_is_bool(cell_val)) {
-                    output.SetValue(col, row_idx, Value(yyjson_get_bool(cell_val) ? "true" : "false"));
-                } else {
-                    output.SetValue(col, row_idx, Value());
-                }
-            }
+    output.SetCardinality(data_rows);
+    for (size_t row_idx = 0; row_idx < data_rows; row_idx++) {
+        const auto &row = bind_data.cached_rows[start + row_idx];
+        for (size_t col = 0; col < col_count; col++) {
+            output.SetValue(col, row_idx, col < row.size() ? row[col] : Value());
         }
     }
 
     bind_data.current_row += data_rows;
-    if (bind_data.current_row >= total_rows) {
+    if (bind_data.current_row >= bind_data.cached_rows.size()) {
         bind_data.done = true;
     }
-
-    yyjson_doc_free(doc);
 }
 
 // ============================================================================
@@ -902,20 +884,14 @@ void GraphExcelFunctions::ExcelTableDataScan(
         return;
     }
 
-    size_t row_count = yyjson_arr_size(value_arr);
-    if (row_count > STANDARD_VECTOR_SIZE) {
-        row_count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(row_count);
+    const size_t total = yyjson_arr_size(value_arr);
     size_t col_count = output.ColumnCount();
 
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row_idx = 0;
 
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row_idx >= row_count) break;
+    while (bind_data.current_idx < total && row_idx < STANDARD_VECTOR_SIZE) {
+        yyjson_val *item = yyjson_arr_get(value_arr, bind_data.current_idx);
+        bind_data.current_idx++;
 
         yyjson_val *values_arr = yyjson_obj_get(item, "values");
         if (!values_arr || !yyjson_is_arr(values_arr)) {
@@ -936,7 +912,7 @@ void GraphExcelFunctions::ExcelTableDataScan(
             continue;
         }
 
-        auto row_values = ParseJsonStringArray(inner_arr);
+        auto row_values = GraphJsonStringArray(inner_arr);
 
         for (size_t col = 0; col < col_count; col++) {
             if (col < row_values.size()) {
@@ -950,7 +926,8 @@ void GraphExcelFunctions::ExcelTableDataScan(
     }
 
     yyjson_doc_free(doc);
-    bind_data.done = true;
+    bind_data.done = bind_data.current_idx >= total;
+    output.SetCardinality(row_idx);
 }
 
 // ============================================================================
