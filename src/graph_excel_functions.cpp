@@ -48,6 +48,7 @@ struct ExcelRangeBindData : public TableFunctionData {
     std::string range;  // Optional, empty means usedRange
     std::string drive_id;
     std::string json_response;
+    vector<LogicalType> column_types;  // per-column types inferred from valueTypes
     bool done = false;
 };
 
@@ -527,6 +528,7 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         // Return minimal schema if no data
         names = {"value"};
         return_types = {LogicalType::VARCHAR};
+        bind_data->column_types = {LogicalType::VARCHAR};
         return std::move(bind_data);
     }
 
@@ -542,11 +544,58 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         yyjson_doc_free(doc);
         names = {"value"};
         return_types = {LogicalType::VARCHAR};
+        bind_data->column_types = {LogicalType::VARCHAR};
         return std::move(bind_data);
     }
 
     // Use first row as headers
     auto headers = ParseJsonStringArray(first_row);
+
+    // Infer column types from valueTypes (parallel 2D array from Graph API)
+    // Each cell is one of "String", "Double", "Boolean", "Empty"
+    yyjson_val *types_arr = yyjson_obj_get(root, "valueTypes");
+    const size_t total_rows = yyjson_arr_size(values_arr);
+
+    // For each column: track whether we've seen only Double, only Boolean, or mixed/String
+    enum class ColKind { Unknown, Double, Boolean, String };
+    std::vector<ColKind> col_kinds(col_count, ColKind::Unknown);
+
+    if (types_arr && yyjson_is_arr(types_arr)) {
+        // Skip row 0 (header row), scan data rows
+        for (size_t r = 1; r < total_rows; r++) {
+            yyjson_val *type_row = yyjson_arr_get(types_arr, r);
+            if (!type_row || !yyjson_is_arr(type_row)) {
+                continue;
+            }
+            for (size_t c = 0; c < col_count; c++) {
+                if (col_kinds[c] == ColKind::String) {
+                    continue;  // Already degraded to VARCHAR — no point checking further
+                }
+                yyjson_val *cell_type = yyjson_arr_get(type_row, c);
+                if (!cell_type || !yyjson_is_str(cell_type)) {
+                    continue;
+                }
+                const std::string t = yyjson_get_str(cell_type);
+                if (t == "Empty") {
+                    // Nulls are compatible with any type — skip
+                } else if (t == "Double") {
+                    if (col_kinds[c] == ColKind::Unknown) {
+                        col_kinds[c] = ColKind::Double;
+                    } else if (col_kinds[c] != ColKind::Double) {
+                        col_kinds[c] = ColKind::String;
+                    }
+                } else if (t == "Boolean") {
+                    if (col_kinds[c] == ColKind::Unknown) {
+                        col_kinds[c] = ColKind::Boolean;
+                    } else if (col_kinds[c] != ColKind::Boolean) {
+                        col_kinds[c] = ColKind::String;
+                    }
+                } else {
+                    col_kinds[c] = ColKind::String;
+                }
+            }
+        }
+    }
 
     for (size_t i = 0; i < col_count; i++) {
         if (i < headers.size() && !headers[i].empty()) {
@@ -554,7 +603,15 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelRangeBind(
         } else {
             names.push_back("column_" + std::to_string(i));
         }
-        return_types.push_back(LogicalType::VARCHAR);
+
+        LogicalType col_type = LogicalType::VARCHAR;
+        if (col_kinds[i] == ColKind::Double) {
+            col_type = LogicalType::DOUBLE;
+        } else if (col_kinds[i] == ColKind::Boolean) {
+            col_type = LogicalType::BOOLEAN;
+        }
+        return_types.push_back(col_type);
+        bind_data->column_types.push_back(col_type);
     }
 
     yyjson_doc_free(doc);
@@ -588,6 +645,8 @@ void GraphExcelFunctions::ExcelRangeScan(
         return;
     }
 
+    yyjson_val *types_arr = yyjson_obj_get(root, "valueTypes");
+
     size_t total_rows = yyjson_arr_size(values_arr);
     // Skip header row
     size_t data_rows = total_rows > 1 ? total_rows - 1 : 0;
@@ -598,11 +657,15 @@ void GraphExcelFunctions::ExcelRangeScan(
 
     output.SetCardinality(data_rows);
 
-    size_t col_count = output.ColumnCount();
+    const size_t col_count = output.ColumnCount();
 
     for (size_t row_idx = 0; row_idx < data_rows; row_idx++) {
         // Skip first row (headers), get row at row_idx + 1
-        yyjson_val *row_arr = yyjson_arr_get(values_arr, row_idx + 1);
+        const size_t src_row = row_idx + 1;
+        yyjson_val *row_arr = yyjson_arr_get(values_arr, src_row);
+        yyjson_val *type_row = (types_arr && yyjson_is_arr(types_arr))
+            ? yyjson_arr_get(types_arr, src_row)
+            : nullptr;
 
         if (!row_arr || !yyjson_is_arr(row_arr)) {
             for (size_t col = 0; col < col_count; col++) {
@@ -611,13 +674,42 @@ void GraphExcelFunctions::ExcelRangeScan(
             continue;
         }
 
-        auto row_values = ParseJsonStringArray(row_arr);
-
         for (size_t col = 0; col < col_count; col++) {
-            if (col < row_values.size()) {
-                output.SetValue(col, row_idx, Value(row_values[col]));
-            } else {
+            yyjson_val *cell_val  = yyjson_arr_get(row_arr, col);
+            yyjson_val *cell_type = (type_row && yyjson_is_arr(type_row))
+                ? yyjson_arr_get(type_row, col)
+                : nullptr;
+
+            // Treat Empty cells or missing cells as NULL
+            bool is_empty = !cell_val || yyjson_is_null(cell_val);
+            if (!is_empty && cell_type && yyjson_is_str(cell_type)) {
+                is_empty = (std::string(yyjson_get_str(cell_type)) == "Empty");
+            }
+
+            if (is_empty) {
                 output.SetValue(col, row_idx, Value());
+                continue;
+            }
+
+            const LogicalType &col_type = (col < bind_data.column_types.size())
+                ? bind_data.column_types[col]
+                : LogicalType::VARCHAR;
+
+            if (col_type.id() == LogicalTypeId::DOUBLE && yyjson_is_num(cell_val)) {
+                output.SetValue(col, row_idx, Value::DOUBLE(yyjson_get_num(cell_val)));
+            } else if (col_type.id() == LogicalTypeId::BOOLEAN && yyjson_is_bool(cell_val)) {
+                output.SetValue(col, row_idx, Value::BOOLEAN(yyjson_get_bool(cell_val)));
+            } else {
+                // Fallback: stringify whatever is in the cell
+                if (yyjson_is_str(cell_val)) {
+                    output.SetValue(col, row_idx, Value(std::string(yyjson_get_str(cell_val))));
+                } else if (yyjson_is_num(cell_val)) {
+                    output.SetValue(col, row_idx, Value(std::to_string(yyjson_get_num(cell_val))));
+                } else if (yyjson_is_bool(cell_val)) {
+                    output.SetValue(col, row_idx, Value(yyjson_get_bool(cell_val) ? "true" : "false"));
+                } else {
+                    output.SetValue(col, row_idx, Value());
+                }
             }
         }
     }
