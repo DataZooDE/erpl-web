@@ -207,7 +207,7 @@ static void ExcelTableCopyFinalize(
 // ------------------------------------------------------------------
 
 void RegisterExcelTableCopyFunction(duckdb::ExtensionLoader &loader) {
-    CopyFunction fn("ms_excel_table");
+    CopyFunction fn("graph_excel_table");
     fn.copy_to_bind              = ExcelTableCopyBind;
     fn.copy_to_initialize_global = ExcelTableCopyInitializeGlobal;
     fn.copy_to_initialize_local  = ExcelTableCopyInitializeLocal;
