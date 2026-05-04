@@ -1,5 +1,6 @@
 #include "graph_sharepoint_catalog.hpp"
 #include "graph_sharepoint_client.hpp"
+#include "graph_sharepoint_type_mapper.hpp"
 #include "tracing.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -25,6 +26,7 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 	std::string list_id;
 	std::shared_ptr<HttpAuthParams> auth_params;
 	std::vector<std::string> column_names;
+	std::vector<duckdb::LogicalType> column_types;
 	std::string json_response;
 	yyjson_doc *parsed_doc = nullptr;
 	yyjson_arr_iter item_iter = {};
@@ -82,36 +84,10 @@ static void SharePointListScan(duckdb::ClientContext &context,
 
 		for (size_t col = 0; col < col_count; col++) {
 			const std::string &col_name = bind_data.column_names[col];
-			auto &vec = output.data[col];
-
 			yyjson_val *field_val = (col_name == "id")
 			    ? yyjson_obj_get(item, "id")
 			    : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
-
-			if (!field_val || yyjson_is_null(field_val)) {
-				FlatVector::Validity(vec).SetInvalid(row);
-			} else if (yyjson_is_str(field_val)) {
-				FlatVector::GetData<string_t>(vec)[row] =
-				    StringVector::AddString(vec, yyjson_get_str(field_val));
-			} else if (yyjson_is_num(field_val)) {
-				const std::string num_str = std::to_string(yyjson_get_num(field_val));
-				FlatVector::GetData<string_t>(vec)[row] =
-				    StringVector::AddString(vec, num_str);
-			} else if (yyjson_is_bool(field_val)) {
-				FlatVector::GetData<string_t>(vec)[row] =
-				    StringVector::AddString(vec, yyjson_get_bool(field_val) ? "true" : "false");
-			} else {
-				// Complex value — serialize as JSON string
-				size_t json_len;
-				char *json_str = yyjson_val_write(field_val, 0, &json_len);
-				if (json_str) {
-					FlatVector::GetData<string_t>(vec)[row] =
-					    StringVector::AddString(vec, json_str, json_len);
-					free(json_str);
-				} else {
-					FlatVector::Validity(vec).SetInvalid(row);
-				}
-			}
+			WriteSharePointField(output.data[col], row, field_val, bind_data.column_types[col]);
 		}
 		row++;
 	}
@@ -330,7 +306,8 @@ void SharePointSchemaEntry::LoadTables() {
 					std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
 					if (!seen_names.insert(lower_name).second) { continue; }
 
-					table_info.columns.AddColumn(duckdb::ColumnDefinition(col_name, duckdb::LogicalType::VARCHAR));
+					const duckdb::LogicalType col_type = SharePointColumnToDuckDBType(col);
+					table_info.columns.AddColumn(duckdb::ColumnDefinition(col_name, col_type));
 					column_names.push_back(col_name);
 				}
 			}
@@ -369,9 +346,12 @@ SharePointTableEntry::SharePointTableEntry(duckdb::Catalog &catalog,
       secret_name_(secret_name),
       auth_params_(auth_params)
 {
-	// Populate column_names from CreateTableInfo columns
-	for (const auto &col : info.columns.Logical()) {
+	// Populate column_names and column_types from the inherited columns member.
+	// NOTE: TableCatalogEntry's constructor moves info.columns, so info.columns is
+	// empty here; use this->columns (the base class member) instead.
+	for (const auto &col : columns.Logical()) {
 		column_names_.push_back(col.Name());
+		column_types_.push_back(col.Type());
 	}
 }
 
@@ -385,6 +365,7 @@ duckdb::TableFunction SharePointTableEntry::GetScanFunction(duckdb::ClientContex
 	scan_bind_data->list_id = list_id_;
 	scan_bind_data->auth_params = auth_params_;
 	scan_bind_data->column_names = column_names_;
+	scan_bind_data->column_types = column_types_;
 
 	bind_data = std::move(scan_bind_data);
 

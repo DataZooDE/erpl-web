@@ -92,6 +92,7 @@ private:
 	std::string secret_name_;
 	std::shared_ptr<HttpAuthParams> auth_params_;
 	std::vector<std::string> column_names_;
+	std::vector<duckdb::LogicalType> column_types_;
 };
 
 // -------------------------------------------------------------------------------------------------

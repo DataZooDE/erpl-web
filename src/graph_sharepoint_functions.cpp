@@ -1,6 +1,7 @@
 #include "graph_sharepoint_functions.hpp"
 #include "graph_client.hpp"
 #include "graph_sharepoint_client.hpp"
+#include "graph_sharepoint_type_mapper.hpp"
 #include "graph_excel_secret.hpp"
 #include "graph_output_utils.hpp"
 #include "tracing.hpp"
@@ -127,6 +128,7 @@ struct ListItemsBindData : public TableFunctionData {
     std::string list_id;
     std::string json_response;
     std::vector<std::string> column_names;
+    std::vector<LogicalType> column_types;
     yyjson_doc *parsed_doc = nullptr;
     yyjson_arr_iter item_iter = {};
     bool done = false;
@@ -465,10 +467,11 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
     yyjson_val *col_root = yyjson_doc_get_root(col_doc);
     yyjson_val *col_arr = yyjson_obj_get(col_root, "value");
 
-    // Always include id as first column
+    // Always include id as first column (always VARCHAR — it's the Graph item GUID)
     names.push_back("id");
     return_types.push_back(LogicalType::VARCHAR);
     bind_data->column_names.push_back("id");
+    bind_data->column_types.push_back(LogicalType::VARCHAR);
 
     // Track seen names (lowercase) to prevent duplicate column errors
     std::unordered_set<std::string> seen_names = {"id"};
@@ -496,9 +499,11 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
                 std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
                 if (!seen_names.insert(lower_name).second) continue;
 
+                const LogicalType col_type = SharePointColumnToDuckDBType(col);
                 names.push_back(col_name);
-                return_types.push_back(LogicalType::VARCHAR);
+                return_types.push_back(col_type);
                 bind_data->column_names.push_back(col_name);
+                bind_data->column_types.push_back(col_type);
             }
         }
     }
@@ -510,6 +515,7 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
         names.push_back("fields");
         return_types.push_back(LogicalType::VARCHAR);
         bind_data->column_names.push_back("fields");
+        bind_data->column_types.push_back(LogicalType::VARCHAR);
     }
 
     // Fetch items
@@ -553,30 +559,7 @@ void GraphSharePointFunctions::ListItemsScan(
                 ? yyjson_obj_get(item, "id")
                 : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
 
-            if (!field_val || yyjson_is_null(field_val)) {
-                FlatVector::Validity(vec).SetInvalid(row);
-            } else if (yyjson_is_str(field_val)) {
-                FlatVector::GetData<string_t>(vec)[row] =
-                    StringVector::AddString(vec, yyjson_get_str(field_val));
-            } else if (yyjson_is_num(field_val)) {
-                const std::string num_str = std::to_string(yyjson_get_num(field_val));
-                FlatVector::GetData<string_t>(vec)[row] =
-                    StringVector::AddString(vec, num_str);
-            } else if (yyjson_is_bool(field_val)) {
-                FlatVector::GetData<string_t>(vec)[row] =
-                    StringVector::AddString(vec, yyjson_get_bool(field_val) ? "true" : "false");
-            } else {
-                // Complex value — serialize as JSON string
-                size_t json_len;
-                char *json_str = yyjson_val_write(field_val, 0, &json_len);
-                if (json_str) {
-                    FlatVector::GetData<string_t>(vec)[row] =
-                        StringVector::AddString(vec, json_str, json_len);
-                    free(json_str);
-                } else {
-                    FlatVector::Validity(vec).SetInvalid(row);
-                }
-            }
+            WriteSharePointField(vec, row, field_val, bind_data.column_types[col]);
         }
         row++;
     }
