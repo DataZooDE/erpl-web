@@ -87,11 +87,13 @@ public:
 
     // Name-to-ID resolution: accepts friendly names or raw IDs transparently
     std::string ResolveSiteId(const std::string &name_or_id);
+    std::string ResolveListId(const std::string &site_id, const std::string &name_or_id);
     std::string ResolveDriveId(const std::string &site_id, const std::string &name_or_id);
     std::string ResolveDriveIdFromUrl(const std::string &web_url);
 
     static bool LooksLikeSiteId(const std::string &s);
     static bool LooksLikeDriveId(const std::string &s);
+    static bool LooksLikeGuid(const std::string &s);
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;

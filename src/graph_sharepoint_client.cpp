@@ -229,6 +229,52 @@ std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) 
     return resolved;
 }
 
+bool GraphSharePointClient::LooksLikeGuid(const std::string &s) {
+    return s.size() == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-';
+}
+
+std::string GraphSharePointClient::ResolveListId(const std::string &site_id, const std::string &name_or_id) {
+    if (LooksLikeGuid(name_or_id)) {
+        return name_or_id;
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving list name '" + name_or_id + "' on site " + site_id);
+    auto json = ListLists(site_id);
+
+    yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+    if (!doc) {
+        throw duckdb::InvalidInputException("Failed to parse lists response when resolving list: %s", name_or_id.c_str());
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value_arr = yyjson_obj_get(root, "value");
+
+    std::string resolved;
+    if (value_arr && yyjson_is_arr(value_arr)) {
+        size_t idx, max;
+        yyjson_val *list;
+        yyjson_arr_foreach(value_arr, idx, max, list) {
+            yyjson_val *display_name = yyjson_obj_get(list, "displayName");
+            yyjson_val *id_val = yyjson_obj_get(list, "id");
+            if (display_name && yyjson_is_str(display_name) && id_val && yyjson_is_str(id_val)) {
+                if (name_or_id == yyjson_get_str(display_name)) {
+                    resolved = yyjson_get_str(id_val);
+                    break;
+                }
+            }
+        }
+    }
+    yyjson_doc_free(doc);
+
+    if (resolved.empty()) {
+        throw duckdb::InvalidInputException("No SharePoint list found with name '%s' on site '%s'",
+                                            name_or_id.c_str(), site_id.c_str());
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolved list '" + name_or_id + "' → " + resolved);
+    return resolved;
+}
+
 std::string GraphSharePointClient::ResolveDriveIdFromUrl(const std::string &web_url) {
     ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving drive ID from web URL: " + web_url);
 

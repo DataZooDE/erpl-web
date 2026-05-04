@@ -452,9 +452,12 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
     }
     bind_data->secret_name = secret_name;
 
-    // Fetch list columns to determine schema
+    // Resolve site URL/name → GUID and list name → GUID
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphSharePointClient client(auth_info.auth_params);
+
+    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
 
     // Get columns
     auto columns_json = client.GetListColumns(bind_data->site_id, bind_data->list_id);
@@ -727,10 +730,13 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         list_items.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(list_items);
         FunctionDescription desc;
-        desc.description = "Read all items from a SharePoint list.";
-        desc.parameter_names = {"site_id", "list_id", "secret"};
+        desc.description = "Read all items from a SharePoint list. Both site and list accept GUIDs, display names, or site URLs.";
+        desc.parameter_names = {"site_id_or_url", "list_id_or_name", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_list_items('site-id', 'list-id', secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_list_items('site-guid', 'list-guid', secret := 'ms_graph')",
+            "SELECT * FROM graph_list_items('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')",
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
