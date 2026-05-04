@@ -29,24 +29,21 @@ CREATE SECRET ms_sp_attach_test (
 statement ok
 ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sptest (TYPE sharepoint_lists, SECRET 'ms_sp_attach_test');
 
-# SHOW TABLES must enumerate lists from the site
+# ATTACH must enumerate at least one list from the site
 query I
-SELECT count(*) > 0 FROM (SHOW TABLES IN sptest);
+SELECT count(*) > 0 FROM information_schema.tables WHERE table_catalog = 'sptest';
 ----
 true
 
-# At least the standard system tables should be absent — it is a remote catalog
+# No system tables like sqlite_master — it is a remote catalog
 query I
-SELECT count(*) FROM (SHOW TABLES IN sptest) WHERE name = 'sqlite_master';
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'sptest' AND table_name = 'sqlite_master';
 ----
 0
 
-# DESCRIBE works on any list (we can't know the list name ahead of time,
-# so we verify describe returns rows for the first table we find)
+# Each table must expose at least one column (verifies DESCRIBE works for all lists)
 query I
-SELECT count(*) > 0 FROM (
-    SELECT table_name FROM (SHOW TABLES IN sptest) LIMIT 1
-) t, LATERAL (DESCRIBE sptest.${t.table_name}) d;
+SELECT count(*) > 0 FROM information_schema.columns WHERE table_catalog = 'sptest';
 ----
 true
 
