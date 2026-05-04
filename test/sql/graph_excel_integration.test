@@ -44,7 +44,7 @@ SELECT COUNT(*) FROM (
 # Test: graph_list_files returns the test Excel file
 query I
 SELECT COUNT(*) > 0 FROM graph_list_files(
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true
@@ -53,7 +53,7 @@ true
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (
-        DESCRIBE SELECT * FROM graph_list_files(drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}')
+        DESCRIBE SELECT * FROM graph_list_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
     )
     WHERE column_name IN ('id', 'name', 'web_url', 'size', 'created_at', 'modified_at', 'mime_type', 'is_folder')
 );
@@ -62,7 +62,7 @@ SELECT COUNT(*) FROM (
 
 # Test: all listed files have a non-empty id and name
 query I
-SELECT COUNT(*) = 0 FROM graph_list_files(drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}')
+SELECT COUNT(*) = 0 FROM graph_list_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
 WHERE id IS NULL OR id = '' OR name IS NULL OR name = '';
 ----
 true
@@ -71,7 +71,7 @@ true
 query I
 SELECT COUNT(*) > 0 FROM graph_excel_worksheets(
     '${ERPL_MS_EXCEL_FILE_PATH}',
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true
@@ -82,7 +82,7 @@ SELECT COUNT(*) FROM (
     SELECT column_name FROM (
         DESCRIBE SELECT * FROM graph_excel_worksheets(
             '${ERPL_MS_EXCEL_FILE_PATH}',
-            drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+            drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
         )
     )
     WHERE column_name IN ('name', 'id', 'position', 'visibility')
@@ -94,7 +94,7 @@ SELECT COUNT(*) FROM (
 query I
 SELECT COUNT(*) = 0 FROM graph_excel_worksheets(
     '${ERPL_MS_EXCEL_FILE_PATH}',
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 )
 WHERE name IS NULL OR name = '';
 ----
@@ -104,7 +104,7 @@ true
 query I
 SELECT COUNT(*) > 0 FROM graph_excel_tables(
     '${ERPL_MS_EXCEL_FILE_PATH}',
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true
@@ -115,7 +115,7 @@ SELECT COUNT(*) FROM (
     SELECT column_name FROM (
         DESCRIBE SELECT * FROM graph_excel_tables(
             '${ERPL_MS_EXCEL_FILE_PATH}',
-            drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+            drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
         )
     )
     WHERE column_name IN ('name', 'id', 'show_headers', 'show_totals')
@@ -128,7 +128,7 @@ query I
 SELECT COUNT(*) > 0 FROM graph_excel_range(
     '${ERPL_MS_EXCEL_FILE_PATH}',
     'SalesData',
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true
@@ -138,7 +138,7 @@ query I
 SELECT COUNT(*) > 0 FROM graph_excel_table_data(
     '${ERPL_MS_EXCEL_FILE_PATH}',
     'SalesTable',
-    drive_id := '${ERPL_MS_EXCEL_DRIVE_ID}'
+    drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true

@@ -100,6 +100,7 @@ TEST_CASE("Graph Entra functions require secret parameter", "[graph_entra][duckd
     Connection con(db);
 
     con.Query("LOAD erpl_web");
+    con.Query("SET allow_persistent_secrets=false");
 
     SECTION("graph_users requires secret") {
         auto result = con.Query("SELECT * FROM graph_users()");

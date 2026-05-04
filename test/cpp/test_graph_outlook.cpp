@@ -100,6 +100,7 @@ TEST_CASE("Graph Outlook functions require secret parameter", "[graph_outlook][d
     Connection con(db);
 
     con.Query("LOAD erpl_web");
+    con.Query("SET allow_persistent_secrets=false");
 
     SECTION("graph_calendar_events requires secret") {
         auto result = con.Query("SELECT * FROM graph_calendar_events()");
