@@ -122,10 +122,10 @@ duckdb::TableFunctionSet CreateSacShowModelsFunction();
 // sac_show_stories() -> Shows all accessible stories
 duckdb::TableFunctionSet CreateSacShowStoriesFunction();
 
-// sac_get_model_info(model_id) -> Get model metadata and dimensions
+// sac_describe_model(model_id) -> Get model metadata and dimensions
 duckdb::TableFunctionSet CreateSacGetModelInfoFunction();
 
-// sac_get_story_info(story_id) -> Get story metadata
+// sac_describe_story(story_id) -> Get story metadata
 duckdb::TableFunctionSet CreateSacGetStoryInfoFunction();
 
 } // namespace erpl_web

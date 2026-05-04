@@ -569,7 +569,7 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
         desc.description = "Get detailed metadata and dimension/measure schema for a SAP Analytics Cloud model.";
         desc.parameter_names = {"model_id"};
         desc.parameter_types = {LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM sac_get_model_info('t.2:MY_MODEL')"};
+        desc.examples = {"SELECT * FROM sac_describe_model('t.2:MY_MODEL')"};
         desc.categories = {"sap", "sac"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -580,7 +580,7 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
         desc.description = "Get detailed metadata for a SAP Analytics Cloud story.";
         desc.parameter_names = {"story_id"};
         desc.parameter_types = {LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM sac_get_story_info('ABC12345')"};
+        desc.examples = {"SELECT * FROM sac_describe_story('ABC12345')"};
         desc.categories = {"sap", "sac"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

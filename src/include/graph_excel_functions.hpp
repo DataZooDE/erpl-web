@@ -11,7 +11,7 @@ public:
     static void Register(duckdb::ExtensionLoader &loader);
 
 private:
-    // graph_list_files(secret_name, folder_path) - List files in OneDrive
+    // graph_show_files(secret_name, folder_path) - List files in OneDrive
     static duckdb::unique_ptr<duckdb::FunctionData> ListFilesBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,
@@ -59,7 +59,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_excel_table_data(secret_name, file_path, table_name) - Read Excel table data
+    // graph_excel_read(secret_name, file_path, table_name) - Read Excel table data
     static duckdb::unique_ptr<duckdb::FunctionData> ExcelTableDataBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,

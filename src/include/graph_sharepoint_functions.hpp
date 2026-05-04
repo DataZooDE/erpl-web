@@ -59,7 +59,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_list_items(secret_name, site_id, list_id) - Read list items
+    // graph_sharepoint_list_read(secret_name, site_id, list_id) - Read list items
     static duckdb::unique_ptr<duckdb::FunctionData> ListItemsBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,

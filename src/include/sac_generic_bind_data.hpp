@@ -39,8 +39,8 @@ public:
  * - Finished flag for scan completion
  *
  * Usage:
- *   Using SacSingleItemBindData<SacModel> for sac_get_model_info
- *   Using SacSingleItemBindData<SacStory> for sac_get_story_info
+ *   Using SacSingleItemBindData<SacModel> for sac_describe_model
+ *   Using SacSingleItemBindData<SacStory> for sac_describe_story
  */
 template <typename ItemType>
 class SacSingleItemBindData : public duckdb::TableFunctionData {
@@ -61,7 +61,7 @@ public:
  * Specialization for cases requiring extra data alongside main item
  *
  * Usage:
- *   Using SacItemWithDetailsBindData<SacModel> for sac_get_model_info
+ *   Using SacItemWithDetailsBindData<SacModel> for sac_describe_model
  *   with additional dimensions/measures vectors
  */
 template <typename ItemType>

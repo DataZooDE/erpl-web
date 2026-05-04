@@ -24,12 +24,12 @@ CREATE SECRET ms_sptype_test (
 );
 
 # ============================================================================
-# graph_list_items path: verify column types
+# graph_sharepoint_list_read path: verify column types
 # ============================================================================
 
 # Number column must come back as DOUBLE
 query I
-SELECT typeof(Number) FROM graph_list_items(
+SELECT typeof(Number) FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sptype_test'
@@ -39,7 +39,7 @@ DOUBLE
 
 # Date column must come back as TIMESTAMP
 query I
-SELECT typeof(Date) FROM graph_list_items(
+SELECT typeof(Date) FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sptype_test'
@@ -49,7 +49,7 @@ TIMESTAMP
 
 # Title column must come back as VARCHAR
 query I
-SELECT typeof(Title) FROM graph_list_items(
+SELECT typeof(Title) FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sptype_test'
@@ -59,7 +59,7 @@ VARCHAR
 
 # Rows with non-null values: Foo=1, Bar=2, Baz=3
 query II
-SELECT Title, Number FROM graph_list_items(
+SELECT Title, Number FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sptype_test'

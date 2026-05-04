@@ -196,8 +196,8 @@ TEST_CASE("Microsoft Graph Excel Functions Exist", "[graph_excel][functions]") {
     auto result = con.Query("LOAD erpl_web");
     REQUIRE_FALSE(result->HasError());
 
-    SECTION("graph_list_files function exists") {
-        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_files'");
+    SECTION("graph_show_files function exists") {
+        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_show_files'");
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }
@@ -220,8 +220,8 @@ TEST_CASE("Microsoft Graph Excel Functions Exist", "[graph_excel][functions]") {
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }
 
-    SECTION("graph_excel_table_data function exists") {
-        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_table_data'");
+    SECTION("graph_excel_read function exists") {
+        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_read'");
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }

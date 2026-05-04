@@ -122,8 +122,8 @@ TEST_CASE("Microsoft Graph SharePoint Functions Exist", "[graph_sharepoint][func
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }
 
-    SECTION("graph_list_items function exists") {
-        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_items'");
+    SECTION("graph_sharepoint_list_read function exists") {
+        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_sharepoint_list_read'");
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }

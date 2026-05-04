@@ -215,7 +215,7 @@ static std::string ResolveGraphDriveId(ClientContext &context,
 }
 
 // ============================================================================
-// graph_list_files - List files in OneDrive
+// graph_show_files - List files in OneDrive
 // ============================================================================
 
 unique_ptr<FunctionData> GraphExcelFunctions::ListFilesBind(
@@ -703,7 +703,7 @@ void GraphExcelFunctions::ExcelRangeScan(
 }
 
 // ============================================================================
-// graph_excel_table_data - Read Excel table data
+// graph_excel_read - Read Excel table data
 // ============================================================================
 
 unique_ptr<FunctionData> GraphExcelFunctions::ExcelTableDataBind(
@@ -716,7 +716,7 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTableDataBind(
 
     // file_path and table_name are required positional parameters
     if (input.inputs.size() < 2) {
-        throw BinderException("graph_excel_table_data requires file_path and table_name parameters");
+        throw BinderException("graph_excel_read requires file_path and table_name parameters");
     }
     bind_data->file_path = input.inputs[0].GetValue<std::string>();
     bind_data->table_name = input.inputs[1].GetValue<std::string>();
@@ -893,7 +893,7 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
     ERPL_TRACE_INFO("GRAPH_EXCEL", "Registering Microsoft Graph Excel functions");
 
     {
-        TableFunction list_files("graph_list_files", {}, ListFilesScan, ListFilesBind);
+        TableFunction list_files("graph_show_files", {}, ListFilesScan, ListFilesBind);
         list_files.varargs = LogicalType::VARCHAR;
         list_files.named_parameters["secret"] = LogicalType::VARCHAR;
         list_files.named_parameters["drive"] = LogicalType::VARCHAR;
@@ -904,9 +904,9 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {};
         desc.parameter_types = {};
         desc.examples = {
-            "SELECT * FROM graph_list_files(drive := 'b!abc...', secret := 'ms_graph')",
-            "SELECT * FROM graph_list_files(drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
-            "SELECT * FROM graph_list_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
+            "SELECT * FROM graph_show_files(drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_files(drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
@@ -978,7 +978,7 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction excel_table_data("graph_excel_table_data",
+        TableFunction excel_table_data("graph_excel_read",
                                        {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                        ExcelTableDataScan, ExcelTableDataBind);
         excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
@@ -991,9 +991,9 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'b!abc...', secret := 'ms_graph')",
-            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
-            "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
+            "SELECT * FROM graph_excel_read('test.xlsx', 'SalesTable', drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_read('test.xlsx', 'SalesTable', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_read('test.xlsx', 'SalesTable', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));

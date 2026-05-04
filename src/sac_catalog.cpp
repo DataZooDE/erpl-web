@@ -406,9 +406,9 @@ duckdb::TableFunctionSet CreateSacShowStoriesFunction() {
     return function_set;
 }
 
-// ===== sac_get_model_info =====
+// ===== sac_describe_model =====
 
-// Using template: SacItemWithDetailsBindData<SacModel> for sac_get_model_info
+// Using template: SacItemWithDetailsBindData<SacModel> for sac_describe_model
 using SacGetModelInfoBindData = SacItemWithDetailsBindData<SacModel>;
 
 static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
@@ -452,7 +452,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetModelInfoBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_get_model_info");
+    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_describe_model");
 
     // Extract and validate parameters
     auto model_id = SacCatalogBindHelper::ExtractPositionalString(input, 0, "model_id");
@@ -485,7 +485,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetModelInfoBind(
 }
 
 duckdb::TableFunctionSet CreateSacGetModelInfoFunction() {
-    duckdb::TableFunctionSet function_set("sac_get_model_info");
+    duckdb::TableFunctionSet function_set("sac_describe_model");
     
     duckdb::TableFunction func(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // model_id
@@ -499,9 +499,9 @@ duckdb::TableFunctionSet CreateSacGetModelInfoFunction() {
     return function_set;
 }
 
-// ===== sac_get_story_info =====
+// ===== sac_describe_story =====
 
-// Using template: SacSingleItemBindData<SacStory> for sac_get_story_info
+// Using template: SacSingleItemBindData<SacStory> for sac_describe_story
 using SacGetStoryInfoBindData = SacSingleItemBindData<SacStory>;
 
 static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
@@ -538,7 +538,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetStoryInfoBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_get_story_info");
+    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_describe_story");
 
     // Extract and validate parameters
     auto story_id = SacCatalogBindHelper::ExtractPositionalString(input, 0, "story_id");
@@ -570,7 +570,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetStoryInfoBind(
 }
 
 duckdb::TableFunctionSet CreateSacGetStoryInfoFunction() {
-    duckdb::TableFunctionSet function_set("sac_get_story_info");
+    duckdb::TableFunctionSet function_set("sac_describe_story");
     
     duckdb::TableFunction func(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // story_id

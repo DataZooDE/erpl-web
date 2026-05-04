@@ -41,19 +41,19 @@ SELECT COUNT(*) FROM (
 ----
 6
 
-# Test: graph_list_files returns the test Excel file
+# Test: graph_show_files returns the test Excel file
 query I
-SELECT COUNT(*) > 0 FROM graph_list_files(
+SELECT COUNT(*) > 0 FROM graph_show_files(
     drive := '${ERPL_MS_EXCEL_DRIVE_ID}'
 );
 ----
 true
 
-# Test: graph_list_files returns expected columns
+# Test: graph_show_files returns expected columns
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (
-        DESCRIBE SELECT * FROM graph_list_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
+        DESCRIBE SELECT * FROM graph_show_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
     )
     WHERE column_name IN ('id', 'name', 'web_url', 'size', 'created_at', 'modified_at', 'mime_type', 'is_folder')
 );
@@ -62,7 +62,7 @@ SELECT COUNT(*) FROM (
 
 # Test: all listed files have a non-empty id and name
 query I
-SELECT COUNT(*) = 0 FROM graph_list_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
+SELECT COUNT(*) = 0 FROM graph_show_files(drive := '${ERPL_MS_EXCEL_DRIVE_ID}')
 WHERE id IS NULL OR id = '' OR name IS NULL OR name = '';
 ----
 true
@@ -133,9 +133,9 @@ SELECT COUNT(*) > 0 FROM graph_excel_range(
 ----
 true
 
-# Test: graph_excel_table_data reads rows from the SalesTable
+# Test: graph_excel_read reads rows from the SalesTable
 query I
-SELECT COUNT(*) > 0 FROM graph_excel_table_data(
+SELECT COUNT(*) > 0 FROM graph_excel_read(
     '${ERPL_MS_EXCEL_FILE_PATH}',
     'SalesTable',
     drive := '${ERPL_MS_EXCEL_DRIVE_ID}'

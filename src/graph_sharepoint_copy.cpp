@@ -167,7 +167,7 @@ static void SharePointListCopyFinalize(
 // ------------------------------------------------------------------
 
 void RegisterSharePointListCopyFunction(duckdb::ExtensionLoader &loader) {
-    CopyFunction fn("graph_list_items");
+    CopyFunction fn("graph_sharepoint_list");
     fn.copy_to_bind              = SharePointListCopyBind;
     fn.copy_to_initialize_global = SharePointListCopyInitializeGlobal;
     fn.copy_to_initialize_local  = SharePointListCopyInitializeLocal;

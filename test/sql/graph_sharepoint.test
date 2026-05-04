@@ -26,9 +26,9 @@ SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_describe_li
 ----
 1
 
-# Verify graph_list_items exists
+# Verify graph_sharepoint_list_read exists
 query I
-SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_items'
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_sharepoint_list_read'
 ----
 1
 

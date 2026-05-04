@@ -83,20 +83,20 @@ SELECT COUNT(*) FROM (
 ----
 5
 
-# Test: graph_list_items works without duplicate-column error
+# Test: graph_sharepoint_list_read works without duplicate-column error
 # (regression test: SharePoint returns field "ID" which collides case-insensitively with "id")
 query I
-SELECT COUNT(*) >= 0 FROM graph_list_items(
+SELECT COUNT(*) >= 0 FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_LIST_ID}'
 );
 ----
 true
 
-# Test: graph_list_items result always has an id column (not a duplicate col1/col2)
+# Test: graph_sharepoint_list_read result always has an id column (not a duplicate col1/col2)
 query I
 SELECT COUNT(*) FROM (
-    DESCRIBE SELECT * FROM graph_list_items(
+    DESCRIBE SELECT * FROM graph_sharepoint_list_read(
         '${ERPL_MS_SHAREPOINT_SITE_ID}',
         '${ERPL_MS_SHAREPOINT_LIST_ID}'
     )

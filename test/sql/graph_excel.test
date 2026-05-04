@@ -123,9 +123,9 @@ SELECT count(*) FROM duckdb_secrets() WHERE name = 'test_graph_client_creds'
 # Test: Function Existence
 # =============================================================================
 
-# Verify graph_list_files exists
+# Verify graph_show_files exists
 query I
-SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_list_files'
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_show_files'
 ----
 1
 
@@ -147,9 +147,9 @@ SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_range
 ----
 1
 
-# Verify graph_excel_table_data exists
+# Verify graph_excel_read exists
 query I
-SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_table_data'
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_read'
 ----
 1
 

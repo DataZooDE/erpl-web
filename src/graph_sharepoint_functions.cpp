@@ -427,7 +427,7 @@ void GraphSharePointFunctions::DescribeListScan(
 }
 
 // ============================================================================
-// graph_list_items - Read list items
+// graph_sharepoint_list_read - Read list items
 // ============================================================================
 
 unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
@@ -440,7 +440,7 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
 
     // site_id and list_id are required positional parameters
     if (input.inputs.size() < 2) {
-        throw BinderException("graph_list_items requires site_id and list_id parameters");
+        throw BinderException("graph_sharepoint_list_read requires site_id and list_id parameters");
     }
     bind_data->site_id = input.inputs[0].GetValue<std::string>();
     bind_data->list_id = input.inputs[1].GetValue<std::string>();
@@ -724,7 +724,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction list_items("graph_list_items",
+        TableFunction list_items("graph_sharepoint_list_read",
                                  {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                  ListItemsScan, ListItemsBind);
         list_items.named_parameters["secret"] = LogicalType::VARCHAR;
@@ -734,8 +734,8 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_list_items('site-guid', 'list-guid', secret := 'ms_graph')",
-            "SELECT * FROM graph_list_items('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')",
+            "SELECT * FROM graph_sharepoint_list_read('site-guid', 'list-guid', secret := 'ms_graph')",
+            "SELECT * FROM graph_sharepoint_list_read('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')",
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
