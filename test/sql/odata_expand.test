@@ -234,5 +234,33 @@ SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwi
 1
 
 # ============================================================================
-# SECTION 8: Final Verification
+# SECTION 8: Regression Tests - Predicate Pushdown Column Mapping
+# ============================================================================
+# Regression: WHERE filter on a column whose output position differs from its
+# schema position was mapped to the wrong OData column name, causing 0 rows to
+# be returned even when matching rows exist.  The fix ensures the column name
+# resolver translates output positions through activated_to_original_mapping.
+
+# Filter on non-first schema column without expand
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers') WHERE Country = 'Germany';
+----
+11
+
+# Filter with multiple projected columns — $select must include all of them
+query III
+SELECT CustomerID, CompanyName, Country FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers') WHERE Country = 'Germany' ORDER BY CustomerID LIMIT 3;
+----
+ALFKI	Alfreds Futterkiste	Germany
+BLAUS	Blauer See Delikatessen	Germany
+DRACD	Drachenblut Delikatessen	Germany
+
+# Filter combined with expand
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers', expand='Orders') WHERE Country = 'Germany';
+----
+11
+
+# ============================================================================
+# SECTION 9: Final Verification
 # ============================================================================

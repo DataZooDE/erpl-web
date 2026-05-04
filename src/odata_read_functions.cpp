@@ -2502,34 +2502,45 @@ ODataReadBindData::PredicatePushdownHelper() {
             std::string(odata_version == ODataVersion::V2 ? "V2" : "V4") +
             " on predicate pushdown helper");
 
-    // Column name resolver should interpret indices as ORIGINAL schema indices
-    // BuildSelectClause/BuildFilterClause pass original indices
+    // Column name resolver: DuckDB passes the OUTPUT position (index within the
+    // projected column list from InitGlobal). We must translate that through
+    // activated_to_original_mapping to get the schema index before looking up
+    // the column name, because the activated column order may differ from the
+    // schema order (e.g. column_ids=[8,0] puts Country at output pos 0).
     predicate_pushdown_helper->SetColumnNameResolver([this](duckdb::column_t
-                                                                original_index)
+                                                                output_index)
                                                          -> std::string {
+      // Translate output position → full-schema index
+      size_t schema_index = output_index;
+      if (output_index < this->activated_to_original_mapping.size()) {
+          schema_index = this->activated_to_original_mapping[output_index];
+      }
+
       if (!this->extracted_column_names.empty()) {
-        if ((size_t)original_index < this->extracted_column_names.size()) {
-          return this->extracted_column_names[original_index];
+        if (schema_index < this->extracted_column_names.size()) {
+          return this->extracted_column_names[schema_index];
         } else {
           ERPL_TRACE_ERROR(
               "ODATA_READ_BIND",
-              duckdb::StringUtil::Format("Original column index %d is out of "
-                                         "bounds for extracted column names",
-                                         (int)original_index));
+              duckdb::StringUtil::Format("Schema column index %d (from output "
+                                         "index %d) is out of bounds for "
+                                         "extracted column names",
+                                         (int)schema_index, (int)output_index));
           return std::string();
         }
       }
       if (this->all_result_names.empty()) {
         this->all_result_names = this->odata_client->GetResultNames();
       }
-      if ((size_t)original_index < this->all_result_names.size()) {
-        return this->all_result_names[original_index];
+      if (schema_index < this->all_result_names.size()) {
+        return this->all_result_names[schema_index];
       } else {
         ERPL_TRACE_ERROR(
             "ODATA_READ_BIND",
             duckdb::StringUtil::Format(
-                "Original column index %d is out of bounds for result names",
-                (int)original_index));
+                "Schema column index %d (from output index %d) is out of "
+                "bounds for result names",
+                (int)schema_index, (int)output_index));
         return std::string();
       }
         });

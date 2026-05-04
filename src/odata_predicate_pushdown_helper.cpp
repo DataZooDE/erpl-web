@@ -439,23 +439,28 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
     // that the OData service might not handle properly in $select
     std::vector<std::string> complex_fields = {"Emails", "AddressInfo", "HomeAddress", "Features"};
     
+    // Track output position separately (skip rowid entries)
+    size_t output_pos = 0;
     for (size_t i = 0; i < column_ids.size(); ++i) {
         if (duckdb::IsRowIdColumnId(column_ids[i])) {
             continue;
         }
-        
-        // Use column name resolver if available, otherwise fall back to direct indexing
+
+        // Use column name resolver if available, otherwise fall back to direct indexing.
+        // Resolver expects the OUTPUT position (not schema index) so that it can map
+        // through activated_to_original_mapping to the correct column name.
         std::string field_name;
         if (column_name_resolver) {
-            field_name = column_name_resolver(column_ids[i]);
+            field_name = column_name_resolver(output_pos);
             if (field_name.empty()) {
-                ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for index " + std::to_string(column_ids[i]));
+                ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for output pos " + std::to_string(output_pos));
+                output_pos++;
                 continue;
             }
         } else {
             field_name = all_column_names[column_ids[i]];
         }
-        
+
         // Check if this is a complex field
         for (const auto& complex_field : complex_fields) {
             if (field_name == complex_field || field_name.find(complex_field) == 0) {
@@ -464,22 +469,26 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
                 return "";
             }
         }
+        output_pos++;
     }
 
     std::stringstream select_clause;
     std::set<std::string> unique_fields; // Use set to avoid duplicates
-    
+
+    output_pos = 0;
     for (size_t i = 0; i < column_ids.size(); ++i) {
         if (duckdb::IsRowIdColumnId(column_ids[i])) {
             continue;
         }
 
-        // Extract base field name from complex expressions
+        // Extract base field name from complex expressions.
+        // Pass output_pos (not schema index) so the resolver maps correctly.
         std::string field_name;
         if (column_name_resolver) {
-            field_name = column_name_resolver(column_ids[i]);
+            field_name = column_name_resolver(output_pos);
             if (field_name.empty()) {
-                ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for index " + std::to_string(column_ids[i]));
+                ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for output pos " + std::to_string(output_pos));
+                output_pos++;
                 continue;
             }
         } else {
@@ -503,6 +512,7 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
             unique_fields.insert(field_name);
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added field to select: " + field_name);
         }
+        output_pos++;
     }
 
     if (select_clause.str().empty()) {
