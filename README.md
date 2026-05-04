@@ -373,16 +373,26 @@ Capabilities:
 
 - Automatic OData version detection (v2/v4)
 - Predicate pushdown: `$filter`, `$select`, `$top`, `$skip`
+- Navigation property expansion via `expand=` (inline related entities as nested structs)
 - Pagination handling and total-count awareness
 - EDM-aware type mapping into DuckDB types
 
 Example:
 
 ```sql
+-- Filter pushdown — WHERE is translated to $filter on the server
 SELECT OrderID, CustomerID
 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
 WHERE OrderDate >= '1996-01-01'
 LIMIT 5;
+
+-- Expand related entities inline (Orders as a nested struct array per customer)
+SELECT CustomerID, CompanyName, Country, Orders
+FROM odata_read(
+    'https://services.odata.org/V2/Northwind/Northwind.svc/Customers',
+    expand = 'Orders'
+)
+WHERE Country = 'Germany';
 ```
 
 Attach usage:
@@ -742,7 +752,7 @@ Functions: `graph_planner_plans(group_id, [secret])`, `graph_planner_buckets(pla
 
 Required permissions: `Sites.Read.All` (Application).
 
-Site and drive arguments accept either a **friendly name** (e.g. `'Finance'`) or the raw composite ID — the API resolves names automatically.
+Site and list arguments accept a **friendly name**, a **site URL**, or the raw GUID — the API resolves them automatically.
 
 ```sql
 -- Discover accessible sites
@@ -757,16 +767,23 @@ FROM graph_show_drives(site := 'Finance', secret := 'ms_graph');
 SELECT id, name, display_name, item_count
 FROM graph_show_lists(site := 'Finance', secret := 'ms_graph');
 
--- Schema of a list
+-- Schema of a list (site and list accept names, URLs, or GUIDs)
 SELECT column_name, column_type, required
-FROM graph_describe_list('your-site-id', 'your-list-id');
+FROM graph_describe_list('Finance', 'Budget');
 
--- Items in a list
-SELECT * FROM graph_list_items('your-site-id', 'your-list-id')
+-- Items in a list — filter pushdown reduces server-side payload
+SELECT * FROM graph_list_items('Finance', 'Budget', secret := 'ms_graph')
 WHERE status = 'Active';
+
+-- Works equally with site URLs and list display names
+SELECT * FROM graph_list_items(
+    'https://tenant.sharepoint.com/sites/Finance',
+    'Project Tracker',
+    secret := 'ms_graph'
+);
 ```
 
-Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id, list_id, [secret])`, `graph_list_items(site_id, list_id, [secret])`
+Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id_or_name, list_id_or_name, [secret])`, `graph_list_items(site_id_or_name, list_id_or_name, [secret])`
 
 ---
 
