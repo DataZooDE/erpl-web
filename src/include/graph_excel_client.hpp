@@ -37,9 +37,9 @@ public:
     // /workbook/tables/{table-name}
     static std::string BuildTableUrl(const std::string &workbook_url, const std::string &table_name);
 
-    // Build URL for table rows
-    // /workbook/tables/{table-name}/rows
-    static std::string BuildTableRowsUrl(const std::string &workbook_url, const std::string &table_name);
+    // Build URL for table rows; top=0 omits $top (server default), otherwise appends ?$top=N
+    // /workbook/tables/{table-name}/rows[?$top=N]
+    static std::string BuildTableRowsUrl(const std::string &workbook_url, const std::string &table_name, int32_t top = 1000);
 
     // Build URL for worksheets
     // /workbook/worksheets
@@ -131,7 +131,6 @@ public:
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
-    std::shared_ptr<HttpClient> http_client;
 
     std::string DoGraphGet(const std::string &url);
 

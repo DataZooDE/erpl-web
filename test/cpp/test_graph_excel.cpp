@@ -53,7 +53,7 @@ TEST_CASE("GraphExcelUrlBuilder - BuildTableUrl", "[graph_excel][url_builder]") 
 TEST_CASE("GraphExcelUrlBuilder - BuildTableRowsUrl", "[graph_excel][url_builder]") {
     std::string workbook_url = "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook";
     auto url = GraphExcelUrlBuilder::BuildTableRowsUrl(workbook_url, "MyTable");
-    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/tables/MyTable/rows");
+    REQUIRE(url == "https://graph.microsoft.com/v1.0/me/drive/items/abc123/workbook/tables/MyTable/rows?$top=1000");
 }
 
 TEST_CASE("GraphExcelUrlBuilder - BuildWorksheetsUrl", "[graph_excel][url_builder]") {

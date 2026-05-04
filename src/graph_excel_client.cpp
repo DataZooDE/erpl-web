@@ -38,8 +38,12 @@ std::string GraphExcelUrlBuilder::BuildTableUrl(const std::string &workbook_url,
     return workbook_url + "/tables/" + GraphClient::UrlEncode(table_name);
 }
 
-std::string GraphExcelUrlBuilder::BuildTableRowsUrl(const std::string &workbook_url, const std::string &table_name) {
-    return workbook_url + "/tables/" + GraphClient::UrlEncode(table_name) + "/rows";
+std::string GraphExcelUrlBuilder::BuildTableRowsUrl(const std::string &workbook_url, const std::string &table_name, int32_t top) {
+    std::string url = workbook_url + "/tables/" + GraphClient::UrlEncode(table_name) + "/rows";
+    if (top > 0) {
+        url += "?$top=" + std::to_string(top);
+    }
+    return url;
 }
 
 std::string GraphExcelUrlBuilder::BuildWorksheetsUrl(const std::string &workbook_url) {
