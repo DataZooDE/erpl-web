@@ -76,6 +76,28 @@ std::string GraphClient::EscapeODataStringLiteral(const std::string &value) {
     return result;
 }
 
+static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
+                                const std::string &trace_component,
+                                const std::string &method_label,
+                                bool allow_no_content = false)
+{
+    if (!response) {
+        std::string error_msg = "Microsoft Graph " + method_label + " request failed: no response";
+        ERPL_TRACE_ERROR(trace_component, error_msg);
+        throw duckdb::IOException(error_msg);
+    }
+    const int code = response->Code();
+    if (code < 200 || code >= 300) {
+        std::string error_msg = "Microsoft Graph " + method_label + " request failed (HTTP " +
+                                std::to_string(code) + ")";
+        if (!response->Content().empty()) {
+            error_msg += ": " + response->Content().substr(0, 500);
+        }
+        ERPL_TRACE_ERROR(trace_component, error_msg);
+        throw duckdb::IOException(error_msg);
+    }
+}
+
 std::string GraphClient::Get(const std::string &url) {
     ERPL_TRACE_DEBUG(trace_component, "GET request to: " + url);
 
@@ -87,20 +109,63 @@ std::string GraphClient::Get(const std::string &url) {
     request.headers["Accept"] = "application/json";
 
     auto response = http_client->SendRequest(request);
-    if (!response || response->Code() < 200 || response->Code() >= 300) {
-        std::string error_msg = "Microsoft Graph request failed";
-        if (response) {
-            error_msg += " (HTTP " + std::to_string(response->Code()) + ")";
-            if (!response->Content().empty()) {
-                error_msg += ": " + response->Content().substr(0, 500);
-            }
-        }
-        ERPL_TRACE_ERROR(trace_component, error_msg);
-        throw duckdb::IOException(error_msg);
-    }
+    GraphCheckResponse(response, trace_component, "GET");
 
     ERPL_TRACE_DEBUG(trace_component, "Response received: " + std::to_string(response->Content().length()) + " bytes");
     return response->Content();
+}
+
+std::string GraphClient::Post(const std::string &url, const std::string &body) {
+    return PostWithHeaders(url, body, {});
+}
+
+std::string GraphClient::PostWithHeaders(const std::string &url, const std::string &body,
+                                         const std::map<std::string, std::string> &extra_headers)
+{
+    ERPL_TRACE_DEBUG(trace_component, "POST request to: " + url);
+
+    HttpUrl http_url(url);
+    HttpRequest request(HttpMethod::POST, http_url, "application/json", body);
+    if (auth_params) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+    request.headers["Accept"] = "application/json";
+    for (const auto &kv : extra_headers) {
+        request.headers[kv.first] = kv.second;
+    }
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "POST");
+
+    ERPL_TRACE_DEBUG(trace_component, "POST response: " + std::to_string(response->Content().length()) + " bytes");
+    return response->Content();
+}
+
+void GraphClient::Patch(const std::string &url, const std::string &body) {
+    ERPL_TRACE_DEBUG(trace_component, "PATCH request to: " + url);
+
+    HttpUrl http_url(url);
+    HttpRequest request(HttpMethod::PATCH, http_url, "application/json", body);
+    if (auth_params) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+    request.headers["Accept"] = "application/json";
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "PATCH");
+}
+
+void GraphClient::Delete(const std::string &url) {
+    ERPL_TRACE_DEBUG(trace_component, "DELETE request to: " + url);
+
+    HttpUrl http_url(url);
+    HttpRequest request(HttpMethod::_DELETE, http_url);
+    if (auth_params) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "DELETE");
 }
 
 std::optional<std::string> GraphClient::ExtractNextLink(const std::string &json_body) {

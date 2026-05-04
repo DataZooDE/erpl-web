@@ -2,6 +2,7 @@
 
 #include "http_client.hpp"
 #include "yyjson.hpp"
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,6 +16,12 @@ public:
 
     std::string Get(const std::string &url);
     std::string GetAllPagesMerged(const std::string &url);
+
+    std::string Post(const std::string &url, const std::string &body);
+    std::string PostWithHeaders(const std::string &url, const std::string &body,
+                                const std::map<std::string, std::string> &extra_headers);
+    void Patch(const std::string &url, const std::string &body);
+    void Delete(const std::string &url);
 
     static std::string BaseUrl();
     static std::string UrlEncode(const std::string &value, bool preserve_slashes = false);

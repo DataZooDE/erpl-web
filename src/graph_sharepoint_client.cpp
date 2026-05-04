@@ -63,6 +63,10 @@ std::string GraphSharePointUrlBuilder::BuildItemUrl(const std::string &site_id, 
     return GetBaseUrl() + "/sites/" + site_id + "/lists/" + list_id + "/items/" + item_id;
 }
 
+std::string GraphSharePointUrlBuilder::BuildItemFieldsUrl(const std::string &site_id, const std::string &list_id, const std::string &item_id) {
+    return GetBaseUrl() + "/sites/" + site_id + "/lists/" + list_id + "/items/" + item_id + "/fields";
+}
+
 std::string GraphSharePointUrlBuilder::BuildFollowedSitesUrl() {
     return GetBaseUrl() + "/me/followedSites";
 }
@@ -133,6 +137,42 @@ std::string GraphSharePointClient::GetListItems(const std::string &site_id, cons
                                                  const std::string &select, int top) {
     auto url = GraphSharePointUrlBuilder::BuildListItemsWithSelectUrl(site_id, list_id, select, top);
     return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+}
+
+std::string GraphSharePointClient::CreateListItem(const std::string &site_id, const std::string &list_id,
+                                                   const std::string &fields_json)
+{
+    const std::string url = GraphSharePointUrlBuilder::BuildListItemsUrl(site_id, list_id);
+    const std::string body = "{\"fields\":" + fields_json + "}";
+    const std::string response = GraphClient(auth_params, "GRAPH_SHAREPOINT").Post(url, body);
+
+    // Extract the new item id from the response
+    yyjson_doc *doc = yyjson_read(response.c_str(), response.size(), 0);
+    if (!doc) {
+        return "";
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *id_val = yyjson_obj_get(root, "id");
+    std::string new_id;
+    if (id_val && yyjson_is_str(id_val)) {
+        new_id = yyjson_get_str(id_val);
+    }
+    yyjson_doc_free(doc);
+    return new_id;
+}
+
+void GraphSharePointClient::UpdateListItem(const std::string &site_id, const std::string &list_id,
+                                           const std::string &item_id, const std::string &fields_json)
+{
+    const std::string url = GraphSharePointUrlBuilder::BuildItemFieldsUrl(site_id, list_id, item_id);
+    GraphClient(auth_params, "GRAPH_SHAREPOINT").Patch(url, fields_json);
+}
+
+void GraphSharePointClient::DeleteListItem(const std::string &site_id, const std::string &list_id,
+                                           const std::string &item_id)
+{
+    const std::string url = GraphSharePointUrlBuilder::BuildItemUrl(site_id, list_id, item_id);
+    GraphClient(auth_params, "GRAPH_SHAREPOINT").Delete(url);
 }
 
 bool GraphSharePointClient::LooksLikeSiteId(const std::string &s) {

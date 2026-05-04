@@ -3,6 +3,7 @@
 #include "tracing.hpp"
 #include "yyjson.hpp"
 
+#include <map>
 #include <stdexcept>
 
 namespace erpl_web {
@@ -96,6 +97,18 @@ std::string GraphExcelUrlBuilder::BuildDriveFolderChildrenWithDriveUrl(const std
 std::string GraphExcelUrlBuilder::BuildSiteDefaultDriveItemByPathUrl(const std::string &site_id, const std::string &path) {
     std::string clean_path = GraphClient::StripLeadingSlash(path);
     return GetBaseUrl() + "/sites/" + site_id + "/drive/root:/" + GraphClient::UrlEncode(clean_path, true) + ":";
+}
+
+std::string GraphExcelUrlBuilder::BuildCreateSessionUrl(const std::string &workbook_url) {
+    return workbook_url + "/createSession";
+}
+
+std::string GraphExcelUrlBuilder::BuildCloseSessionUrl(const std::string &workbook_url) {
+    return workbook_url + "/closeSession";
+}
+
+std::string GraphExcelUrlBuilder::BuildTableRowsAddUrl(const std::string &workbook_url, const std::string &table_name) {
+    return workbook_url + "/tables/" + GraphClient::UrlEncode(table_name) + "/rows/add";
 }
 
 // GraphExcelClient implementation
@@ -260,6 +273,107 @@ std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path,
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
     return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(worksheets_url);
+}
+
+// Extract the workbook-session-id from a createSession response JSON
+static std::string ExtractSessionId(const std::string &json_body) {
+    duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
+    if (!doc) { return ""; }
+    duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
+    std::string session_id;
+    if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
+        session_id = duckdb_yyjson::yyjson_get_str(id_val);
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return session_id;
+}
+
+idx_t GraphExcelClient::AddTableRows(const std::string &file_path, const std::string &table_name,
+                                      const std::string &rows_json, const std::string &drive_id)
+{
+    GraphClient graph_client(auth_params, "GRAPH_EXCEL");
+
+    const std::string item_url  = ResolveWorkbookItemUrl(file_path, drive_id);
+    const std::string wb_url    = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
+
+    // Create a persistent workbook session (required for write operations per Graph best practices)
+    const std::string create_session_url = GraphExcelUrlBuilder::BuildCreateSessionUrl(wb_url);
+    const std::string session_body = "{\"persistChanges\":true}";
+
+    // Prefer long-running session creation to avoid 504 timeouts on large workbooks
+    std::map<std::string, std::string> prefer_header = {{"Prefer", "respond-async"}};
+    std::string session_response = graph_client.PostWithHeaders(create_session_url, session_body, prefer_header);
+
+    // Check if the server returned a status monitor URL (async 202) by inspecting for "statusMonitorResource"
+    std::string session_id;
+    {
+        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0);
+        if (doc) {
+            duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+            duckdb_yyjson::yyjson_val *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource");
+            duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
+            if (monitor_val && duckdb_yyjson::yyjson_is_str(monitor_val)) {
+                // Long-running: poll the status monitor until session is ready
+                const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
+                duckdb_yyjson::yyjson_doc_free(doc);
+                // Poll up to 30 times with 1-second intervals
+                for (int poll = 0; poll < 30 && session_id.empty(); poll++) {
+                    const std::string poll_response = graph_client.Get(monitor_url);
+                    session_id = ExtractSessionId(poll_response);
+                }
+            } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
+                // Immediate (201): session id is in the response
+                session_id = duckdb_yyjson::yyjson_get_str(id_val);
+                duckdb_yyjson::yyjson_doc_free(doc);
+            } else {
+                duckdb_yyjson::yyjson_doc_free(doc);
+            }
+        }
+    }
+
+    if (session_id.empty()) {
+        throw duckdb::IOException("Failed to create Excel workbook session for file: " + file_path);
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_EXCEL", "Created workbook session: " + session_id);
+
+    // Session header — required for all write operations per Graph best practices
+    std::map<std::string, std::string> session_headers = {{"workbook-session-id", session_id}};
+
+    // RAII: close session on scope exit (even if rows/add fails)
+    const std::string close_session_url = GraphExcelUrlBuilder::BuildCloseSessionUrl(wb_url);
+    struct SessionGuard {
+        GraphClient &client;
+        const std::string &close_url;
+        const std::map<std::string, std::string> &headers;
+        ~SessionGuard() noexcept {
+            try {
+                client.PostWithHeaders(close_url, "{}", headers);
+            } catch (...) {
+                // Best-effort close; swallow errors during teardown
+            }
+        }
+    } guard{graph_client, close_session_url, session_headers};
+
+    // POST rows to the table
+    const std::string rows_add_url = GraphExcelUrlBuilder::BuildTableRowsAddUrl(wb_url, table_name);
+    graph_client.PostWithHeaders(rows_add_url, rows_json, session_headers);
+
+    // Count the rows added from the rows_json (count top-level array elements)
+    idx_t row_count = 0;
+    {
+        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(rows_json.c_str(), rows_json.size(), 0);
+        if (doc) {
+            duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+            duckdb_yyjson::yyjson_val *values_arr = duckdb_yyjson::yyjson_obj_get(root, "values");
+            if (values_arr && duckdb_yyjson::yyjson_is_arr(values_arr)) {
+                row_count = duckdb_yyjson::yyjson_arr_size(values_arr);
+            }
+            duckdb_yyjson::yyjson_doc_free(doc);
+        }
+    }
+    return row_count;
 }
 
 } // namespace erpl_web

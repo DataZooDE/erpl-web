@@ -49,6 +49,10 @@ public:
     // /sites/{site-id}/lists/{list-id}/items/{item-id}
     static std::string BuildItemUrl(const std::string &site_id, const std::string &list_id, const std::string &item_id);
 
+    // Build URL for the fields sub-resource of a list item (used for PATCH updates)
+    // /sites/{site-id}/lists/{list-id}/items/{item-id}/fields
+    static std::string BuildItemFieldsUrl(const std::string &site_id, const std::string &list_id, const std::string &item_id);
+
     // Build URL for my followed sites
     // /me/followedSites
     static std::string BuildFollowedSitesUrl();
@@ -81,9 +85,18 @@ public:
     std::string GetList(const std::string &site_id, const std::string &list_id);
     std::string GetListColumns(const std::string &site_id, const std::string &list_id);
 
-    // List item operations
+    // List item read operations
     std::string GetListItems(const std::string &site_id, const std::string &list_id,
                              const std::string &select = "", int top = 0);
+
+    // List item write operations
+    // Returns the new item's id
+    std::string CreateListItem(const std::string &site_id, const std::string &list_id,
+                               const std::string &fields_json);
+    void UpdateListItem(const std::string &site_id, const std::string &list_id,
+                        const std::string &item_id, const std::string &fields_json);
+    void DeleteListItem(const std::string &site_id, const std::string &list_id,
+                        const std::string &item_id);
 
     // Name-to-ID resolution: accepts friendly names or raw IDs transparently
     std::string ResolveSiteId(const std::string &name_or_id);

@@ -86,6 +86,10 @@ public:
 	duckdb::TableStorageInfo GetStorageInfo(duckdb::ClientContext &context) override;
 	void BindUpdateConstraints(duckdb::Binder &binder, duckdb::LogicalGet &get, duckdb::LogicalProjection &proj, duckdb::LogicalUpdate &update, duckdb::ClientContext &context) override;
 
+	const std::string &GetListId() const { return list_id_; }
+	const std::string &GetSiteId() const { return site_id_; }
+	std::shared_ptr<HttpAuthParams> GetAuthParams() const { return auth_params_; }
+
 private:
 	std::string site_id_;
 	std::string list_id_;

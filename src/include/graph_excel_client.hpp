@@ -84,6 +84,18 @@ public:
     // Build URL for drive item by path using the site's default drive (WAC-compatible)
     // /sites/{site-id}/drive/root:/{path}:
     static std::string BuildSiteDefaultDriveItemByPathUrl(const std::string &site_id, const std::string &path);
+
+    // Build URL for creating a workbook session
+    // /workbook/createSession
+    static std::string BuildCreateSessionUrl(const std::string &workbook_url);
+
+    // Build URL for closing a workbook session
+    // /workbook/closeSession
+    static std::string BuildCloseSessionUrl(const std::string &workbook_url);
+
+    // Build URL for adding rows to a table (write endpoint)
+    // /workbook/tables/{table-name}/rows/add
+    static std::string BuildTableRowsAddUrl(const std::string &workbook_url, const std::string &table_name);
 };
 
 // Represents an Excel table's data
@@ -128,6 +140,13 @@ public:
     // List worksheets in a workbook (pass drive_id for app-auth)
     std::string ListWorksheets(const std::string &item_id);
     std::string ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id = "");
+
+    // Append rows to an Excel table.
+    // rows_json is a 2-D JSON array: [[v1, v2, ...], [v1, v2, ...], ...]
+    // A workbook session is created, rows are appended, and the session is closed.
+    // Returns the number of rows added.
+    idx_t AddTableRows(const std::string &file_path, const std::string &table_name,
+                       const std::string &rows_json, const std::string &drive_id = "");
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;

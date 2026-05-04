@@ -825,6 +825,67 @@ void GraphExcelFunctions::ExcelTableDataScan(
 }
 
 // ============================================================================
+// graph_excel_add_rows - Append pre-serialized rows to an Excel table
+// ============================================================================
+
+struct AddRowsBindData : public TableFunctionData {
+    std::string file_path;
+    std::string table_name;
+    std::string rows_json;   // {"values": [[...],...]}
+    std::string drive_id;
+    std::string secret_name;
+    bool done = false;
+};
+
+unique_ptr<FunctionData> GraphExcelFunctions::AddRowsBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_excel_add_rows requires file_path and table_name parameters");
+    }
+    auto bind = make_uniq<AddRowsBindData>();
+    bind->file_path  = input.inputs[0].GetValue<std::string>();
+    bind->table_name = input.inputs[1].GetValue<std::string>();
+
+    if (input.named_parameters.count("data")) {
+        bind->rows_json = input.named_parameters.at("data").GetValue<std::string>();
+    }
+    if (input.named_parameters.count("secret")) {
+        bind->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind->drive_id = ResolveGraphDriveId(context, bind->secret_name, input);
+
+    return_types = {LogicalType::BIGINT};
+    names        = {"rows_added"};
+    return std::move(bind);
+}
+
+void GraphExcelFunctions::AddRowsScan(
+    ClientContext &context,
+    TableFunctionInput &data_p,
+    DataChunk &output) {
+
+    auto &bind = data_p.bind_data->CastNoConst<AddRowsBindData>();
+    if (bind.done) { return; }
+    bind.done = true;
+
+    if (bind.rows_json.empty()) {
+        output.SetCardinality(1);
+        output.SetValue(0, 0, Value::BIGINT(0));
+        return;
+    }
+
+    auto auth_info = ResolveGraphAuth(context, bind.secret_name);
+    GraphExcelClient client(auth_info.auth_params);
+    const idx_t n = client.AddTableRows(bind.file_path, bind.table_name, bind.rows_json, bind.drive_id);
+    output.SetCardinality(1);
+    output.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(n)));
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -933,6 +994,32 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
             "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'b!abc...', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
             "SELECT * FROM graph_excel_table_data('test.xlsx', 'SalesTable', site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
+        };
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+
+    // graph_excel_add_rows: append rows to an Excel table (see AddRowsBind/AddRowsScan below)
+    {
+        TableFunction add_rows("graph_excel_add_rows",
+                               {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                               GraphExcelFunctions::AddRowsScan,
+                               GraphExcelFunctions::AddRowsBind);
+        add_rows.named_parameters["data"]   = LogicalType::VARCHAR;
+        add_rows.named_parameters["drive"]  = LogicalType::VARCHAR;
+        add_rows.named_parameters["secret"] = LogicalType::VARCHAR;
+
+        CreateTableFunctionInfo info(add_rows);
+        FunctionDescription desc;
+        desc.description = "Append rows to an Excel table via the Microsoft Graph API. "
+                           "data should be a JSON 2-D array: '[[v1,v2,...],[v1,v2,...],...]'";
+        desc.parameter_names = {"file_path", "table_name"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_excel_add_rows('report.xlsx', 'Sales', "
+            "data := '[[1,\"Alice\"],[2,\"Bob\"]]', "
+            "drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));

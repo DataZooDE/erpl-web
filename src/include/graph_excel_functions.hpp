@@ -70,6 +70,19 @@ private:
         duckdb::ClientContext &context,
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
+
+    // graph_excel_add_rows(file_path, table_name, data := '[[...]]', drive := '...', secret := '...')
+    // Append pre-serialized rows to an Excel table. data must be a JSON 2-D array.
+    static duckdb::unique_ptr<duckdb::FunctionData> AddRowsBind(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionBindInput &input,
+        duckdb::vector<duckdb::LogicalType> &return_types,
+        duckdb::vector<std::string> &names);
+
+    static void AddRowsScan(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionInput &data,
+        duckdb::DataChunk &output);
 };
 
 } // namespace erpl_web

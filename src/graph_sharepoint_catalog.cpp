@@ -1,15 +1,22 @@
 #include "graph_sharepoint_catalog.hpp"
 #include "graph_sharepoint_client.hpp"
 #include "graph_sharepoint_type_mapper.hpp"
+#include "graph_write_helpers.hpp"
 #include "tracing.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/execution/physical_operator.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
+#include "duckdb/planner/operator/logical_delete.hpp"
+#include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "yyjson.hpp"
 #include <algorithm>
+#include <mutex>
 #include <unordered_set>
 
 using namespace duckdb_yyjson;
@@ -95,6 +102,248 @@ static void SharePointListScan(duckdb::ClientContext &context,
 	if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
 	output.SetCardinality(row);
 }
+
+// -------------------------------------------------------------------------------------------------
+// Physical write operators (INSERT / UPDATE / DELETE)
+// -------------------------------------------------------------------------------------------------
+
+// Shared global sink state for all three write operators
+struct SharePointWriteGlobalState : public GlobalSinkState {
+	explicit SharePointWriteGlobalState(std::shared_ptr<HttpAuthParams> auth_params_,
+	                                    std::string site_id_, std::string list_id_)
+	    : auth_params(std::move(auth_params_)), site_id(std::move(site_id_)),
+	      list_id(std::move(list_id_)), affected_count(0) {}
+
+	std::shared_ptr<HttpAuthParams> auth_params;
+	std::string site_id;
+	std::string list_id;
+	std::mutex lock;
+	idx_t affected_count;
+};
+
+// -------------------------------------------------------------------------------------------------
+// PhysicalSharePointInsert
+// -------------------------------------------------------------------------------------------------
+
+class PhysicalSharePointInsert : public PhysicalOperator {
+public:
+	PhysicalSharePointInsert(PhysicalPlan &physical_plan, vector<LogicalType> types,
+	                          std::shared_ptr<HttpAuthParams> auth_params,
+	                          std::string site_id, std::string list_id,
+	                          std::vector<std::string> column_names,
+	                          idx_t estimated_cardinality)
+	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
+	      auth_params_(std::move(auth_params)), site_id_(std::move(site_id)),
+	      list_id_(std::move(list_id)), column_names_(std::move(column_names)) {}
+
+	// Sink interface
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
+		return make_uniq<SharePointWriteGlobalState>(auth_params_, site_id_, list_id_);
+	}
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override {
+		return make_uniq<LocalSinkState>();
+	}
+	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override {
+		auto &g = input.global_state.Cast<SharePointWriteGlobalState>();
+		GraphSharePointClient client(g.auth_params);
+
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			const std::string fields_json = DataChunkRowToSharePointFieldsJson(chunk, row, column_names_);
+			client.CreateListItem(g.site_id, g.list_id, fields_json);
+		}
+		lock_guard<std::mutex> lk(g.lock);
+		g.affected_count += chunk.size();
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          OperatorSinkFinalizeInput &input) const override {
+		return SinkFinalizeType::READY;
+	}
+	bool IsSink() const override { return true; }
+	bool ParallelSink() const override { return false; }
+
+	// Source interface
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
+		return make_uniq<GlobalSourceState>();
+	}
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override {
+		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
+		chunk.SetCardinality(1);
+		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
+		return SourceResultType::FINISHED;
+	}
+	bool IsSource() const override { return true; }
+
+private:
+	std::shared_ptr<HttpAuthParams> auth_params_;
+	std::string site_id_;
+	std::string list_id_;
+	std::vector<std::string> column_names_;
+};
+
+// -------------------------------------------------------------------------------------------------
+// PhysicalSharePointDelete
+// -------------------------------------------------------------------------------------------------
+
+class PhysicalSharePointDelete : public PhysicalOperator {
+public:
+	PhysicalSharePointDelete(PhysicalPlan &physical_plan, vector<LogicalType> types,
+	                          std::shared_ptr<HttpAuthParams> auth_params,
+	                          std::string site_id, std::string list_id,
+	                          idx_t id_col_idx, idx_t estimated_cardinality)
+	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
+	      auth_params_(std::move(auth_params)), site_id_(std::move(site_id)),
+	      list_id_(std::move(list_id)), id_col_idx_(id_col_idx) {}
+
+	// Sink interface
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
+		return make_uniq<SharePointWriteGlobalState>(auth_params_, site_id_, list_id_);
+	}
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override {
+		return make_uniq<LocalSinkState>();
+	}
+	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override {
+		auto &g = input.global_state.Cast<SharePointWriteGlobalState>();
+		GraphSharePointClient client(g.auth_params);
+
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			const Value id_val = chunk.GetValue(id_col_idx_, row);
+			if (id_val.IsNull()) {
+				continue;
+			}
+			client.DeleteListItem(g.site_id, g.list_id, id_val.ToString());
+		}
+		lock_guard<std::mutex> lk(g.lock);
+		g.affected_count += chunk.size();
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          OperatorSinkFinalizeInput &input) const override {
+		return SinkFinalizeType::READY;
+	}
+	bool IsSink() const override { return true; }
+	bool ParallelSink() const override { return false; }
+
+	// Source interface
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
+		return make_uniq<GlobalSourceState>();
+	}
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override {
+		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
+		chunk.SetCardinality(1);
+		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
+		return SourceResultType::FINISHED;
+	}
+	bool IsSource() const override { return true; }
+
+private:
+	std::shared_ptr<HttpAuthParams> auth_params_;
+	std::string site_id_;
+	std::string list_id_;
+	idx_t id_col_idx_;
+};
+
+// -------------------------------------------------------------------------------------------------
+// PhysicalSharePointUpdate
+// -------------------------------------------------------------------------------------------------
+
+class PhysicalSharePointUpdate : public PhysicalOperator {
+public:
+	// num_table_cols: columns from the original scan (id at index 0)
+	// column_names: all table column names in physical order
+	// update_col_physical_indices: physical indices of the updated columns (from op.columns)
+	PhysicalSharePointUpdate(PhysicalPlan &physical_plan, vector<LogicalType> types,
+	                          std::shared_ptr<HttpAuthParams> auth_params,
+	                          std::string site_id, std::string list_id,
+	                          idx_t num_table_cols,
+	                          std::vector<std::string> column_names,
+	                          std::vector<idx_t> update_col_physical_indices,
+	                          idx_t estimated_cardinality)
+	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
+	      auth_params_(std::move(auth_params)), site_id_(std::move(site_id)),
+	      list_id_(std::move(list_id)), num_table_cols_(num_table_cols),
+	      column_names_(std::move(column_names)),
+	      update_col_physical_indices_(std::move(update_col_physical_indices)) {}
+
+	// Sink interface
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
+		return make_uniq<SharePointWriteGlobalState>(auth_params_, site_id_, list_id_);
+	}
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override {
+		return make_uniq<LocalSinkState>();
+	}
+	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override {
+		auto &g = input.global_state.Cast<SharePointWriteGlobalState>();
+		GraphSharePointClient client(g.auth_params);
+
+		const idx_t m = update_col_physical_indices_.size();
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			// Column 0 is always "id"
+			const Value id_val = chunk.GetValue(0, row);
+			if (id_val.IsNull()) {
+				continue;
+			}
+			const std::string item_id = id_val.ToString();
+
+			// Build fields JSON from the new values (columns after the original table columns)
+			std::string fields_json = "{";
+			bool first = true;
+			for (idx_t i = 0; i < m; i++) {
+				const idx_t phys_idx = update_col_physical_indices_[i];
+				if (phys_idx >= column_names_.size()) { continue; }
+				const std::string &col_name = column_names_[phys_idx];
+				if (col_name == "id") { continue; }
+
+				const Value new_val = chunk.GetValue(num_table_cols_ + i, row);
+				if (!first) { fields_json += ','; }
+				first = false;
+				fields_json += '"';
+				for (char c : col_name) {
+					if (c == '"') { fields_json += "\\\""; }
+					else if (c == '\\') { fields_json += "\\\\"; }
+					else { fields_json += c; }
+				}
+				fields_json += "\":";
+				fields_json += DuckDbValueToJsonLiteral(new_val);
+			}
+			fields_json += '}';
+
+			client.UpdateListItem(g.site_id, g.list_id, item_id, fields_json);
+		}
+		lock_guard<std::mutex> lk(g.lock);
+		g.affected_count += chunk.size();
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          OperatorSinkFinalizeInput &input) const override {
+		return SinkFinalizeType::READY;
+	}
+	bool IsSink() const override { return true; }
+	bool ParallelSink() const override { return false; }
+
+	// Source interface
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
+		return make_uniq<GlobalSourceState>();
+	}
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override {
+		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
+		chunk.SetCardinality(1);
+		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
+		return SourceResultType::FINISHED;
+	}
+	bool IsSource() const override { return true; }
+
+private:
+	std::shared_ptr<HttpAuthParams> auth_params_;
+	std::string site_id_;
+	std::string list_id_;
+	idx_t num_table_cols_;
+	std::vector<std::string> column_names_;
+	std::vector<idx_t> update_col_physical_indices_;
+};
 
 // -------------------------------------------------------------------------------------------------
 // SharePointSchemaEntry Implementation
@@ -377,8 +626,10 @@ duckdb::TableStorageInfo SharePointTableEntry::GetStorageInfo(duckdb::ClientCont
 	return duckdb::TableStorageInfo();
 }
 
-void SharePointTableEntry::BindUpdateConstraints(duckdb::Binder &binder, duckdb::LogicalGet &get, duckdb::LogicalProjection &proj, duckdb::LogicalUpdate &update, duckdb::ClientContext &context) {
-	throw duckdb::NotImplementedException("Updates are not supported on SharePoint tables");
+void SharePointTableEntry::BindUpdateConstraints(duckdb::Binder &binder, duckdb::LogicalGet &get,
+                                                  duckdb::LogicalProjection &proj, duckdb::LogicalUpdate &update,
+                                                  duckdb::ClientContext &context) {
+	// External table — no CHECK constraints or indexes to bind; no-op.
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -475,16 +726,77 @@ duckdb::PhysicalOperator &SharePointCatalog::PlanCreateTableAs(duckdb::ClientCon
 	throw duckdb::NotImplementedException("CREATE TABLE AS is not supported on SharePoint catalogs");
 }
 
-duckdb::PhysicalOperator &SharePointCatalog::PlanInsert(duckdb::ClientContext &context, duckdb::PhysicalPlanGenerator &planner, duckdb::LogicalInsert &op, duckdb::optional_ptr<duckdb::PhysicalOperator> plan) {
-	throw duckdb::NotImplementedException("INSERT is not supported on SharePoint catalogs");
+duckdb::PhysicalOperator &SharePointCatalog::PlanInsert(duckdb::ClientContext &context,
+                                                         duckdb::PhysicalPlanGenerator &planner,
+                                                         duckdb::LogicalInsert &op,
+                                                         duckdb::optional_ptr<duckdb::PhysicalOperator> plan) {
+	if (!plan) {
+		throw duckdb::InvalidInputException("INSERT requires a source (VALUES or SELECT)");
+	}
+
+	auto &sp_table = op.table.Cast<SharePointTableEntry>();
+
+	// Resolve defaults so child outputs columns in table physical order
+	duckdb::PhysicalOperator *child_plan = plan.get();
+	if (!op.column_index_map.empty()) {
+		child_plan = &planner.ResolveDefaultsProjection(op, *child_plan);
+	}
+
+	// Collect column names in physical order
+	std::vector<std::string> col_names;
+	for (const auto &col : op.table.GetColumns().Physical()) {
+		col_names.push_back(col.Name());
+	}
+
+	auto &insert_op = planner.Make<PhysicalSharePointInsert>(
+	    op.types, sp_table.GetAuthParams(), site_id_, sp_table.GetListId(),
+	    std::move(col_names), op.estimated_cardinality);
+	insert_op.children.push_back(*child_plan);
+	return insert_op;
 }
 
-duckdb::PhysicalOperator &SharePointCatalog::PlanDelete(duckdb::ClientContext &context, duckdb::PhysicalPlanGenerator &planner, duckdb::LogicalDelete &op, duckdb::PhysicalOperator &plan) {
-	throw duckdb::NotImplementedException("DELETE is not supported on SharePoint catalogs");
+duckdb::PhysicalOperator &SharePointCatalog::PlanDelete(duckdb::ClientContext &context,
+                                                         duckdb::PhysicalPlanGenerator &planner,
+                                                         duckdb::LogicalDelete &op,
+                                                         duckdb::PhysicalOperator &plan) {
+	auto &sp_table = op.table.Cast<SharePointTableEntry>();
+
+	// The "id" column is always column 0 in the scan output
+	constexpr idx_t id_col_idx = 0;
+
+	auto &del_op = planner.Make<PhysicalSharePointDelete>(
+	    op.types, sp_table.GetAuthParams(), site_id_, sp_table.GetListId(),
+	    id_col_idx, op.estimated_cardinality);
+	del_op.children.push_back(plan);
+	return del_op;
 }
 
-duckdb::PhysicalOperator &SharePointCatalog::PlanUpdate(duckdb::ClientContext &context, duckdb::PhysicalPlanGenerator &planner, duckdb::LogicalUpdate &op, duckdb::PhysicalOperator &plan) {
-	throw duckdb::NotImplementedException("UPDATE is not supported on SharePoint catalogs");
+duckdb::PhysicalOperator &SharePointCatalog::PlanUpdate(duckdb::ClientContext &context,
+                                                         duckdb::PhysicalPlanGenerator &planner,
+                                                         duckdb::LogicalUpdate &op,
+                                                         duckdb::PhysicalOperator &plan) {
+	auto &sp_table = op.table.Cast<SharePointTableEntry>();
+
+	// Collect column names in physical order
+	const idx_t num_table_cols = op.table.GetColumns().PhysicalColumnCount();
+	std::vector<std::string> col_names;
+	col_names.reserve(num_table_cols);
+	for (const auto &col : op.table.GetColumns().Physical()) {
+		col_names.push_back(col.Name());
+	}
+
+	// Collect physical indices of updated columns (op.columns is a vector<PhysicalIndex>)
+	std::vector<idx_t> update_col_indices;
+	update_col_indices.reserve(op.columns.size());
+	for (const auto &phys_idx : op.columns) {
+		update_col_indices.push_back(phys_idx.index);
+	}
+
+	auto &upd_op = planner.Make<PhysicalSharePointUpdate>(
+	    op.types, sp_table.GetAuthParams(), site_id_, sp_table.GetListId(),
+	    num_table_cols, std::move(col_names), std::move(update_col_indices), op.estimated_cardinality);
+	upd_op.children.push_back(plan);
+	return upd_op;
 }
 
 duckdb::unique_ptr<duckdb::LogicalOperator> SharePointCatalog::BindCreateIndex(duckdb::Binder &binder, duckdb::CreateStatement &stmt, duckdb::TableCatalogEntry &table, duckdb::unique_ptr<duckdb::LogicalOperator> plan) {

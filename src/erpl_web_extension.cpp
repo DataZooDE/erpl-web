@@ -32,7 +32,9 @@
 #include "dataverse_functions.hpp"
 #include "graph_excel_secret.hpp"
 #include "graph_excel_functions.hpp"
+#include "graph_excel_copy.hpp"
 #include "graph_sharepoint_functions.hpp"
+#include "graph_sharepoint_copy.hpp"
 #include "graph_sharepoint_storage.hpp"
 #include "graph_planner_functions.hpp"
 #include "graph_outlook_functions.hpp"
@@ -771,12 +773,18 @@ static void RegisterGraphExcelFunctions(ExtensionLoader &loader)
 
     // Register Microsoft Graph Excel table functions
     erpl_web::GraphExcelFunctions::Register(loader);
+
+    // Register COPY TO for Excel tables (FORMAT ms_excel_table)
+    erpl_web::RegisterExcelTableCopyFunction(loader);
 }
 
 static void RegisterGraphSharePointFunctions(ExtensionLoader &loader)
 {
     // Register Microsoft Graph SharePoint table functions
     erpl_web::GraphSharePointFunctions::Register(loader);
+
+    // Register COPY TO for SharePoint lists (FORMAT ms_sharepoint_list)
+    erpl_web::RegisterSharePointListCopyFunction(loader);
 
 #ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
     auto &callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
