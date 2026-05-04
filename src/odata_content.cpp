@@ -1143,30 +1143,24 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
         duck_row.reserve(column_names.size());
 
         for (size_t i_col = 0; i_col < column_names.size(); i_col++) {
-            auto column_name = column_names[i_col];
-            auto column_type = column_types[i_col];
-            
-            // Simple property lookup - no complex JSON path evaluation needed
+            const auto &column_name = column_names[i_col];
+            const auto &column_type = column_types[i_col];
+
             auto json_value = yyjson_obj_get(json_row, column_name.c_str());
             if (!json_value) {
-                // Column not found, use null value
-                auto duck_value = duckdb::Value().DefaultCastAs(column_type);
-                duck_row.push_back(duck_value);
+                duck_row.emplace_back();  // null
                 continue;
             }
-            
+
             try {
-                auto duck_value = DeserializeJsonValue(json_value, column_type);
-                duck_row.push_back(duck_value);
+                duck_row.push_back(DeserializeJsonValue(json_value, column_type));
             } catch (const std::exception& e) {
                 ERPL_TRACE_ERROR("ODATA_TO_ROWS", duckdb::StringUtil::Format("Failed to deserialize %s: %s", column_name, e.what()));
-                // Use a default value instead of failing the entire row
-                auto duck_value = duckdb::Value().DefaultCastAs(column_type);
-                duck_row.push_back(duck_value);
+                duck_row.emplace_back();  // null on error
             }
         }
 
-        duck_rows.push_back(duck_row);
+        duck_rows.push_back(std::move(duck_row));
     }
 
     ERPL_TRACE_DEBUG("ODATA_TO_ROWS", duckdb::StringUtil::Format("Total rows processed: %d", duck_rows.size()));

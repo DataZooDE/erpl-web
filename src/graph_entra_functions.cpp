@@ -1,6 +1,8 @@
 #include "graph_entra_functions.hpp"
+#include "graph_client.hpp"
 #include "graph_entra_client.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_output_utils.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
@@ -70,26 +72,6 @@ struct GraphSignInLogsBindData : public TableFunctionData {
 };
 
 // =============================================================================
-// Helper Functions
-// =============================================================================
-
-static std::string SafeGetString(yyjson_val *obj, const char *key) {
-    auto val = yyjson_obj_get(obj, key);
-    if (val && yyjson_is_str(val)) {
-        return yyjson_get_str(val);
-    }
-    return "";
-}
-
-static bool SafeGetBool(yyjson_val *obj, const char *key, bool default_val = false) {
-    auto val = yyjson_obj_get(obj, key);
-    if (val && yyjson_is_bool(val)) {
-        return yyjson_get_bool(val);
-    }
-    return default_val;
-}
-
-// =============================================================================
 // graph_users Implementation
 // =============================================================================
 
@@ -141,13 +123,13 @@ unique_ptr<FunctionData> GraphEntraFunctions::UsersBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->user_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->user_principal_names.push_back(SafeGetString(item, "userPrincipalName"));
-            bind_data->mail_addresses.push_back(SafeGetString(item, "mail"));
-            bind_data->job_titles.push_back(SafeGetString(item, "jobTitle"));
-            bind_data->departments.push_back(SafeGetString(item, "department"));
-            bind_data->account_enabled.push_back(SafeGetBool(item, "accountEnabled", true));
+            bind_data->user_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->user_principal_names.push_back(GraphJsonGetString(item, "userPrincipalName"));
+            bind_data->mail_addresses.push_back(GraphJsonGetString(item, "mail"));
+            bind_data->job_titles.push_back(GraphJsonGetString(item, "jobTitle"));
+            bind_data->departments.push_back(GraphJsonGetString(item, "department"));
+            bind_data->account_enabled.push_back(GraphJsonGetBool(item, "accountEnabled", true));
         }
     }
 
@@ -173,13 +155,13 @@ void GraphEntraFunctions::UsersScan(
     while (bind_data.current_idx < bind_data.user_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.user_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.user_principal_names[i]));
-        output.SetValue(3, count, Value(bind_data.mail_addresses[i]));
-        output.SetValue(4, count, Value(bind_data.job_titles[i]));
-        output.SetValue(5, count, Value(bind_data.departments[i]));
-        output.SetValue(6, count, Value(bind_data.account_enabled[i]));
+        SetStrCellNN(output.data[0], count, bind_data.user_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.user_principal_names[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.mail_addresses[i].c_str());
+        SetStrCellNN(output.data[4], count, bind_data.job_titles[i].c_str());
+        SetStrCellNN(output.data[5], count, bind_data.departments[i].c_str());
+        SetBoolCellNN(output.data[6], count, bind_data.account_enabled[i]);
 
         bind_data.current_idx++;
         count++;
@@ -239,12 +221,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::GroupsBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->group_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->descriptions.push_back(SafeGetString(item, "description"));
-            bind_data->mail_addresses.push_back(SafeGetString(item, "mail"));
-            bind_data->mail_enabled.push_back(SafeGetBool(item, "mailEnabled"));
-            bind_data->security_enabled.push_back(SafeGetBool(item, "securityEnabled"));
+            bind_data->group_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->descriptions.push_back(GraphJsonGetString(item, "description"));
+            bind_data->mail_addresses.push_back(GraphJsonGetString(item, "mail"));
+            bind_data->mail_enabled.push_back(GraphJsonGetBool(item, "mailEnabled"));
+            bind_data->security_enabled.push_back(GraphJsonGetBool(item, "securityEnabled"));
         }
     }
 
@@ -270,12 +252,12 @@ void GraphEntraFunctions::GroupsScan(
     while (bind_data.current_idx < bind_data.group_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.group_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.descriptions[i]));
-        output.SetValue(3, count, Value(bind_data.mail_addresses[i]));
-        output.SetValue(4, count, Value(bind_data.mail_enabled[i]));
-        output.SetValue(5, count, Value(bind_data.security_enabled[i]));
+        SetStrCellNN(output.data[0], count, bind_data.group_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.descriptions[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.mail_addresses[i].c_str());
+        SetBoolCellNN(output.data[4], count, bind_data.mail_enabled[i]);
+        SetBoolCellNN(output.data[5], count, bind_data.security_enabled[i]);
 
         bind_data.current_idx++;
         count++;
@@ -335,12 +317,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::DevicesBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->device_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->operating_systems.push_back(SafeGetString(item, "operatingSystem"));
-            bind_data->os_versions.push_back(SafeGetString(item, "operatingSystemVersion"));
-            bind_data->trust_types.push_back(SafeGetString(item, "trustType"));
-            bind_data->account_enabled.push_back(SafeGetBool(item, "accountEnabled", true));
+            bind_data->device_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->operating_systems.push_back(GraphJsonGetString(item, "operatingSystem"));
+            bind_data->os_versions.push_back(GraphJsonGetString(item, "operatingSystemVersion"));
+            bind_data->trust_types.push_back(GraphJsonGetString(item, "trustType"));
+            bind_data->account_enabled.push_back(GraphJsonGetBool(item, "accountEnabled", true));
         }
     }
 
@@ -366,12 +348,12 @@ void GraphEntraFunctions::DevicesScan(
     while (bind_data.current_idx < bind_data.device_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.device_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.operating_systems[i]));
-        output.SetValue(3, count, Value(bind_data.os_versions[i]));
-        output.SetValue(4, count, Value(bind_data.trust_types[i]));
-        output.SetValue(5, count, Value(bind_data.account_enabled[i]));
+        SetStrCellNN(output.data[0], count, bind_data.device_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.operating_systems[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.os_versions[i].c_str());
+        SetStrCellNN(output.data[4], count, bind_data.trust_types[i].c_str());
+        SetBoolCellNN(output.data[5], count, bind_data.account_enabled[i]);
 
         bind_data.current_idx++;
         count++;
@@ -432,12 +414,12 @@ unique_ptr<FunctionData> GraphEntraFunctions::SignInLogsBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->log_ids.push_back(SafeGetString(item, "id"));
-            bind_data->user_display_names.push_back(SafeGetString(item, "userDisplayName"));
-            bind_data->user_principal_names.push_back(SafeGetString(item, "userPrincipalName"));
-            bind_data->app_display_names.push_back(SafeGetString(item, "appDisplayName"));
-            bind_data->ip_addresses.push_back(SafeGetString(item, "ipAddress"));
-            bind_data->created_datetimes.push_back(SafeGetString(item, "createdDateTime"));
+            bind_data->log_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->user_display_names.push_back(GraphJsonGetString(item, "userDisplayName"));
+            bind_data->user_principal_names.push_back(GraphJsonGetString(item, "userPrincipalName"));
+            bind_data->app_display_names.push_back(GraphJsonGetString(item, "appDisplayName"));
+            bind_data->ip_addresses.push_back(GraphJsonGetString(item, "ipAddress"));
+            bind_data->created_datetimes.push_back(GraphJsonGetString(item, "createdDateTime"));
 
             // Status is nested object with errorCode
             auto status_obj = yyjson_obj_get(item, "status");
@@ -477,13 +459,13 @@ void GraphEntraFunctions::SignInLogsScan(
     while (bind_data.current_idx < bind_data.log_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.log_ids[i]));
-        output.SetValue(1, count, Value(bind_data.user_display_names[i]));
-        output.SetValue(2, count, Value(bind_data.user_principal_names[i]));
-        output.SetValue(3, count, Value(bind_data.app_display_names[i]));
-        output.SetValue(4, count, Value(bind_data.ip_addresses[i]));
-        output.SetValue(5, count, Value(bind_data.created_datetimes[i]));
-        output.SetValue(6, count, Value(bind_data.statuses[i]));
+        SetStrCellNN(output.data[0], count, bind_data.log_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.user_display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.user_principal_names[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.app_display_names[i].c_str());
+        SetStrCellNN(output.data[4], count, bind_data.ip_addresses[i].c_str());
+        SetStrCellNN(output.data[5], count, bind_data.created_datetimes[i].c_str());
+        SetStrCellNN(output.data[6], count, bind_data.statuses[i].c_str());
 
         bind_data.current_idx++;
         count++;

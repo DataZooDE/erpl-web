@@ -130,10 +130,9 @@ void ODataProgressTracker::Reset() {
 // ODataRowBuffer Implementation
 // ============================================================================
 
-void ODataRowBuffer::AddRows(
-    const std::vector<std::vector<duckdb::Value>> &rows) {
-  for (const auto &row : rows) {
-        row_buffer_.emplace_back(row);
+void ODataRowBuffer::AddRows(std::vector<std::vector<duckdb::Value>> rows) {
+    for (auto &row : rows) {
+        row_buffer_.emplace_back(std::move(row));
     }
 }
 
@@ -141,8 +140,7 @@ std::vector<duckdb::Value> ODataRowBuffer::GetNextRow() {
     if (row_buffer_.empty()) {
         return {};
     }
-    
-    auto row = row_buffer_.front();
+    auto row = std::move(row_buffer_.front());
     row_buffer_.pop_front();
     return row;
 }
@@ -736,25 +734,30 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
         // Enhanced primitive type handling with robust fallbacks
         if (target_type.id() == duckdb::LogicalTypeId::VARCHAR) {
             if (duckdb_yyjson::yyjson_is_str(value)) {
-                std::string s = duckdb_yyjson::yyjson_get_str(value);
+                const char *s = duckdb_yyjson::yyjson_get_str(value);
+                const size_t s_len = strlen(s);
                 // Normalize OData V2 legacy date format /Date(ms[+/-HHMM])/
-        if (s.size() >= 8 && s.rfind("/Date(", 0) == 0 &&
-            s.substr(s.size() - 2) == ")/") {
-                    std::string inner = s.substr(6, s.size() - 8);
-                    size_t pos = inner.find_first_of("+-", 1);
-          std::string ms_str =
-              (pos == std::string::npos) ? inner : inner.substr(0, pos);
+                if (s_len >= 8 && strncmp(s, "/Date(", 6) == 0 &&
+                    s[s_len - 2] == ')' && s[s_len - 1] == '/') {
+                    const char *inner = s + 6;
+                    const size_t inner_len = s_len - 8;
+                    // Find optional timezone sign after first digit
+                    size_t pos = std::string::npos;
+                    for (size_t i = 1; i < inner_len; i++) {
+                        if (inner[i] == '+' || inner[i] == '-') { pos = i; break; }
+                    }
+                    std::string ms_str(inner, pos == std::string::npos ? inner_len : pos);
                     try {
                         long long ms = std::stoll(ms_str);
                         long long sec = ms / 1000;
-            auto ts_val = duckdb::Value::TIMESTAMP(
-                duckdb::Timestamp::FromEpochSeconds(sec));
+                        auto ts_val = duckdb::Value::TIMESTAMP(
+                            duckdb::Timestamp::FromEpochSeconds(sec));
                         return ts_val.DefaultCastAs(duckdb::LogicalTypeId::VARCHAR);
                     } catch (...) {
                         // fall through to raw string
                     }
                 }
-                return duckdb::Value(s);
+                return duckdb::Value(s);  // const char* → avoids string copy in common case
             } else {
                 // Convert any type to string for VARCHAR
         char *json_str = duckdb_yyjson::yyjson_val_write(value, 0, nullptr);
@@ -1574,7 +1577,7 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromServiceRoot(
   // Initialize internal components for buffering
   bind_data->InitializeComponents();
   bind_data->EnableServiceRootMode();
-  bind_data->row_buffer->AddRows(rows);
+  bind_data->row_buffer->AddRows(std::move(rows));
   bind_data->row_buffer->SetHasNextPage(false);
   bind_data->first_page_cached_ = true;
 
@@ -1709,7 +1712,7 @@ ODataReadBindData::FromServiceClient(std::shared_ptr<ODataServiceClient> client,
       }
 
       // Buffer rows (components already initialized in service root mode)
-      bind_data->row_buffer->AddRows(rows);
+      bind_data->row_buffer->AddRows(std::move(rows));
       bind_data->row_buffer->SetHasNextPage(false);
       bind_data->first_page_cached_ = true;
     } catch (...) {
@@ -1731,7 +1734,7 @@ ODataReadBindData::FromServiceClient(std::shared_ptr<ODataServiceClient> client,
                         duckdb::Value(ref.name)});
       }
 
-      bind_data->row_buffer->AddRows(rows);
+      bind_data->row_buffer->AddRows(std::move(rows));
       bind_data->row_buffer->SetHasNextPage(false);
       bind_data->first_page_cached_ = true;
     } catch (...) {
@@ -2144,13 +2147,13 @@ void ODataReadBindData::ProcessPageResponse(
     }
 
     // Buffer full rows using full schema to keep indices stable
-    // ToRows expects non-const references, so create copies
     auto column_names = schema_info.all_result_names;
     auto column_types = schema_info.all_result_types;
     auto page_rows = response->ToRows(column_names, column_types);
-    row_buffer->AddRows(page_rows);
+    const auto row_count = page_rows.size();
+    row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
-    progress_tracker->IncrementRowsFetched(page_rows.size());
+    progress_tracker->IncrementRowsFetched(row_count);
 }
 
 idx_t ODataReadBindData::EmitRowsToOutput(duckdb::DataChunk &output, const SchemaInfo& schema_info) {
@@ -2603,7 +2606,7 @@ void ODataReadBindData::PrefetchFirstPage() {
     auto all_result_types = GetResultTypes(true);
 
     auto page_rows = response->ToRows(all_result_names, all_result_types);
-    row_buffer->AddRows(page_rows);
+    row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
     first_page_cached_ = true;
 

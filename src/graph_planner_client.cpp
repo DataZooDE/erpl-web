@@ -1,11 +1,12 @@
 #include "graph_planner_client.hpp"
+#include "graph_client.hpp"
 #include "tracing.hpp"
 
 namespace erpl_web {
 
 // URL Builder implementation
 std::string GraphPlannerUrlBuilder::GetBaseUrl() {
-    return "https://graph.microsoft.com/v1.0";
+    return GraphClient::BaseUrl();
 }
 
 std::string GraphPlannerUrlBuilder::BuildGroupPlansUrl(const std::string &group_id) {
@@ -52,44 +53,15 @@ std::string GraphPlannerUrlBuilder::BuildMyPlansUrl() {
 // GraphPlannerClient implementation
 GraphPlannerClient::GraphPlannerClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
-    HttpParams http_params;
-    http_params.url_encode = false;
-    http_client = std::make_shared<HttpClient>(http_params);
 }
 
 std::string GraphPlannerClient::DoGraphGet(const std::string &url) {
-    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "GET request to: " + url);
-
-    HttpUrl http_url(url);
-    HttpRequest request(HttpMethod::GET, http_url);
-
-    if (auth_params) {
-        request.AuthHeadersFromParams(*auth_params);
-    }
-
-    request.headers["Accept"] = "application/json";
-
-    auto response = http_client->SendRequest(request);
-
-    if (!response || response->Code() != 200) {
-        std::string error_msg = "Graph API request failed";
-        if (response) {
-            error_msg += " (HTTP " + std::to_string(response->Code()) + ")";
-            if (!response->Content().empty()) {
-                error_msg += ": " + response->Content().substr(0, 500);
-            }
-        }
-        ERPL_TRACE_ERROR("GRAPH_PLANNER", error_msg);
-        throw std::runtime_error(error_msg);
-    }
-
-    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Response received: " + std::to_string(response->Content().length()) + " bytes");
-    return response->Content();
+    return GraphClient(auth_params, "GRAPH_PLANNER").Get(url);
 }
 
 std::string GraphPlannerClient::GetGroupPlans(const std::string &group_id) {
     auto url = GraphPlannerUrlBuilder::BuildGroupPlansUrl(group_id);
-    return DoGraphGet(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
 std::string GraphPlannerClient::GetPlan(const std::string &plan_id) {
@@ -99,7 +71,7 @@ std::string GraphPlannerClient::GetPlan(const std::string &plan_id) {
 
 std::string GraphPlannerClient::GetPlanBuckets(const std::string &plan_id) {
     auto url = GraphPlannerUrlBuilder::BuildPlanBucketsUrl(plan_id);
-    return DoGraphGet(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
 std::string GraphPlannerClient::GetBucket(const std::string &bucket_id) {
@@ -109,12 +81,12 @@ std::string GraphPlannerClient::GetBucket(const std::string &bucket_id) {
 
 std::string GraphPlannerClient::GetPlanTasks(const std::string &plan_id) {
     auto url = GraphPlannerUrlBuilder::BuildPlanTasksUrl(plan_id);
-    return DoGraphGet(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
 std::string GraphPlannerClient::GetBucketTasks(const std::string &bucket_id) {
     auto url = GraphPlannerUrlBuilder::BuildBucketTasksUrl(bucket_id);
-    return DoGraphGet(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
 std::string GraphPlannerClient::GetTask(const std::string &task_id) {
@@ -129,7 +101,7 @@ std::string GraphPlannerClient::GetTaskDetails(const std::string &task_id) {
 
 std::string GraphPlannerClient::GetMyTasks() {
     auto url = GraphPlannerUrlBuilder::BuildMyTasksUrl();
-    return DoGraphGet(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
 } // namespace erpl_web

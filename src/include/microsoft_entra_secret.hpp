@@ -83,7 +83,8 @@ private:
         duckdb::ClientContext &context,
         const duckdb::KeyValueSecret *kv_secret,
         const std::string &access_token,
-        int expires_in
+        int expires_in,
+        const std::string &refresh_token
     );
 };
 

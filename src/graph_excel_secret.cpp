@@ -192,7 +192,7 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
     // Configure OAuth2 flow with custom Microsoft URLs
     OAuth2Config config;
     config.client_id = client_id;
-    config.client_secret = client_secret;  // Required for confidential clients (web apps)
+    config.client_secret = client_secret;  // Optional for public clients, required for confidential clients
     config.scope = scopes;
     config.redirect_uri = redirect_uri;
     config.authorization_flow = GrantType::authorization_code;

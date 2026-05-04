@@ -4,6 +4,7 @@
 #include "sac_client.hpp"
 #include "sac_url_builder.hpp"
 #include "sac_generic_bind_data.hpp"
+#include "graph_output_utils.hpp"
 #include "http_client.hpp"
 #include "odata_content.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -272,13 +273,13 @@ static void SacShowModelsScan(duckdb::ClientContext &context, duckdb::TableFunct
     while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
         const auto &model = bind_data.items[bind_data.current_index];
 
-        output.SetValue(0, count, duckdb::Value(model.id));                    // id
-        output.SetValue(1, count, duckdb::Value(model.name));                  // name
-        output.SetValue(2, count, duckdb::Value(model.description));           // description
-        output.SetValue(3, count, duckdb::Value(model.type));                  // type
-        output.SetValue(4, count, duckdb::Value(model.owner));                 // owner
-        output.SetValue(5, count, duckdb::Value(model.created_at));            // created_at
-        output.SetValue(6, count, duckdb::Value(model.last_modified_at));      // last_modified_at
+        SetStrCellNN(output.data[0], count, model.id.c_str());
+        SetStrCellNN(output.data[1], count, model.name.c_str());
+        SetStrCellNN(output.data[2], count, model.description.c_str());
+        SetStrCellNN(output.data[3], count, model.type.c_str());
+        SetStrCellNN(output.data[4], count, model.owner.c_str());
+        SetStrCellNN(output.data[5], count, model.created_at.c_str());
+        SetStrCellNN(output.data[6], count, model.last_modified_at.c_str());
 
         bind_data.current_index++;
         count++;
@@ -346,13 +347,13 @@ static void SacShowStoriesScan(duckdb::ClientContext &context, duckdb::TableFunc
     while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
         const auto &story = bind_data.items[bind_data.current_index];
 
-        output.SetValue(0, count, duckdb::Value(story.id));                    // id
-        output.SetValue(1, count, duckdb::Value(story.name));                  // name
-        output.SetValue(2, count, duckdb::Value(story.description));           // description
-        output.SetValue(3, count, duckdb::Value(story.owner));                 // owner
-        output.SetValue(4, count, duckdb::Value(story.created_at));            // created_at
-        output.SetValue(5, count, duckdb::Value(story.last_modified_at));      // last_modified_at
-        output.SetValue(6, count, duckdb::Value(story.status));                // status
+        SetStrCellNN(output.data[0], count, story.id.c_str());
+        SetStrCellNN(output.data[1], count, story.name.c_str());
+        SetStrCellNN(output.data[2], count, story.description.c_str());
+        SetStrCellNN(output.data[3], count, story.owner.c_str());
+        SetStrCellNN(output.data[4], count, story.created_at.c_str());
+        SetStrCellNN(output.data[5], count, story.last_modified_at.c_str());
+        SetStrCellNN(output.data[6], count, story.status.c_str());
 
         bind_data.current_index++;
         count++;
@@ -431,12 +432,12 @@ static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFun
             dims_str += bind_data.details[i];
         }
 
-        output.SetValue(0, 0, duckdb::Value(bind_data.item.id));
-        output.SetValue(1, 0, duckdb::Value(bind_data.item.name));
-        output.SetValue(2, 0, duckdb::Value(bind_data.item.description));
-        output.SetValue(3, 0, duckdb::Value(bind_data.item.type));
-        output.SetValue(4, 0, duckdb::Value(dims_str));
-        output.SetValue(5, 0, duckdb::Value(bind_data.item.created_at));
+        SetStrCellNN(output.data[0], 0, bind_data.item.id.c_str());
+        SetStrCellNN(output.data[1], 0, bind_data.item.name.c_str());
+        SetStrCellNN(output.data[2], 0, bind_data.item.description.c_str());
+        SetStrCellNN(output.data[3], 0, bind_data.item.type.c_str());
+        SetStrCellNN(output.data[4], 0, dims_str.c_str());
+        SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
 
         bind_data.current_index++;
         count = 1;
@@ -516,13 +517,13 @@ static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFun
     idx_t count = 0;
 
     if (bind_data.current_index == 0) {
-        output.SetValue(0, 0, duckdb::Value(bind_data.item.id));
-        output.SetValue(1, 0, duckdb::Value(bind_data.item.name));
-        output.SetValue(2, 0, duckdb::Value(bind_data.item.description));
-        output.SetValue(3, 0, duckdb::Value(bind_data.item.owner));
-        output.SetValue(4, 0, duckdb::Value(bind_data.item.status));
-        output.SetValue(5, 0, duckdb::Value(bind_data.item.created_at));
-        output.SetValue(6, 0, duckdb::Value(bind_data.item.last_modified_at));
+        SetStrCellNN(output.data[0], 0, bind_data.item.id.c_str());
+        SetStrCellNN(output.data[1], 0, bind_data.item.name.c_str());
+        SetStrCellNN(output.data[2], 0, bind_data.item.description.c_str());
+        SetStrCellNN(output.data[3], 0, bind_data.item.owner.c_str());
+        SetStrCellNN(output.data[4], 0, bind_data.item.status.c_str());
+        SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
+        SetStrCellNN(output.data[6], 0, bind_data.item.last_modified_at.c_str());
 
         bind_data.current_index++;
         count = 1;

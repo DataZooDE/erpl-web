@@ -1,6 +1,8 @@
 #include "graph_teams_functions.hpp"
+#include "graph_client.hpp"
 #include "graph_teams_client.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_output_utils.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
@@ -65,18 +67,6 @@ struct GraphChannelMessagesBindData : public TableFunctionData {
 };
 
 // =============================================================================
-// Helper Functions
-// =============================================================================
-
-static std::string SafeGetString(yyjson_val *obj, const char *key) {
-    auto val = yyjson_obj_get(obj, key);
-    if (val && yyjson_is_str(val)) {
-        return yyjson_get_str(val);
-    }
-    return "";
-}
-
-// =============================================================================
 // graph_my_teams Implementation
 // =============================================================================
 
@@ -121,10 +111,10 @@ unique_ptr<FunctionData> GraphTeamsFunctions::MyTeamsBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->team_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->descriptions.push_back(SafeGetString(item, "description"));
-            bind_data->visibilities.push_back(SafeGetString(item, "visibility"));
+            bind_data->team_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->descriptions.push_back(GraphJsonGetString(item, "description"));
+            bind_data->visibilities.push_back(GraphJsonGetString(item, "visibility"));
         }
     }
 
@@ -150,10 +140,10 @@ void GraphTeamsFunctions::MyTeamsScan(
     while (bind_data.current_idx < bind_data.team_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.team_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.descriptions[i]));
-        output.SetValue(3, count, Value(bind_data.visibilities[i]));
+        SetStrCellNN(output.data[0], count, bind_data.team_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.descriptions[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.visibilities[i].c_str());
 
         bind_data.current_idx++;
         count++;
@@ -217,10 +207,10 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->channel_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->descriptions.push_back(SafeGetString(item, "description"));
-            bind_data->membership_types.push_back(SafeGetString(item, "membershipType"));
+            bind_data->channel_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->descriptions.push_back(GraphJsonGetString(item, "description"));
+            bind_data->membership_types.push_back(GraphJsonGetString(item, "membershipType"));
         }
     }
 
@@ -246,10 +236,10 @@ void GraphTeamsFunctions::TeamChannelsScan(
     while (bind_data.current_idx < bind_data.channel_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.channel_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.descriptions[i]));
-        output.SetValue(3, count, Value(bind_data.membership_types[i]));
+        SetStrCellNN(output.data[0], count, bind_data.channel_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.descriptions[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.membership_types[i].c_str());
 
         bind_data.current_idx++;
         count++;
@@ -313,9 +303,9 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->member_ids.push_back(SafeGetString(item, "id"));
-            bind_data->display_names.push_back(SafeGetString(item, "displayName"));
-            bind_data->emails.push_back(SafeGetString(item, "email"));
+            bind_data->member_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
+            bind_data->emails.push_back(GraphJsonGetString(item, "email"));
 
             // Roles is an array, get first role if available
             auto roles_arr = yyjson_obj_get(item, "roles");
@@ -354,10 +344,10 @@ void GraphTeamsFunctions::TeamMembersScan(
     while (bind_data.current_idx < bind_data.member_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.member_ids[i]));
-        output.SetValue(1, count, Value(bind_data.display_names[i]));
-        output.SetValue(2, count, Value(bind_data.emails[i]));
-        output.SetValue(3, count, Value(bind_data.roles[i]));
+        SetStrCellNN(output.data[0], count, bind_data.member_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.emails[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.roles[i].c_str());
 
         bind_data.current_idx++;
         count++;
@@ -423,15 +413,15 @@ unique_ptr<FunctionData> GraphTeamsFunctions::ChannelMessagesBind(
         size_t idx, max;
         yyjson_val *item;
         yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->message_ids.push_back(SafeGetString(item, "id"));
-            bind_data->created_datetimes.push_back(SafeGetString(item, "createdDateTime"));
+            bind_data->message_ids.push_back(GraphJsonGetString(item, "id"));
+            bind_data->created_datetimes.push_back(GraphJsonGetString(item, "createdDateTime"));
 
             // from is a nested object
             auto from_obj = yyjson_obj_get(item, "from");
             if (from_obj) {
                 auto user_obj = yyjson_obj_get(from_obj, "user");
                 if (user_obj) {
-                    bind_data->from_names.push_back(SafeGetString(user_obj, "displayName"));
+                    bind_data->from_names.push_back(GraphJsonGetString(user_obj, "displayName"));
                 } else {
                     bind_data->from_names.push_back("");
                 }
@@ -442,12 +432,12 @@ unique_ptr<FunctionData> GraphTeamsFunctions::ChannelMessagesBind(
             // body is a nested object
             auto body_obj = yyjson_obj_get(item, "body");
             if (body_obj) {
-                bind_data->body_contents.push_back(SafeGetString(body_obj, "content"));
+                bind_data->body_contents.push_back(GraphJsonGetString(body_obj, "content"));
             } else {
                 bind_data->body_contents.push_back("");
             }
 
-            bind_data->importance_levels.push_back(SafeGetString(item, "importance"));
+            bind_data->importance_levels.push_back(GraphJsonGetString(item, "importance"));
         }
     }
 
@@ -473,11 +463,11 @@ void GraphTeamsFunctions::ChannelMessagesScan(
     while (bind_data.current_idx < bind_data.message_ids.size() && count < max_count) {
         idx_t i = bind_data.current_idx;
 
-        output.SetValue(0, count, Value(bind_data.message_ids[i]));
-        output.SetValue(1, count, Value(bind_data.created_datetimes[i]));
-        output.SetValue(2, count, Value(bind_data.from_names[i]));
-        output.SetValue(3, count, Value(bind_data.body_contents[i]));
-        output.SetValue(4, count, Value(bind_data.importance_levels[i]));
+        SetStrCellNN(output.data[0], count, bind_data.message_ids[i].c_str());
+        SetStrCellNN(output.data[1], count, bind_data.created_datetimes[i].c_str());
+        SetStrCellNN(output.data[2], count, bind_data.from_names[i].c_str());
+        SetStrCellNN(output.data[3], count, bind_data.body_contents[i].c_str());
+        SetStrCellNN(output.data[4], count, bind_data.importance_levels[i].c_str());
 
         bind_data.current_idx++;
         count++;

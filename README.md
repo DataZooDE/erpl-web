@@ -17,7 +17,7 @@ ERPL Web is a production-grade DuckDB extension that lets you call HTTP/REST API
 - Delta Sharing: Query Databricks, SAP, and other Delta Sharing protocol-compliant services via Parquet files
 - SAP Datasphere: List spaces/assets, describe assets, and read relational/analytical data
 - SAP Analytics Cloud: Query models, stories, discover dimensions/measures with automatic schema
-- Microsoft 365: Query Entra ID users/groups, SharePoint lists/Excel, Teams, Outlook, Planner via Graph API; attach a whole site as views with `sharepoint_attach`
+- Microsoft 365: Query Entra ID users/groups, SharePoint lists/Excel, Teams, Outlook, Planner via Graph API; attach SharePoint lists as a read-only catalog with `ATTACH ... TYPE sharepoint_lists`
 - Microsoft Dynamics 365: Read Business Central ERP and Dataverse/CRM data from SQL
 - OAuth2 + Secrets: Secure flows with refresh, client credentials, and secret providers
 - Tracing: Deep, configurable tracing for debugging and performance tuning
@@ -191,11 +191,11 @@ CREATE SECRET ms (
 -- 2. Query Entra ID users
 SELECT display_name, mail, department FROM graph_users();
 
--- 3. Attach a SharePoint site as views (lists auto-inferred, or add drive for Excel)
-SELECT success FROM sharepoint_attach('Finance', secret := 'ms');
+-- 3. Attach a SharePoint site as a read-only catalog of list tables
+ATTACH 'Finance' AS finance_sp (TYPE sharepoint_lists, SECRET 'ms');
 
--- 4. Query the attached views directly
-SELECT * FROM project_tracker WHERE status = 'Active';
+-- 4. Query the attached tables directly
+SELECT * FROM finance_sp.main."Project Tracker" WHERE status = 'Active';
 ```
 
 ---
@@ -772,56 +772,22 @@ Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, 
 
 ### SharePoint Attach
 
-Attach all lists (or all Excel workbooks) from a SharePoint site as DuckDB views in one call. Views are lazy — no data is fetched at attach time; the API is only hit when a view is queried.
+Attach SharePoint lists from a site as a read-only DuckDB catalog. Tables are lazy — list data is fetched when a table is queried.
 
-Required permissions: `Sites.Read.All` for lists; `Files.ReadWrite.All` + WAC for Excel.
-
-```sql
--- Attach all SharePoint lists as views (auto-inferred when no drive given)
-SELECT success FROM sharepoint_attach('Finance', secret := 'ms_graph');
-
--- Attach all Excel workbook worksheets from a document library
-SELECT success FROM sharepoint_attach('Finance',
-  drive   := 'Documents',
-  secret  := 'ms_graph'
-);
-
--- Attach only named Excel tables (not worksheets)
-SELECT success FROM sharepoint_attach('Finance',
-  drive   := 'Documents',
-  content := 'tables',
-  secret  := 'ms_graph'
-);
-
--- Attach both lists AND Excel sheets; replace existing views
-SELECT success FROM sharepoint_attach('Finance',
-  drive     := 'Documents',
-  content   := 'both',
-  secret    := 'ms_graph',
-  overwrite := true
-);
-```
-
-After attaching, views are available directly in the current schema:
+Required permissions: `Sites.Read.All`.
 
 ```sql
--- Example: a list named "Project Tracker" becomes:
-SELECT * FROM project_tracker;
-
--- Example: Budget.xlsx Sheet1 becomes:
-SELECT * FROM budget_sheet1;
+ATTACH 'Finance' AS finance_sp (TYPE sharepoint_lists, SECRET 'ms_graph');
 ```
 
-**`content` values:**
+After attaching, SharePoint lists are available as tables in the attached catalog:
 
-| Value | What is attached |
-|-------|-----------------|
-| `'lists'` | SharePoint lists (default when no `drive` is given) |
-| `'excel'` | All `.xlsx` worksheets in the drive (default when `drive` is given) |
-| `'tables'` | Only named Excel tables (not raw worksheets) |
-| `'both'` | SharePoint lists + Excel worksheets |
+```sql
+SELECT * FROM finance_sp.main."Project Tracker";
+SHOW TABLES IN finance_sp;
+```
 
-Function: `sharepoint_attach(site, [secret, drive, content, overwrite])`
+Storage extension: `ATTACH '<site name, URL, or site-id>' AS <catalog> (TYPE sharepoint_lists, SECRET '<secret>')`
 
 ---
 

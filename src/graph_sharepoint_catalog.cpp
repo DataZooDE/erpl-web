@@ -5,6 +5,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/types/vector.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "yyjson.hpp"
 #include <algorithm>
@@ -24,8 +25,26 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 	std::string list_id;
 	std::shared_ptr<HttpAuthParams> auth_params;
 	std::vector<std::string> column_names;
-	std::string json_response;  // fetched lazily on first scan call
+	std::string json_response;
+	yyjson_doc *parsed_doc = nullptr;
+	yyjson_arr_iter item_iter = {};
 	bool done = false;
+
+	~SharePointListScanBindData() override {
+		if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+	}
+
+	bool InitIterator() {
+		parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+		json_response.clear();
+		json_response.shrink_to_fit();
+		if (!parsed_doc) { return false; }
+		yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+		yyjson_val *arr = yyjson_obj_get(root, "value");
+		if (!arr || !yyjson_is_arr(arr)) { return false; }
+		yyjson_arr_iter_init(arr, &item_iter);
+		return true;
+	}
 };
 
 static void SharePointListScan(duckdb::ClientContext &context,
@@ -39,85 +58,66 @@ static void SharePointListScan(duckdb::ClientContext &context,
 		return;
 	}
 
-	// Lazy-fetch items on first invocation
-	if (bind_data.json_response.empty()) {
+	// Lazy-fetch on first call
+	if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
 		GraphSharePointClient client(bind_data.auth_params);
 		bind_data.json_response = client.GetListItems(bind_data.site_id, bind_data.list_id);
 	}
 
-	yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-	if (!doc) {
-		throw InvalidInputException("SharePointListScan: failed to parse Graph API response");
+	// Parse once; keep doc alive in bind_data so iterator stays valid across batches
+	if (!bind_data.parsed_doc) {
+		if (!bind_data.InitIterator()) {
+			bind_data.done = true;
+			output.SetCardinality(0);
+			return;
+		}
 	}
 
-	yyjson_val *root = yyjson_doc_get_root(doc);
-	yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-	if (!value_arr || !yyjson_is_arr(value_arr)) {
-		yyjson_doc_free(doc);
-		bind_data.done = true;
-		output.SetCardinality(0);
-		return;
-	}
-
-	size_t count = yyjson_arr_size(value_arr);
-	if (count > STANDARD_VECTOR_SIZE) {
-		count = STANDARD_VECTOR_SIZE;
-	}
-
-	output.SetCardinality(count);
-
-	size_t idx, max;
-	yyjson_val *item;
+	const size_t col_count = bind_data.column_names.size();
 	idx_t row = 0;
+	yyjson_val *item;
 
-	yyjson_arr_foreach(value_arr, idx, max, item) {
-		if (row >= count) { break; }
-
+	while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
 		yyjson_val *fields_obj = yyjson_obj_get(item, "fields");
 
-		for (size_t col = 0; col < bind_data.column_names.size(); col++) {
+		for (size_t col = 0; col < col_count; col++) {
 			const std::string &col_name = bind_data.column_names[col];
+			auto &vec = output.data[col];
 
-			if (col_name == "id") {
-				yyjson_val *id_val = yyjson_obj_get(item, "id");
-				output.SetValue(col, row, id_val && yyjson_is_str(id_val) ?
-				    Value(yyjson_get_str(id_val)) : Value());
-			} else if (fields_obj) {
-				yyjson_val *field_val = yyjson_obj_get(fields_obj, col_name.c_str());
-				if (field_val) {
-					if (yyjson_is_str(field_val)) {
-						output.SetValue(col, row, Value(yyjson_get_str(field_val)));
-					} else if (yyjson_is_num(field_val)) {
-						output.SetValue(col, row, Value(std::to_string(yyjson_get_num(field_val))));
-					} else if (yyjson_is_bool(field_val)) {
-						output.SetValue(col, row, Value(yyjson_get_bool(field_val) ? "true" : "false"));
-					} else if (yyjson_is_null(field_val)) {
-						output.SetValue(col, row, Value());
-					} else {
-						// Complex object — serialize as JSON string
-						size_t json_len;
-						char *json_str = yyjson_val_write(field_val, 0, &json_len);
-						if (json_str) {
-							output.SetValue(col, row, Value(std::string(json_str, json_len)));
-							free(json_str);
-						} else {
-							output.SetValue(col, row, Value());
-						}
-					}
-				} else {
-					output.SetValue(col, row, Value());
-				}
+			yyjson_val *field_val = (col_name == "id")
+			    ? yyjson_obj_get(item, "id")
+			    : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
+
+			if (!field_val || yyjson_is_null(field_val)) {
+				FlatVector::Validity(vec).SetInvalid(row);
+			} else if (yyjson_is_str(field_val)) {
+				FlatVector::GetData<string_t>(vec)[row] =
+				    StringVector::AddString(vec, yyjson_get_str(field_val));
+			} else if (yyjson_is_num(field_val)) {
+				const std::string num_str = std::to_string(yyjson_get_num(field_val));
+				FlatVector::GetData<string_t>(vec)[row] =
+				    StringVector::AddString(vec, num_str);
+			} else if (yyjson_is_bool(field_val)) {
+				FlatVector::GetData<string_t>(vec)[row] =
+				    StringVector::AddString(vec, yyjson_get_bool(field_val) ? "true" : "false");
 			} else {
-				output.SetValue(col, row, Value());
+				// Complex value — serialize as JSON string
+				size_t json_len;
+				char *json_str = yyjson_val_write(field_val, 0, &json_len);
+				if (json_str) {
+					FlatVector::GetData<string_t>(vec)[row] =
+					    StringVector::AddString(vec, json_str, json_len);
+					free(json_str);
+				} else {
+					FlatVector::Validity(vec).SetInvalid(row);
+				}
 			}
 		}
-
 		row++;
 	}
 
-	yyjson_doc_free(doc);
-	bind_data.done = true;
+	if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+	output.SetCardinality(row);
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -75,7 +75,6 @@ public:
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
-    std::shared_ptr<HttpClient> http_client;
 
     std::string DoGraphGet(const std::string &url);
 };

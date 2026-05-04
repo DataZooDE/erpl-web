@@ -13,6 +13,12 @@
 namespace erpl_web {
 
 namespace {
+struct MicrosoftTokenResponse {
+    std::string access_token;
+    std::string refresh_token;
+    int expires_in = 0;
+};
+
 static std::string UrlEncode(const std::string &value) {
     std::ostringstream escaped;
     escaped.fill('0');
@@ -28,6 +34,94 @@ static std::string UrlEncode(const std::string &value) {
         }
     }
     return escaped.str();
+}
+
+static MicrosoftTokenResponse ParseMicrosoftTokenResponse(const std::string &content, const std::string &endpoint_name) {
+    auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+    if (!doc) {
+        throw duckdb::IOException("Failed to parse %s token response", endpoint_name.c_str());
+    }
+
+    MicrosoftTokenResponse result;
+    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    auto access_token_json = duckdb_yyjson::yyjson_obj_get(root, "access_token");
+    if (!access_token_json || !duckdb_yyjson::yyjson_is_str(access_token_json)) {
+        duckdb_yyjson::yyjson_doc_free(doc);
+        throw duckdb::IOException("access_token missing in %s token response", endpoint_name.c_str());
+    }
+
+    result.access_token = duckdb_yyjson::yyjson_get_str(access_token_json);
+
+    auto refresh_token_json = duckdb_yyjson::yyjson_obj_get(root, "refresh_token");
+    if (refresh_token_json && duckdb_yyjson::yyjson_is_str(refresh_token_json)) {
+        result.refresh_token = duckdb_yyjson::yyjson_get_str(refresh_token_json);
+    }
+
+    auto expires_in_json = duckdb_yyjson::yyjson_obj_get(root, "expires_in");
+    if (expires_in_json && duckdb_yyjson::yyjson_is_num(expires_in_json)) {
+        result.expires_in = static_cast<int>(duckdb_yyjson::yyjson_get_int(expires_in_json));
+    }
+
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return result;
+}
+
+static std::string ParseMicrosoftError(const std::string &content) {
+    if (content.empty()) {
+        return "";
+    }
+    auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+    if (!doc) {
+        return "";
+    }
+    std::string result;
+    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    auto error_desc = duckdb_yyjson::yyjson_obj_get(root, "error_description");
+    if (error_desc && duckdb_yyjson::yyjson_is_str(error_desc)) {
+        result = duckdb_yyjson::yyjson_get_str(error_desc);
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return result;
+}
+
+static MicrosoftTokenResponse AcquireTokenWithRefreshToken(
+    const std::string &tenant_id,
+    const std::string &client_id,
+    const std::string &client_secret,
+    const std::string &scope,
+    const std::string &refresh_token) {
+
+    ERPL_TRACE_DEBUG("MS_ENTRA_TOKEN", "Refreshing token for tenant: " + tenant_id);
+
+    std::string body = "grant_type=refresh_token";
+    body += "&client_id=" + UrlEncode(client_id);
+    body += "&refresh_token=" + UrlEncode(refresh_token);
+    if (!client_secret.empty()) {
+        body += "&client_secret=" + UrlEncode(client_secret);
+    }
+    if (!scope.empty()) {
+        body += "&scope=" + UrlEncode(scope);
+    }
+
+    HttpRequest request(HttpMethod::POST, MicrosoftEntraTokenManager::GetTokenUrl(tenant_id),
+                        "application/x-www-form-urlencoded", body);
+    request.headers.emplace("Accept", "application/json");
+
+    HttpClient http;
+    auto resp = http.SendRequest(request);
+    if (!resp) {
+        throw duckdb::IOException("No response from Microsoft Entra refresh token endpoint");
+    }
+    if (resp->Code() != 200) {
+        std::string error_msg = "Microsoft Entra refresh token endpoint returned HTTP " + std::to_string(resp->Code());
+        auto details = ParseMicrosoftError(resp->Content());
+        if (!details.empty()) {
+            error_msg += ": " + details;
+        }
+        throw duckdb::IOException(error_msg);
+    }
+
+    return ParseMicrosoftTokenResponse(resp->Content(), "Microsoft Entra refresh");
 }
 } // anonymous namespace
 
@@ -207,6 +301,8 @@ std::string MicrosoftEntraTokenManager::GetToken(duckdb::ClientContext &context,
     auto client_id_val = kv_secret->secret_map.find("client_id");
     auto client_secret_val = kv_secret->secret_map.find("client_secret");
     auto scope_val = kv_secret->secret_map.find("scope");
+    auto refresh_token_val = kv_secret->secret_map.find("refresh_token");
+    auto grant_type_val = kv_secret->secret_map.find("grant_type");
 
     if (tenant_id_val == kv_secret->secret_map.end()) {
         throw duckdb::InvalidInputException("'tenant_id' not found in Microsoft Entra secret");
@@ -214,16 +310,44 @@ std::string MicrosoftEntraTokenManager::GetToken(duckdb::ClientContext &context,
     if (client_id_val == kv_secret->secret_map.end()) {
         throw duckdb::InvalidInputException("'client_id' not found in Microsoft Entra secret");
     }
-    if (client_secret_val == kv_secret->secret_map.end()) {
-        throw duckdb::InvalidInputException("'client_secret' not found in Microsoft Entra secret");
-    }
 
     std::string tenant_id = tenant_id_val->second.ToString();
     std::string client_id = client_id_val->second.ToString();
-    std::string client_secret = client_secret_val->second.ToString();
+    std::string client_secret = (client_secret_val != kv_secret->secret_map.end())
+                                    ? client_secret_val->second.ToString()
+                                    : "";
     std::string scope = (scope_val != kv_secret->secret_map.end())
                             ? scope_val->second.ToString()
                             : "https://graph.microsoft.com/.default";
+    std::string grant_type = (grant_type_val != kv_secret->secret_map.end())
+                                 ? grant_type_val->second.ToString()
+                                 : "";
+
+    if (grant_type == "authorization_code" ||
+        (refresh_token_val != kv_secret->secret_map.end() && !refresh_token_val->second.ToString().empty())) {
+        if (refresh_token_val == kv_secret->secret_map.end() || refresh_token_val->second.ToString().empty()) {
+            throw duckdb::InvalidInputException(
+                "Delegated Microsoft Entra token is expired and no refresh_token is available. Recreate the secret with offline_access scope.");
+        }
+
+        auto refreshed = AcquireTokenWithRefreshToken(
+            tenant_id, client_id, client_secret, scope, refresh_token_val->second.ToString());
+        if (refreshed.access_token.empty()) {
+            throw duckdb::IOException("Microsoft Entra refresh token response did not contain an access token");
+        }
+
+        const std::string updated_refresh = refreshed.refresh_token.empty()
+                                                ? refresh_token_val->second.ToString()
+                                                : refreshed.refresh_token;
+        if (refreshed.expires_in > 0) {
+            UpdateSecretWithTokens(context, kv_secret, refreshed.access_token, refreshed.expires_in, updated_refresh);
+        }
+        return refreshed.access_token;
+    }
+
+    if (client_secret.empty()) {
+        throw duckdb::InvalidInputException("'client_secret' not found in Microsoft Entra secret");
+    }
 
     // Acquire token using client credentials flow
     std::string access_token = AcquireTokenWithClientCredentials(tenant_id, client_id, client_secret, scope);
@@ -367,17 +491,26 @@ void MicrosoftEntraTokenManager::UpdateSecretWithTokens(
     duckdb::ClientContext &context,
     const duckdb::KeyValueSecret *kv_secret,
     const std::string &access_token,
-    int expires_in) {
+    int expires_in,
+    const std::string &refresh_token) {
 
     ERPL_TRACE_DEBUG("MS_ENTRA_TOKEN", "Updating secret with new token");
 
     // Get the secret manager
     auto &secret_manager = duckdb::SecretManager::Get(context);
     auto secret_name = kv_secret->GetName();
+    if (secret_name.empty()) {
+        ERPL_TRACE_WARN("MS_ENTRA_TOKEN", "Secret has no name; refreshed token will not be persisted");
+        return;
+    }
 
     // Get the current secret to preserve metadata
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     auto old_secret = secret_manager.GetSecretByName(transaction, secret_name);
+    if (!old_secret) {
+        ERPL_TRACE_WARN("MS_ENTRA_TOKEN", "Secret not found while persisting refreshed token: " + secret_name);
+        return;
+    }
     auto persist_type = old_secret->persist_type;
     auto storage_mode = old_secret->storage_mode;
 
@@ -394,6 +527,9 @@ void MicrosoftEntraTokenManager::UpdateSecretWithTokens(
 
     // Add the new token
     updated_secret.secret_map["access_token"] = duckdb::Value(access_token);
+    if (!refresh_token.empty()) {
+        updated_secret.secret_map["refresh_token"] = duckdb::Value(refresh_token);
+    }
 
     // Calculate expiration time
     std::time_t expires_at = std::time(nullptr) + expires_in;

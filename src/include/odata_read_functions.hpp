@@ -333,7 +333,7 @@ public:
     ODataRowBuffer() = default;
     
     // Buffer management
-    void AddRows(const std::vector<std::vector<duckdb::Value>>& rows);
+    void AddRows(std::vector<std::vector<duckdb::Value>> rows);
     std::vector<duckdb::Value> GetNextRow();
     bool HasMoreRows() const;
     size_t Size() const;

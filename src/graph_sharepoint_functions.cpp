@@ -1,6 +1,8 @@
 #include "graph_sharepoint_functions.hpp"
+#include "graph_client.hpp"
 #include "graph_sharepoint_client.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_output_utils.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
@@ -22,21 +24,75 @@ struct ShowSitesBindData : public TableFunctionData {
     std::string secret_name;
     std::string search_query;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~ShowSitesBindData() override {
+        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) { return false; }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) { return false; }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct ShowListsBindData : public TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~ShowListsBindData() override {
+        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) { return false; }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) { return false; }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct ShowDrivesBindData : public TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~ShowDrivesBindData() override {
+        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) { return false; }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) { return false; }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct DescribeListBindData : public TableFunctionData {
@@ -44,7 +100,25 @@ struct DescribeListBindData : public TableFunctionData {
     std::string site_id;
     std::string list_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~DescribeListBindData() override {
+        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) { return false; }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) { return false; }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct ListItemsBindData : public TableFunctionData {
@@ -53,7 +127,25 @@ struct ListItemsBindData : public TableFunctionData {
     std::string list_id;
     std::string json_response;
     std::vector<std::string> column_names;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~ListItemsBindData() override {
+        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) { return false; }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) { return false; }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 // ============================================================================
@@ -105,71 +197,33 @@ void GraphSharePointFunctions::ShowSitesScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
         bind_data.json_response = client.SearchSites(bind_data.search_query);
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // id
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        // name
-        yyjson_val *name_val = yyjson_obj_get(item, "name");
-        output.SetValue(1, row, name_val && yyjson_is_str(name_val) ?
-            Value(yyjson_get_str(name_val)) : Value());
-
-        // displayName
-        yyjson_val *display_val = yyjson_obj_get(item, "displayName");
-        output.SetValue(2, row, display_val && yyjson_is_str(display_val) ?
-            Value(yyjson_get_str(display_val)) : Value());
-
-        // webUrl
-        yyjson_val *url_val = yyjson_obj_get(item, "webUrl");
-        output.SetValue(3, row, url_val && yyjson_is_str(url_val) ?
-            Value(yyjson_get_str(url_val)) : Value());
-
-        // createdDateTime
-        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
-        output.SetValue(4, row, created_val && yyjson_is_str(created_val) ?
-            Value(yyjson_get_str(created_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "displayName"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "webUrl"));
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "createdDateTime"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -224,81 +278,35 @@ void GraphSharePointFunctions::ShowListsScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
         bind_data.json_response = client.ListLists(client.ResolveSiteId(bind_data.site_id));
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // id
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        // name
-        yyjson_val *name_val = yyjson_obj_get(item, "name");
-        output.SetValue(1, row, name_val && yyjson_is_str(name_val) ?
-            Value(yyjson_get_str(name_val)) : Value());
-
-        // displayName
-        yyjson_val *display_val = yyjson_obj_get(item, "displayName");
-        output.SetValue(2, row, display_val && yyjson_is_str(display_val) ?
-            Value(yyjson_get_str(display_val)) : Value());
-
-        // description
-        yyjson_val *desc_val = yyjson_obj_get(item, "description");
-        output.SetValue(3, row, desc_val && yyjson_is_str(desc_val) ?
-            Value(yyjson_get_str(desc_val)) : Value());
-
-        // webUrl
-        yyjson_val *url_val = yyjson_obj_get(item, "webUrl");
-        output.SetValue(4, row, url_val && yyjson_is_str(url_val) ?
-            Value(yyjson_get_str(url_val)) : Value());
-
-        // createdDateTime
-        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
-        output.SetValue(5, row, created_val && yyjson_is_str(created_val) ?
-            Value(yyjson_get_str(created_val)) : Value());
-
-        // lastModifiedDateTime
-        yyjson_val *modified_val = yyjson_obj_get(item, "lastModifiedDateTime");
-        output.SetValue(6, row, modified_val && yyjson_is_str(modified_val) ?
-            Value(yyjson_get_str(modified_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "displayName"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "description"));
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "webUrl"));
+        SetStrCell(output.data[5], row, yyjson_obj_get(item, "createdDateTime"));
+        SetStrCell(output.data[6], row, yyjson_obj_get(item, "lastModifiedDateTime"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -352,53 +360,31 @@ void GraphSharePointFunctions::DescribeListScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
         bind_data.json_response = client.GetListColumns(bind_data.site_id, bind_data.list_id);
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
         // name
-        yyjson_val *name_val = yyjson_obj_get(item, "name");
-        output.SetValue(0, row, name_val && yyjson_is_str(name_val) ?
-            Value(yyjson_get_str(name_val)) : Value());
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "name"));
 
         // displayName
-        yyjson_val *display_val = yyjson_obj_get(item, "displayName");
-        output.SetValue(1, row, display_val && yyjson_is_str(display_val) ?
-            Value(yyjson_get_str(display_val)) : Value());
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "displayName"));
 
         // Column type - check various type indicators
-        std::string column_type = "unknown";
+        const char *column_type = "unknown";
         if (yyjson_obj_get(item, "text")) {
             column_type = "text";
         } else if (yyjson_obj_get(item, "number")) {
@@ -418,23 +404,24 @@ void GraphSharePointFunctions::DescribeListScan(
         } else if (yyjson_obj_get(item, "calculated")) {
             column_type = "calculated";
         }
-        output.SetValue(2, row, Value(column_type));
+        SetStrCellNN(output.data[2], row, column_type);
 
         // description
-        yyjson_val *desc_val = yyjson_obj_get(item, "description");
-        output.SetValue(3, row, desc_val && yyjson_is_str(desc_val) ?
-            Value(yyjson_get_str(desc_val)) : Value());
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "description"));
 
         // required
         yyjson_val *req_val = yyjson_obj_get(item, "required");
-        output.SetValue(4, row, req_val && yyjson_is_bool(req_val) ?
-            Value::BOOLEAN(yyjson_get_bool(req_val)) : Value::BOOLEAN(false));
+        if (req_val && yyjson_is_bool(req_val)) {
+            SetBoolCellNN(output.data[4], row, yyjson_get_bool(req_val));
+        } else {
+            SetBoolCellNN(output.data[4], row, false);
+        }
 
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -543,80 +530,59 @@ void GraphSharePointFunctions::ListItemsScan(
         return;
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
+    const size_t col_count = bind_data.column_names.size();
     idx_t row = 0;
+    yyjson_val *item;
 
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // Get the fields object
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
         yyjson_val *fields_obj = yyjson_obj_get(item, "fields");
 
-        for (size_t col = 0; col < bind_data.column_names.size(); col++) {
+        for (size_t col = 0; col < col_count; col++) {
             const std::string &col_name = bind_data.column_names[col];
+            auto &vec = output.data[col];
 
-            if (col_name == "id") {
-                yyjson_val *id_val = yyjson_obj_get(item, "id");
-                output.SetValue(col, row, id_val && yyjson_is_str(id_val) ?
-                    Value(yyjson_get_str(id_val)) : Value());
-            } else if (fields_obj) {
-                yyjson_val *field_val = yyjson_obj_get(fields_obj, col_name.c_str());
-                if (field_val) {
-                    if (yyjson_is_str(field_val)) {
-                        output.SetValue(col, row, Value(yyjson_get_str(field_val)));
-                    } else if (yyjson_is_num(field_val)) {
-                        output.SetValue(col, row, Value(std::to_string(yyjson_get_num(field_val))));
-                    } else if (yyjson_is_bool(field_val)) {
-                        output.SetValue(col, row, Value(yyjson_get_bool(field_val) ? "true" : "false"));
-                    } else if (yyjson_is_null(field_val)) {
-                        output.SetValue(col, row, Value());
-                    } else {
-                        // Complex object - serialize as JSON
-                        size_t json_len;
-                        char *json_str = yyjson_val_write(field_val, 0, &json_len);
-                        if (json_str) {
-                            output.SetValue(col, row, Value(std::string(json_str, json_len)));
-                            free(json_str);
-                        } else {
-                            output.SetValue(col, row, Value());
-                        }
-                    }
-                } else {
-                    output.SetValue(col, row, Value());
-                }
+            yyjson_val *field_val = (col_name == "id")
+                ? yyjson_obj_get(item, "id")
+                : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
+
+            if (!field_val || yyjson_is_null(field_val)) {
+                FlatVector::Validity(vec).SetInvalid(row);
+            } else if (yyjson_is_str(field_val)) {
+                FlatVector::GetData<string_t>(vec)[row] =
+                    StringVector::AddString(vec, yyjson_get_str(field_val));
+            } else if (yyjson_is_num(field_val)) {
+                const std::string num_str = std::to_string(yyjson_get_num(field_val));
+                FlatVector::GetData<string_t>(vec)[row] =
+                    StringVector::AddString(vec, num_str);
+            } else if (yyjson_is_bool(field_val)) {
+                FlatVector::GetData<string_t>(vec)[row] =
+                    StringVector::AddString(vec, yyjson_get_bool(field_val) ? "true" : "false");
             } else {
-                output.SetValue(col, row, Value());
+                // Complex value — serialize as JSON string
+                size_t json_len;
+                char *json_str = yyjson_val_write(field_val, 0, &json_len);
+                if (json_str) {
+                    FlatVector::GetData<string_t>(vec)[row] =
+                        StringVector::AddString(vec, json_str, json_len);
+                    free(json_str);
+                } else {
+                    FlatVector::Validity(vec).SetInvalid(row);
+                }
             }
         }
-
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -669,70 +635,34 @@ void GraphSharePointFunctions::ShowDrivesScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
         bind_data.json_response = client.ListDrives(client.ResolveSiteId(bind_data.site_id));
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) { break; }
-
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        yyjson_val *name_val = yyjson_obj_get(item, "name");
-        output.SetValue(1, row, name_val && yyjson_is_str(name_val) ?
-            Value(yyjson_get_str(name_val)) : Value());
-
-        yyjson_val *type_val = yyjson_obj_get(item, "driveType");
-        output.SetValue(2, row, type_val && yyjson_is_str(type_val) ?
-            Value(yyjson_get_str(type_val)) : Value());
-
-        yyjson_val *url_val = yyjson_obj_get(item, "webUrl");
-        output.SetValue(3, row, url_val && yyjson_is_str(url_val) ?
-            Value(yyjson_get_str(url_val)) : Value());
-
-        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
-        output.SetValue(4, row, created_val && yyjson_is_str(created_val) ?
-            Value(yyjson_get_str(created_val)) : Value());
-
-        yyjson_val *modified_val = yyjson_obj_get(item, "lastModifiedDateTime");
-        output.SetValue(5, row, modified_val && yyjson_is_str(modified_val) ?
-            Value(yyjson_get_str(modified_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "driveType"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "webUrl"));
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "createdDateTime"));
+        SetStrCell(output.data[5], row, yyjson_obj_get(item, "lastModifiedDateTime"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    output.SetCardinality(row);
 }
 
 // ============================================================================

@@ -58,7 +58,7 @@ OAuth2Tokens OAuth2FlowV2::ExecuteFlow(const OAuth2Config& config) {
         // Step 1: Get authorization code (this generates and stores code_verifier)
         std::string auth_code = ExecuteAuthorizationCodeFlow(config);
         
-        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "About to exchange code for tokens using stored verifier: " + stored_code_verifier_);
+        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "About to exchange code for tokens using stored PKCE verifier");
         
         // Step 2: Exchange code for tokens using the same code_verifier
         OAuth2Tokens tokens = ExchangeCodeForTokens(config, auth_code, stored_code_verifier_);
@@ -80,7 +80,7 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     std::string code_challenge = GenerateCodeChallenge(stored_code_verifier_);
     std::string state = GenerateState();
     
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Stored code verifier: " + stored_code_verifier_);
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Stored PKCE code verifier");
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated code challenge: " + code_challenge);
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated state: " + state);
     
@@ -145,14 +145,14 @@ OAuth2Tokens OAuth2FlowV2::ExchangeCodeForTokens(
         throw std::invalid_argument("Code verifier cannot be empty");
     }
     
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using code verifier: " + code_verifier);
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using PKCE code verifier");
     
     // Build token exchange request
     std::string token_url = config.GetTokenUrl();
     std::string post_data = BuildTokenExchangePostData(config, authorization_code, code_verifier);
     
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange URL: " + token_url);
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange data: " + post_data);
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange form body prepared (" + std::to_string(post_data.size()) + " bytes)");
     
     try {
         // Create HTTP request
@@ -173,7 +173,7 @@ OAuth2Tokens OAuth2FlowV2::ExchangeCodeForTokens(
         }
         
         ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange response status: " + std::to_string(response->Code()));
-        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange response body: " + response->Content());
+        ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Token exchange response body received (" + std::to_string(response->Content().size()) + " bytes)");
         
         if (response->Code() == 200) {
             // Success message
@@ -209,15 +209,17 @@ std::string OAuth2FlowV2::BuildTokenExchangePostData(
     
     // Add client credentials for custom clients
     if (config.GetClientType() == OAuth2ClientType::custom) {
-        post_data << "&client_id=" << UrlEncode(config.client_id)
-                  << "&client_secret=" << UrlEncode(config.client_secret);
+        post_data << "&client_id=" << UrlEncode(config.client_id);
+        if (!config.client_secret.empty()) {
+            post_data << "&client_secret=" << UrlEncode(config.client_secret);
+        }
     }
     
     return post_data.str();
 }
 
 OAuth2Tokens OAuth2FlowV2::ParseTokenResponse(const std::string& response_content) {
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Parsing token response: " + response_content.substr(0, 100) + "...");
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Parsing token response (" + std::to_string(response_content.size()) + " bytes)");
     
     if (response_content.empty()) {
         throw std::invalid_argument("Token response content is empty");
@@ -241,7 +243,7 @@ OAuth2Tokens OAuth2FlowV2::ParseTokenResponse(const std::string& response_conten
         auto access_token_val = yyjson_obj_get(root, "access_token");
         if (access_token_val && yyjson_is_str(access_token_val)) {
             tokens.access_token = yyjson_get_str(access_token_val);
-            ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Extracted access token: " + tokens.access_token.substr(0, 10) + "...");
+            ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Extracted access token");
         } else {
             throw std::runtime_error("Missing or invalid access_token in response");
         }
@@ -250,7 +252,7 @@ OAuth2Tokens OAuth2FlowV2::ParseTokenResponse(const std::string& response_conten
         auto refresh_token_val = yyjson_obj_get(root, "refresh_token");
         if (refresh_token_val && yyjson_is_str(refresh_token_val)) {
             tokens.refresh_token = yyjson_get_str(refresh_token_val);
-            ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Extracted refresh token: " + tokens.refresh_token.substr(0, 10) + "...");
+            ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Extracted refresh token");
         }
         
         // Extract token type
@@ -306,7 +308,7 @@ std::string OAuth2FlowV2::GenerateCodeVerifier() {
         code_verifier += charset[distribution(generator)];
     }
     
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated code verifier: " + code_verifier.substr(0, 10) + "...");
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated PKCE code verifier");
     return code_verifier;
 }
 

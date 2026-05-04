@@ -1,6 +1,8 @@
 #include "graph_planner_functions.hpp"
+#include "graph_client.hpp"
 #include "graph_planner_client.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_output_utils.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
@@ -20,21 +22,93 @@ struct PlansBindData : public TableFunctionData {
     std::string secret_name;
     std::string group_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~PlansBindData() override {
+        if (parsed_doc) {
+            yyjson_doc_free(parsed_doc);
+        }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) {
+            return false;
+        }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) {
+            return false;
+        }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct BucketsBindData : public TableFunctionData {
     std::string secret_name;
     std::string plan_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~BucketsBindData() override {
+        if (parsed_doc) {
+            yyjson_doc_free(parsed_doc);
+        }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) {
+            return false;
+        }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) {
+            return false;
+        }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 struct TasksBindData : public TableFunctionData {
     std::string secret_name;
     std::string plan_id;
     std::string json_response;
+    yyjson_doc *parsed_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
     bool done = false;
+
+    ~TasksBindData() override {
+        if (parsed_doc) {
+            yyjson_doc_free(parsed_doc);
+        }
+    }
+
+    bool InitIterator() {
+        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
+        json_response.clear();
+        json_response.shrink_to_fit();
+        if (!parsed_doc) {
+            return false;
+        }
+        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) {
+            return false;
+        }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
 // ============================================================================
@@ -86,66 +160,34 @@ void GraphPlannerFunctions::PlansScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
         bind_data.json_response = client.GetGroupPlans(bind_data.group_id);
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // id
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        // title
-        yyjson_val *title_val = yyjson_obj_get(item, "title");
-        output.SetValue(1, row, title_val && yyjson_is_str(title_val) ?
-            Value(yyjson_get_str(title_val)) : Value());
-
-        // owner (group id)
-        yyjson_val *owner_val = yyjson_obj_get(item, "owner");
-        output.SetValue(2, row, owner_val && yyjson_is_str(owner_val) ?
-            Value(yyjson_get_str(owner_val)) : Value());
-
-        // createdDateTime
-        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
-        output.SetValue(3, row, created_val && yyjson_is_str(created_val) ?
-            Value(yyjson_get_str(created_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "title"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "owner"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "createdDateTime"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) {
+        bind_data.done = true;
+    }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -197,66 +239,34 @@ void GraphPlannerFunctions::BucketsScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
         bind_data.json_response = client.GetPlanBuckets(bind_data.plan_id);
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // id
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        // name
-        yyjson_val *name_val = yyjson_obj_get(item, "name");
-        output.SetValue(1, row, name_val && yyjson_is_str(name_val) ?
-            Value(yyjson_get_str(name_val)) : Value());
-
-        // planId
-        yyjson_val *plan_val = yyjson_obj_get(item, "planId");
-        output.SetValue(2, row, plan_val && yyjson_is_str(plan_val) ?
-            Value(yyjson_get_str(plan_val)) : Value());
-
-        // orderHint
-        yyjson_val *order_val = yyjson_obj_get(item, "orderHint");
-        output.SetValue(3, row, order_val && yyjson_is_str(order_val) ?
-            Value(yyjson_get_str(order_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "planId"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "orderHint"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) {
+        bind_data.done = true;
+    }
+    output.SetCardinality(row);
 }
 
 // ============================================================================
@@ -314,91 +324,39 @@ void GraphPlannerFunctions::TasksScan(
         return;
     }
 
-    if (bind_data.json_response.empty()) {
+    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
         bind_data.json_response = client.GetPlanTasks(bind_data.plan_id);
     }
 
-    yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
-    if (!doc) {
-        throw InvalidInputException("Failed to parse Graph API response");
+    if (!bind_data.parsed_doc) {
+        if (!bind_data.InitIterator()) {
+            bind_data.done = true;
+            output.SetCardinality(0);
+            return;
+        }
     }
 
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *value_arr = yyjson_obj_get(root, "value");
-
-    if (!value_arr || !yyjson_is_arr(value_arr)) {
-        yyjson_doc_free(doc);
-        bind_data.done = true;
-        output.SetCardinality(0);
-        return;
-    }
-
-    size_t count = yyjson_arr_size(value_arr);
-    if (count > STANDARD_VECTOR_SIZE) {
-        count = STANDARD_VECTOR_SIZE;
-    }
-
-    output.SetCardinality(count);
-
-    size_t idx, max;
-    yyjson_val *item;
     idx_t row = 0;
-
-    yyjson_arr_foreach(value_arr, idx, max, item) {
-        if (row >= count) break;
-
-        // id
-        yyjson_val *id_val = yyjson_obj_get(item, "id");
-        output.SetValue(0, row, id_val && yyjson_is_str(id_val) ?
-            Value(yyjson_get_str(id_val)) : Value());
-
-        // title
-        yyjson_val *title_val = yyjson_obj_get(item, "title");
-        output.SetValue(1, row, title_val && yyjson_is_str(title_val) ?
-            Value(yyjson_get_str(title_val)) : Value());
-
-        // bucketId
-        yyjson_val *bucket_val = yyjson_obj_get(item, "bucketId");
-        output.SetValue(2, row, bucket_val && yyjson_is_str(bucket_val) ?
-            Value(yyjson_get_str(bucket_val)) : Value());
-
-        // planId
-        yyjson_val *plan_val = yyjson_obj_get(item, "planId");
-        output.SetValue(3, row, plan_val && yyjson_is_str(plan_val) ?
-            Value(yyjson_get_str(plan_val)) : Value());
-
-        // percentComplete
-        yyjson_val *pct_val = yyjson_obj_get(item, "percentComplete");
-        output.SetValue(4, row, pct_val && yyjson_is_num(pct_val) ?
-            Value::INTEGER(yyjson_get_int(pct_val)) : Value());
-
-        // priority (0=urgent, 1=important, 2=medium, 3=low)
-        yyjson_val *pri_val = yyjson_obj_get(item, "priority");
-        output.SetValue(5, row, pri_val && yyjson_is_num(pri_val) ?
-            Value::INTEGER(yyjson_get_int(pri_val)) : Value());
-
-        // dueDateTime
-        yyjson_val *due_val = yyjson_obj_get(item, "dueDateTime");
-        output.SetValue(6, row, due_val && yyjson_is_str(due_val) ?
-            Value(yyjson_get_str(due_val)) : Value());
-
-        // createdDateTime
-        yyjson_val *created_val = yyjson_obj_get(item, "createdDateTime");
-        output.SetValue(7, row, created_val && yyjson_is_str(created_val) ?
-            Value(yyjson_get_str(created_val)) : Value());
-
-        // completedDateTime
-        yyjson_val *completed_val = yyjson_obj_get(item, "completedDateTime");
-        output.SetValue(8, row, completed_val && yyjson_is_str(completed_val) ?
-            Value(yyjson_get_str(completed_val)) : Value());
-
+    yyjson_val *item;
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "title"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "bucketId"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "planId"));
+        SetInt32Cell(output.data[4], row, yyjson_obj_get(item, "percentComplete"));
+        SetInt32Cell(output.data[5], row, yyjson_obj_get(item, "priority"));
+        SetStrCell(output.data[6], row, yyjson_obj_get(item, "dueDateTime"));
+        SetStrCell(output.data[7], row, yyjson_obj_get(item, "createdDateTime"));
+        SetStrCell(output.data[8], row, yyjson_obj_get(item, "completedDateTime"));
         row++;
     }
 
-    yyjson_doc_free(doc);
-    bind_data.done = true;
+    if (row < STANDARD_VECTOR_SIZE) {
+        bind_data.done = true;
+    }
+    output.SetCardinality(row);
 }
 
 // ============================================================================

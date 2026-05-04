@@ -5,6 +5,7 @@
 #include "odata_edm.hpp"
 #include "oauth2_flow_v2.hpp"
 #include "datasphere_secret.hpp"
+#include "graph_output_utils.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -1258,7 +1259,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             auto &bind = data_p.bind_data->CastNoConst<DatasphereSpacesListBindData>();
             idx_t count = 0;
             while (bind.next_index < bind.space_names.size() && count < output.GetCapacity()) {
-                output.SetValue(0, count, duckdb::Value(bind.space_names[bind.next_index]));
+                SetStrCellNN(output.data[0], count, bind.space_names[bind.next_index].c_str());
                 bind.next_index++;
                 count++;
             }
@@ -1326,9 +1327,9 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
             while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                output.SetValue(0, count, duckdb::Value(bind.items[bind.next_index].name));
-                output.SetValue(1, count, duckdb::Value(bind.items[bind.next_index].object_type));
-                output.SetValue(2, count, duckdb::Value(bind.items[bind.next_index].technical_name));
+                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
                 bind.next_index++;
                 count++;
             }
@@ -1488,10 +1489,10 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
             while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                output.SetValue(0, count, duckdb::Value(bind.items[bind.next_index].name));
-                output.SetValue(1, count, duckdb::Value(bind.items[bind.next_index].object_type));
-                output.SetValue(2, count, duckdb::Value(bind.items[bind.next_index].technical_name));
-                output.SetValue(3, count, duckdb::Value(bind.items[bind.next_index].space_name));
+                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
+                SetStrCellNN(output.data[3], count, bind.items[bind.next_index].space_name.c_str());
                 bind.next_index++;
                 count++;
             }

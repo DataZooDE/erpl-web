@@ -5,8 +5,11 @@
 require erpl_web
 
 require-env ERPL_MS_TENANT_ID
+
 require-env ERPL_MS_CLIENT_ID
+
 require-env ERPL_MS_CLIENT_SECRET
+
 require-env ERPL_MS_SHAREPOINT_SITE_NAME
 
 # Create credential secret
