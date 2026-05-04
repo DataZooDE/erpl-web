@@ -44,9 +44,9 @@ SELECT COUNT(*) AS n FROM graph_excel_read(
 
 statement ok
 COPY (
-    SELECT 'erpl_write_test_a' AS col0
+    SELECT 'erpl_write_test_a' AS col0, 'product_a' AS col1, '' AS col2, '2024-06-01' AS col3
     UNION ALL
-    SELECT 'erpl_write_test_b'
+    SELECT 'erpl_write_test_b', 'product_b', '', '2024-06-02'
 )
 TO '${ERPL_MS_EXCEL_FILE_PATH}' (
     FORMAT graph_excel_table,
@@ -54,6 +54,10 @@ TO '${ERPL_MS_EXCEL_FILE_PATH}' (
     drive  '${ERPL_MS_EXCEL_DRIVE_ID}',
     secret 'ms_graph_excel_write_test'
 );
+
+# Wait briefly for Graph API to propagate the write (Excel workbook eventual consistency)
+statement ok
+SELECT sleep_ms(3000);
 
 # ============================================================================
 # Verify row count increased by exactly 2
