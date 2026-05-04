@@ -1,0 +1,76 @@
+# name: test/sql/graph_excel_write_integration.test
+# description: Round-trip write integration test for graph_excel_table COPY format.
+#              Appends rows to SalesTable, reads back, and verifies count delta.
+#              Prerequisite: SalesTable must exist in the test workbook.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_EXCEL_FILE_PATH
+
+require-env ERPL_MS_EXCEL_DRIVE_ID
+
+statement ok
+CREATE SECRET ms_graph_excel_write_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# ============================================================================
+# Snapshot row count before write
+# ============================================================================
+
+statement ok
+CREATE TEMP TABLE _excel_row_count_before AS
+SELECT COUNT(*) AS n FROM graph_excel_read(
+    '${ERPL_MS_EXCEL_FILE_PATH}',
+    'SalesTable',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_write_test'
+);
+
+# ============================================================================
+# Append 2 rows via COPY TO
+# ============================================================================
+
+statement ok
+COPY (
+    SELECT 'erpl_write_test_a' AS col0
+    UNION ALL
+    SELECT 'erpl_write_test_b'
+)
+TO '${ERPL_MS_EXCEL_FILE_PATH}' (
+    FORMAT graph_excel_table,
+    table  'SalesTable',
+    drive  '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret 'ms_graph_excel_write_test'
+);
+
+# ============================================================================
+# Verify row count increased by exactly 2
+# ============================================================================
+
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_excel_read(
+        '${ERPL_MS_EXCEL_FILE_PATH}',
+        'SalesTable',
+        drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+        secret := 'ms_graph_excel_write_test'
+    )
+) - (SELECT n FROM _excel_row_count_before) = 2;
+----
+true
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_excel_write_test;

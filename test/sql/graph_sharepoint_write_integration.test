@@ -1,0 +1,111 @@
+# name: test/sql/graph_sharepoint_write_integration.test
+# description: Round-trip write integration test for graph_sharepoint_list COPY format.
+#              Inserts 1 item via COPY TO, reads back, verifies count delta,
+#              then deletes the inserted item via the catalog ATTACH interface.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_SHAREPOINT_SITE_ID
+
+require-env ERPL_MS_SHAREPOINT_LIST_ID
+
+require-env ERPL_MS_SHAREPOINT_SITE_NAME
+
+statement ok
+CREATE SECRET ms_sp_write_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# ============================================================================
+# Snapshot row count before write
+# ============================================================================
+
+statement ok
+CREATE TEMP TABLE _sp_row_count_before AS
+SELECT COUNT(*) AS n FROM graph_sharepoint_list_read(
+    '${ERPL_MS_SHAREPOINT_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    secret := 'ms_sp_write_test'
+);
+
+# ============================================================================
+# Insert 1 item via COPY TO (FORMAT graph_sharepoint_list)
+# Title is a standard column present on all SharePoint lists
+# ============================================================================
+
+statement ok
+COPY (SELECT 'erpl_write_integration_test' AS Title)
+TO '${ERPL_MS_SHAREPOINT_SITE_ID}' (
+    FORMAT graph_sharepoint_list,
+    list   '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    secret 'ms_sp_write_test'
+);
+
+# ============================================================================
+# Verify row count increased by exactly 1
+# ============================================================================
+
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_sharepoint_list_read(
+        '${ERPL_MS_SHAREPOINT_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_LIST_ID}',
+        secret := 'ms_sp_write_test'
+    )
+) - (SELECT n FROM _sp_row_count_before) = 1;
+----
+true
+
+# ============================================================================
+# Verify the written item is readable by Title
+# ============================================================================
+
+query I
+SELECT COUNT(*) >= 1 FROM graph_sharepoint_list_read(
+    '${ERPL_MS_SHAREPOINT_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    secret := 'ms_sp_write_test'
+) WHERE Title = 'erpl_write_integration_test';
+----
+true
+
+# ============================================================================
+# Cleanup: delete the inserted item via the catalog ATTACH interface
+# ============================================================================
+
+statement ok
+ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_write_cleanup (TYPE sharepoint_lists, SECRET 'ms_sp_write_test');
+
+statement ok
+DELETE FROM sp_write_cleanup."${ERPL_MS_SHAREPOINT_LIST_ID}"
+WHERE Title = 'erpl_write_integration_test';
+
+statement ok
+DETACH sp_write_cleanup;
+
+# Verify cleanup: count is back to baseline
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_sharepoint_list_read(
+        '${ERPL_MS_SHAREPOINT_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_LIST_ID}',
+        secret := 'ms_sp_write_test'
+    )
+) = (SELECT n FROM _sp_row_count_before);
+----
+true
+
+# Cleanup
+statement ok
+DROP SECRET ms_sp_write_test;
