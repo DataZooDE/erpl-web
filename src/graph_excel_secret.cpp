@@ -174,7 +174,7 @@ duckdb::unique_ptr<duckdb::BaseSecret> CreateGraphSecretFunctions::CreateFromAut
     // Default scopes for delegated access (user permissions)
     std::string scopes = (scope_val != input.options.end())
         ? scope_val->second.ToString()
-        : "openid profile offline_access User.Read Files.ReadWrite.All Mail.Read Calendars.Read Contacts.Read Team.ReadBasic.All Channel.ReadBasic.All";
+        : "openid profile offline_access User.Read Files.ReadWrite.All Sites.ReadWrite.All Mail.Read Calendars.Read Contacts.Read Team.ReadBasic.All Channel.ReadBasic.All";
 
     // Default redirect URI
     std::string redirect_uri = (redirect_uri_val != input.options.end())
