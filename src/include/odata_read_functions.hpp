@@ -136,7 +136,16 @@ private:
 
     // Helper methods
     void InitializeComponents(bool service_root_mode = false);
-    
+
+    // Buffer the rows of an already-fetched first page into row_buffer and
+    // mark first_page_cached_. Shared by PrefetchFirstPage (response from
+    // odata_client->Get()) and FromEntitySetClient (response synthesised from
+    // pre-fetched initial_content). Without this, callers that hand a page's
+    // content into FromEntitySetClient would later trigger a redundant bare
+    // GET inside PrefetchFirstPage — which against SAP ODP returns the entire
+    // dataset and inflates the result by N×.
+    void BufferFirstPageFromResponse(std::shared_ptr<ODataEntitySetResponse> response);
+
     // FetchNextResult helper methods
     void EnsureInitialized();
     SchemaInfo PrepareSchemaInfo();

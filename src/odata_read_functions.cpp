@@ -1642,6 +1642,25 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetClient(
           "ODATA_READ_BIND",
           "Failed to parse initial content, will use metadata approach");
     }
+
+    // Buffer the rows from initial_content so the next FetchNextResult does
+    // not issue a redundant bare GET. Without this, callers that hand a
+    // pre-fetched page in (e.g. the ODP streaming path) trigger
+    // PrefetchFirstPage → odata_client->Get() with no query string, which
+    // SAP ODP answers with the entire dataset, inflating results N×.
+    try {
+      auto synthetic = std::make_shared<ODataEntitySetResponse>(
+          std::make_unique<HttpResponse>(HttpMethod::GET, HttpUrl(client->Url()),
+                                         200, "application/json", initial_content),
+          client->GetODataVersion());
+      bind_data->BufferFirstPageFromResponse(synthetic);
+    } catch (const std::exception &e) {
+      ERPL_TRACE_DEBUG(
+          "ODATA_READ_BIND",
+          std::string("Failed to buffer initial content; "
+                      "PrefetchFirstPage will refetch: ") +
+              e.what());
+    }
   }
 
   return bind_data;
@@ -2578,24 +2597,36 @@ void ODataReadBindData::PrefetchFirstPage() {
     }
 
     auto response = odata_client->Get();
+    BufferFirstPageFromResponse(response);
+
+  ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                   duckdb::StringUtil::Format(
+        "PrefetchFirstPage: buffered %d rows, has_next_page=%s",
+                       (int)row_buffer->Size(),
+                       row_buffer->HasNextPage() ? "true" : "false"));
+}
+
+void ODataReadBindData::BufferFirstPageFromResponse(
+    std::shared_ptr<ODataEntitySetResponse> response) {
     if (!response) {
-    ERPL_TRACE_WARN("ODATA_READ_BIND",
-                    "PrefetchFirstPage: no response received");
+        ERPL_TRACE_WARN("ODATA_READ_BIND",
+                        "BufferFirstPageFromResponse: no response received");
         first_page_cached_ = true;
         row_buffer->SetHasNextPage(false);
         return;
     }
-    
+
     // Extract expanded data if we have expand clauses
     if (HasExpandedData() && !data_extractor->GetExpandedDataSchema().empty()) {
         try {
-      ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                       "Extracting expanded data from first page");
+            ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                             "Extracting expanded data from buffered first page");
             data_extractor->ExtractExpandedDataFromResponse(response->RawContent());
-    } catch (const std::exception &e) {
-      ERPL_TRACE_WARN("ODATA_READ_BIND",
-                      "Failed to extract expanded data from first page: " +
-                          std::string(e.what()));
+        } catch (const std::exception &e) {
+            ERPL_TRACE_WARN("ODATA_READ_BIND",
+                            std::string("Failed to extract expanded data from "
+                                        "buffered first page: ") +
+                                e.what());
         }
     }
 
@@ -2604,28 +2635,22 @@ void ODataReadBindData::PrefetchFirstPage() {
         auto total = response->Content()->TotalCount();
         if (total.has_value()) {
             progress_tracker->SetTotalCount(total.value());
-      ERPL_TRACE_INFO(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format(
-                "Service reported total row count: %llu",
-                (unsigned long long)progress_tracker->GetTotalCount()));
+            ERPL_TRACE_INFO(
+                "ODATA_READ_BIND",
+                duckdb::StringUtil::Format(
+                    "Service reported total row count: %llu",
+                    (unsigned long long)progress_tracker->GetTotalCount()));
         }
     }
 
     // Buffer full schema rows to keep indices stable across projections
-    auto all_result_names = GetResultNames(true);
-    auto all_result_types = GetResultTypes(true);
+    auto all_result_names_local = GetResultNames(true);
+    auto all_result_types_local = GetResultTypes(true);
 
-    auto page_rows = response->ToRows(all_result_names, all_result_types);
+    auto page_rows = response->ToRows(all_result_names_local, all_result_types_local);
     row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
     first_page_cached_ = true;
-
-  ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                   duckdb::StringUtil::Format(
-        "PrefetchFirstPage: buffered %d rows, has_next_page=%s",
-                       (int)row_buffer->Size(),
-                       row_buffer->HasNextPage() ? "true" : "false"));
 }
 
 void ODataReadBindData::SetExtractedColumnNames(
