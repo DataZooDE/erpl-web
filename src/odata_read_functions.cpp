@@ -2628,6 +2628,90 @@ void ODataReadBindData::PrefetchFirstPage() {
                        row_buffer->HasNextPage() ? "true" : "false"));
 }
 
+void ODataReadBindData::PreBufferFirstPage(const std::string &content,
+                                           ODataVersion version) {
+  if (content.empty()) return;
+
+  // Extract column names directly from the JSON payload — no HTTP calls.
+  // ParseODataV2/V4Response delegate to the OData client for navigation-
+  // property filtering, which triggers a $metadata request and would defeat
+  // the purpose of pre-buffering (avoiding extra HTTP calls).
+  std::vector<std::string> col_names;
+  try {
+    auto doc =
+        duckdb_yyjson::yyjson_read(content.c_str(), content.length(), 0);
+    if (doc) {
+      auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+      if (root) {
+        duckdb_yyjson::yyjson_val *first_row = nullptr;
+        if (version == ODataVersion::V4) {
+          // v4: {"value": [{...}, ...]}
+          auto value_arr = duckdb_yyjson::yyjson_obj_get(root, "value");
+          if (value_arr && duckdb_yyjson::yyjson_is_arr(value_arr) &&
+              duckdb_yyjson::yyjson_arr_size(value_arr) > 0) {
+            first_row = duckdb_yyjson::yyjson_arr_get_first(value_arr);
+          }
+        } else {
+          // v2: {"d": {"results": [{...}, ...]}}
+          auto d_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+          if (d_obj) {
+            auto results = duckdb_yyjson::yyjson_obj_get(d_obj, "results");
+            if (results && duckdb_yyjson::yyjson_is_arr(results) &&
+                duckdb_yyjson::yyjson_arr_size(results) > 0) {
+              first_row = duckdb_yyjson::yyjson_arr_get_first(results);
+            }
+          }
+        }
+        if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
+          size_t idx, max;
+          duckdb_yyjson::yyjson_val *key, *val;
+          yyjson_obj_foreach(first_row, idx, max, key, val) {
+            col_names.emplace_back(duckdb_yyjson::yyjson_get_str(key));
+          }
+        }
+      }
+      duckdb_yyjson::yyjson_doc_free(doc);
+    }
+  } catch (...) {}
+
+  if (col_names.empty()) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    "PreBufferFirstPage: no rows in content, skipping");
+    return;
+  }
+
+  // Store so that subsequent GetResultNames() returns them without HTTP.
+  SetExtractedColumnNames(col_names);
+
+  // ODP delivers all fields as Edm.String; VARCHAR avoids a $metadata
+  // round-trip solely for type resolution.
+  std::vector<duckdb::LogicalType> all_types(col_names.size(),
+                                             duckdb::LogicalTypeId::VARCHAR);
+  try {
+    auto fake_resp = std::make_shared<ODataEntitySetResponse>(
+        std::make_unique<HttpResponse>(HttpMethod::GET, HttpUrl(""), 200,
+                                      "application/json", content),
+        version);
+
+    auto page_rows = fake_resp->ToRows(col_names, all_types);
+    row_buffer->AddRows(std::move(page_rows));
+    // The outer OdpODataReadBindData orchestrator owns all __next following;
+    // prevent FetchAdditionalPagesIfNeeded() from issuing inner GETs.
+    row_buffer->SetHasNextPage(false);
+    first_page_cached_ = true;
+
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     duckdb::StringUtil::Format(
+                         "PreBufferFirstPage: buffered %d rows, "
+                         "PrefetchFirstPage suppressed",
+                         (int)row_buffer->Size()));
+  } catch (const std::exception &e) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    std::string("PreBufferFirstPage: failed to buffer rows: ") +
+                        e.what());
+  }
+}
+
 void ODataReadBindData::SetExtractedColumnNames(
     const std::vector<std::string> &column_names) {
     extracted_column_names = column_names;

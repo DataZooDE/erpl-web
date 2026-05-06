@@ -36,6 +36,7 @@ list(APPEND TEST_SOURCES
     test_odp_subscription_repository.cpp
     test_odp_subscription_state_manager.cpp
     test_odp_request_orchestrator.cpp
+    test_odp_prebuffer.cpp
     test_datasphere_integration.cpp
     test_datasphere_oauth2_consolidated.cpp
     test_datasphere_discovery.cpp

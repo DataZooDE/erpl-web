@@ -79,6 +79,16 @@ public:
     void UpdateUrlFromPredicatePushdown();
     void PrefetchFirstPage();
 
+    // Pre-buffer rows from already-fetched content so PrefetchFirstPage() does
+    // not issue a redundant bare HTTP GET. Called by ODP code where the outer
+    // orchestrator owns all HTTP requests and the first-page content is already
+    // available from the ODQ tracking response.
+    void PreBufferFirstPage(const std::string& content, ODataVersion version);
+
+    // Returns true when the first page has been fetched or pre-buffered.
+    // Exposed for testing.
+    bool IsFirstPageCached() const { return first_page_cached_; }
+
     // Progress reporting
     double GetProgressFraction() const;
 

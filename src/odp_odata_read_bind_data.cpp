@@ -432,11 +432,16 @@ void OdpODataReadBindData::UpdateODataClientWithResponse(const std::string& url,
         
         // Create bind data with pre-fetched content
         odata_bind_data_ = ODataReadBindData::FromEntitySetClient(client, response_content);
-        
+
         if (!odata_bind_data_) {
             throw duckdb::InternalException("Failed to update OData client with response");
         }
-        
+
+        // Pre-buffer the rows already received so PrefetchFirstPage() does not
+        // issue a stateless bare GET to the entity-set URL. Without this, every
+        // ODQ tracking package causes a full re-read of the entity set.
+        odata_bind_data_->PreBufferFirstPage(response_content, ODataVersion::V2);
+
         ERPL_TRACE_DEBUG("ODP_BIND_DATA", "OData client updated successfully with pre-fetched response");
         
     } catch (const std::exception& e) {
