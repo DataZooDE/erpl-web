@@ -96,6 +96,7 @@ public:
     // Build URL for adding rows to a table (write endpoint)
     // /workbook/tables/{table-name}/rows/add
     static std::string BuildTableRowsAddUrl(const std::string &workbook_url, const std::string &table_name);
+    static std::string BuildTableRowDeleteUrl(const std::string &workbook_url, const std::string &table_name, idx_t row_index);
 };
 
 // Represents an Excel table's data
@@ -147,6 +148,13 @@ public:
     // Returns the number of rows added.
     idx_t AddTableRows(const std::string &file_path, const std::string &table_name,
                        const std::string &rows_json, const std::string &drive_id = "");
+
+    // Delete all rows where column col_index equals col_value.
+    // Rows are deleted from highest index to lowest to avoid index shifting.
+    // Returns the number of rows deleted.
+    idx_t DeleteTableRowsMatchingColumn(const std::string &file_path, const std::string &table_name,
+                                        idx_t col_index, const std::string &col_value,
+                                        const std::string &drive_id = "");
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;

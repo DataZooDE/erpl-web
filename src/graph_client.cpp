@@ -156,12 +156,21 @@ void GraphClient::Patch(const std::string &url, const std::string &body) {
 }
 
 void GraphClient::Delete(const std::string &url) {
+    DeleteWithHeaders(url, {});
+}
+
+void GraphClient::DeleteWithHeaders(const std::string &url,
+                                    const std::map<std::string, std::string> &extra_headers)
+{
     ERPL_TRACE_DEBUG(trace_component, "DELETE request to: " + url);
 
     HttpUrl http_url(url);
     HttpRequest request(HttpMethod::_DELETE, http_url);
     if (auth_params) {
         request.AuthHeadersFromParams(*auth_params);
+    }
+    for (const auto &kv : extra_headers) {
+        request.headers[kv.first] = kv.second;
     }
 
     auto response = http_client->SendRequest(request);

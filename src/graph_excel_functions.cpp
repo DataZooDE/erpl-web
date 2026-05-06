@@ -886,6 +886,62 @@ void GraphExcelFunctions::AddRowsScan(
 }
 
 // ============================================================================
+// graph_excel_delete_rows - Delete rows matching a column value
+// ============================================================================
+
+struct DeleteRowsBindData : public TableFunctionData {
+    std::string file_path;
+    std::string table_name;
+    idx_t col_index = 0;
+    std::string col_value;
+    std::string drive_id;
+    std::string secret_name;
+    bool done = false;
+};
+
+unique_ptr<FunctionData> GraphExcelFunctions::DeleteRowsBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 4) {
+        throw BinderException("graph_excel_delete_rows requires file_path, table_name, col_index, col_value");
+    }
+    auto bind = make_uniq<DeleteRowsBindData>();
+    bind->file_path  = input.inputs[0].GetValue<std::string>();
+    bind->table_name = input.inputs[1].GetValue<std::string>();
+    bind->col_index  = static_cast<idx_t>(input.inputs[2].GetValue<int64_t>());
+    bind->col_value  = input.inputs[3].GetValue<std::string>();
+
+    if (input.named_parameters.count("secret")) {
+        bind->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind->drive_id = ResolveGraphDriveId(context, bind->secret_name, input);
+
+    return_types = {LogicalType::BIGINT};
+    names        = {"rows_deleted"};
+    return std::move(bind);
+}
+
+void GraphExcelFunctions::DeleteRowsScan(
+    ClientContext &context,
+    TableFunctionInput &data_p,
+    DataChunk &output) {
+
+    auto &bind = data_p.bind_data->CastNoConst<DeleteRowsBindData>();
+    if (bind.done) { return; }
+    bind.done = true;
+
+    auto auth_info = ResolveGraphAuth(context, bind.secret_name);
+    GraphExcelClient client(auth_info.auth_params);
+    const idx_t n = client.DeleteTableRowsMatchingColumn(
+        bind.file_path, bind.table_name, bind.col_index, bind.col_value, bind.drive_id);
+    output.SetCardinality(1);
+    output.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(n)));
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -1020,6 +1076,32 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
             "SELECT * FROM graph_excel_add_rows('report.xlsx', 'Sales', "
             "data := '[[1,\"Alice\"],[2,\"Bob\"]]', "
             "drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')"
+        };
+        desc.categories = {"microsoft", "graph", "excel"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+
+    // graph_excel_delete_rows: delete rows matching a column value
+    {
+        TableFunction del_rows("graph_excel_delete_rows",
+                               {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                LogicalType::BIGINT,  LogicalType::VARCHAR},
+                               GraphExcelFunctions::DeleteRowsScan,
+                               GraphExcelFunctions::DeleteRowsBind);
+        del_rows.named_parameters["drive"]  = LogicalType::VARCHAR;
+        del_rows.named_parameters["secret"] = LogicalType::VARCHAR;
+
+        CreateTableFunctionInfo info(del_rows);
+        FunctionDescription desc;
+        desc.description = "Delete all rows in an Excel table where the column at col_index equals col_value. "
+                           "Returns the number of rows deleted.";
+        desc.parameter_names = {"file_path", "table_name", "col_index", "col_value"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                LogicalType::BIGINT,  LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'test_row', "
+            "drive := 'drive-id', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));

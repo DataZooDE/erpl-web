@@ -22,6 +22,7 @@ public:
                                 const std::map<std::string, std::string> &extra_headers);
     void Patch(const std::string &url, const std::string &body);
     void Delete(const std::string &url);
+    void DeleteWithHeaders(const std::string &url, const std::map<std::string, std::string> &extra_headers);
 
     static std::string BaseUrl();
     static std::string UrlEncode(const std::string &value, bool preserve_slashes = false);

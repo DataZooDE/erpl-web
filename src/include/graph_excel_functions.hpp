@@ -83,6 +83,19 @@ private:
         duckdb::ClientContext &context,
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
+
+    // graph_excel_delete_rows(file_path, table_name, col_index, col_value, drive := '...', secret := '...')
+    // Delete all rows where the column at col_index equals col_value.
+    static duckdb::unique_ptr<duckdb::FunctionData> DeleteRowsBind(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionBindInput &input,
+        duckdb::vector<duckdb::LogicalType> &return_types,
+        duckdb::vector<std::string> &names);
+
+    static void DeleteRowsScan(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionInput &data,
+        duckdb::DataChunk &output);
 };
 
 } // namespace erpl_web

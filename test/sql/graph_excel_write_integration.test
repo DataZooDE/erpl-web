@@ -1,6 +1,7 @@
 # name: test/sql/graph_excel_write_integration.test
 # description: Round-trip write integration test for graph_excel_table COPY format.
-#              Appends rows to SalesTable, reads back, and verifies count delta.
+#              Appends rows to SalesTable, reads back, verifies count delta,
+#              then cleans up by deleting the inserted rows.
 #              Prerequisite: SalesTable must exist in the test workbook.
 # group: [erpl_web]
 
@@ -24,6 +25,31 @@ CREATE SECRET ms_graph_excel_write_test (
     client_id '${ERPL_MS_CLIENT_ID}',
     client_secret '${ERPL_MS_CLIENT_SECRET}'
 );
+
+# ============================================================================
+# Pre-cleanup: remove any stale rows from previous interrupted test runs
+# ============================================================================
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_write_test_a',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_write_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_write_test_b',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_write_test'
+);
+
+# Wait for Graph API to propagate the pre-cleanup
+statement ok
+SELECT sleep_ms(3000);
 
 # ============================================================================
 # Snapshot row count before write
@@ -72,6 +98,44 @@ SELECT (
         secret := 'ms_graph_excel_write_test'
     )
 ) - (SELECT n FROM _excel_row_count_before) = 2;
+----
+true
+
+# ============================================================================
+# Post-cleanup: delete the inserted rows
+# ============================================================================
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_write_test_a',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_write_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_write_test_b',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_write_test'
+);
+
+# Wait for Graph API to propagate the cleanup
+statement ok
+SELECT sleep_ms(3000);
+
+# Verify count is back to baseline
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_excel_read(
+        '${ERPL_MS_EXCEL_FILE_PATH}',
+        'SalesTable',
+        drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+        secret := 'ms_graph_excel_write_test'
+    )
+) = (SELECT n FROM _excel_row_count_before);
 ----
 true
 
