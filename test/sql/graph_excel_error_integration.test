@@ -1,0 +1,61 @@
+# name: test/sql/graph_excel_error_integration.test
+# description: Error-handling integration tests for Excel Online functions.
+#              Verifies sensible errors for missing secret, wrong secret name,
+#              and non-existent file paths.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_EXCEL_DRIVE_ID
+
+# ============================================================================
+# Case 1: COPY TO with non-existent secret name
+# ============================================================================
+
+statement error
+COPY (SELECT 1 AS ProductID, 'Product A' AS ProductName, 'Category A' AS Category, '2024-01-01' AS DateAdded)
+TO 'test_erpl.xlsx' (
+    FORMAT graph_excel_table,
+    table  'SalesTable',
+    drive  '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret 'no_such_secret'
+);
+----
+not found
+
+# ============================================================================
+# Case 2: Valid secret but non-existent Excel file (Graph API returns 404)
+# ============================================================================
+
+statement ok
+CREATE SECRET ms_excel_err_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+statement error
+COPY (SELECT 1 AS ProductID, 'Product A' AS ProductName, 'Category A' AS Category, '2024-01-01' AS DateAdded)
+TO 'nonexistent_file_xyz.xlsx' (
+    FORMAT graph_excel_table,
+    table  'SalesTable',
+    drive  '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret 'ms_excel_err_test'
+);
+----
+404
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+DROP SECRET ms_excel_err_test;

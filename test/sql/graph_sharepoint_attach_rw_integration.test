@@ -47,6 +47,27 @@ SELECT count(*) > 0 FROM information_schema.columns WHERE table_catalog = 'sptes
 ----
 true
 
+# ============================================================================
+# Phase 1b: SELECT data through the catalog (ATTACH scan path)
+# ============================================================================
+
+require-env ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME
+
+# SELECT through catalog must return at least one row from TestList
+query I
+SELECT count(*) > 0 FROM sptest."${ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME}";
+----
+true
+
+# Title column must be present and non-empty for the known seed rows
+query I
+SELECT count(*) > 0 FROM sptest."${ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME}" WHERE Title IS NOT NULL;
+----
+true
+
 # Detach cleanly
 statement ok
 DETACH sptest;
+
+statement ok
+DROP SECRET ms_sp_attach_test;

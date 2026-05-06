@@ -1,0 +1,70 @@
+# name: test/sql/graph_sharepoint_error_integration.test
+# description: Error-handling integration tests for SharePoint functions.
+#              Verifies sensible errors for missing secret, wrong credentials,
+#              and non-existent list IDs.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID
+
+require-env ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID
+
+# ============================================================================
+# Case 1: graph_sharepoint_list_read referencing a non-existent secret name
+# ============================================================================
+
+statement error
+SELECT * FROM graph_sharepoint_list_read(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+    secret := 'this_secret_does_not_exist'
+);
+----
+not found
+
+# ============================================================================
+# Case 2: Valid secret but non-existent list id (Graph API returns 404)
+# ============================================================================
+
+statement ok
+CREATE SECRET ms_sp_error_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+statement error
+SELECT * FROM graph_sharepoint_list_read(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '00000000-0000-0000-0000-000000000000',
+    secret := 'ms_sp_error_test'
+);
+----
+404
+
+# ============================================================================
+# Case 3: ATTACH sharepoint_lists with wrong secret name → error at attach time
+# ============================================================================
+
+require-env ERPL_MS_SHAREPOINT_SITE_NAME
+
+statement error
+ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_bad (TYPE sharepoint_lists, SECRET 'no_such_secret');
+----
+not found
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+statement ok
+DROP SECRET ms_sp_error_test;
