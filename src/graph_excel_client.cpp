@@ -439,9 +439,9 @@ idx_t GraphExcelClient::DeleteTableRowsMatchingColumn(const std::string &file_pa
         }
     } guard{graph_client, close_session_url, session_headers};
 
-    // Fetch all rows to find matching indices
+    // Fetch all rows to find matching indices (no $top → follow nextLink pages)
     const std::string rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(wb_url, table_name, 0);
-    const std::string rows_json = graph_client.Get(rows_url);
+    const std::string rows_json = graph_client.GetAllPagesMerged(rows_url);
 
     std::vector<idx_t> matching_indices;
     {
