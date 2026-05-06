@@ -2,6 +2,7 @@
 # description: Round-trip write integration test for graph_sharepoint_list COPY format.
 #              Inserts 1 item via COPY TO, reads back, verifies count delta,
 #              then deletes the inserted item via the catalog ATTACH interface.
+#              Uses TestList on Kommunikationswebsite (a plain custom SharePoint list).
 # group: [erpl_web]
 
 require erpl_web
@@ -12,13 +13,13 @@ require-env ERPL_MS_CLIENT_ID
 
 require-env ERPL_MS_CLIENT_SECRET
 
-require-env ERPL_MS_SHAREPOINT_SITE_ID
+require-env ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID
 
-require-env ERPL_MS_SHAREPOINT_LIST_ID
+require-env ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID
 
 require-env ERPL_MS_SHAREPOINT_SITE_NAME
 
-require-env ERPL_MS_SHAREPOINT_LIST_NAME
+require-env ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME
 
 statement ok
 CREATE SECRET ms_sp_write_test (
@@ -30,14 +31,29 @@ CREATE SECRET ms_sp_write_test (
 );
 
 # ============================================================================
+# Pre-cleanup: remove any stale items from previous interrupted test runs
+# so that the baseline count is always clean.
+# ============================================================================
+
+statement ok
+ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_precleanse (TYPE sharepoint_lists, SECRET 'ms_sp_write_test', READ_WRITE);
+
+statement ok
+DELETE FROM sp_precleanse."${ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME}"
+WHERE Title = 'erpl_write_integration_test';
+
+statement ok
+DETACH sp_precleanse;
+
+# ============================================================================
 # Snapshot row count before write
 # ============================================================================
 
 statement ok
 CREATE TEMP TABLE _sp_row_count_before AS
 SELECT COUNT(*) AS n FROM graph_sharepoint_list_read(
-    '${ERPL_MS_SHAREPOINT_SITE_ID}',
-    '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sp_write_test'
 );
 
@@ -48,9 +64,9 @@ SELECT COUNT(*) AS n FROM graph_sharepoint_list_read(
 
 statement ok
 COPY (SELECT 'erpl_write_integration_test' AS Title)
-TO '${ERPL_MS_SHAREPOINT_SITE_ID}' (
+TO '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}' (
     FORMAT graph_sharepoint_list,
-    list   '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    list   '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret 'ms_sp_write_test'
 );
 
@@ -61,8 +77,8 @@ TO '${ERPL_MS_SHAREPOINT_SITE_ID}' (
 query I
 SELECT (
     SELECT COUNT(*) FROM graph_sharepoint_list_read(
-        '${ERPL_MS_SHAREPOINT_SITE_ID}',
-        '${ERPL_MS_SHAREPOINT_LIST_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
         secret := 'ms_sp_write_test'
     )
 ) - (SELECT n FROM _sp_row_count_before) = 1;
@@ -75,8 +91,8 @@ true
 
 query I
 SELECT COUNT(*) >= 1 FROM graph_sharepoint_list_read(
-    '${ERPL_MS_SHAREPOINT_SITE_ID}',
-    '${ERPL_MS_SHAREPOINT_LIST_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sp_write_test'
 ) WHERE Title = 'erpl_write_integration_test';
 ----
@@ -84,13 +100,15 @@ true
 
 # ============================================================================
 # Cleanup: delete the inserted item via the catalog ATTACH interface
+# ERPL_MS_SHAREPOINT_SITE_NAME resolves to Kommunikationswebsite (same site
+# as ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID, just in URL form).
 # ============================================================================
 
 statement ok
-ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_write_cleanup (TYPE sharepoint_lists, SECRET 'ms_sp_write_test');
+ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_write_cleanup (TYPE sharepoint_lists, SECRET 'ms_sp_write_test', READ_WRITE);
 
 statement ok
-DELETE FROM sp_write_cleanup."${ERPL_MS_SHAREPOINT_LIST_NAME}"
+DELETE FROM sp_write_cleanup."${ERPL_MS_SHAREPOINT_TESTLIST_LIST_NAME}"
 WHERE Title = 'erpl_write_integration_test';
 
 statement ok
@@ -100,8 +118,8 @@ DETACH sp_write_cleanup;
 query I
 SELECT (
     SELECT COUNT(*) FROM graph_sharepoint_list_read(
-        '${ERPL_MS_SHAREPOINT_SITE_ID}',
-        '${ERPL_MS_SHAREPOINT_LIST_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
         secret := 'ms_sp_write_test'
     )
 ) = (SELECT n FROM _sp_row_count_before);

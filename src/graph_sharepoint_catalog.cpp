@@ -6,6 +6,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/common/constants.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/execution/physical_operator.hpp"
@@ -13,6 +14,7 @@
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "yyjson.hpp"
 #include <algorithm>
@@ -59,9 +61,23 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 	}
 };
 
+// Local state stores which columns (by column_t ID) the current execution is projecting.
+// This enables projection pushdown: the scan outputs exactly the requested columns.
+struct SharePointListScanLocalState : public duckdb::LocalTableFunctionState {
+	std::vector<duckdb::column_t> column_ids;
+};
+
 static duckdb::BindInfo SharePointListScanGetBindInfo(const duckdb::optional_ptr<duckdb::FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<SharePointListScanBindData>();
 	return duckdb::BindInfo(*bind_data.table_entry);
+}
+
+static duckdb::unique_ptr<duckdb::LocalTableFunctionState> SharePointListScanInitLocal(
+    duckdb::ExecutionContext &context, duckdb::TableFunctionInitInput &input,
+    duckdb::GlobalTableFunctionState *) {
+	auto state = duckdb::make_uniq<SharePointListScanLocalState>();
+	state->column_ids = input.column_ids;
+	return state;
 }
 
 static void SharePointListScan(duckdb::ClientContext &context,
@@ -69,6 +85,7 @@ static void SharePointListScan(duckdb::ClientContext &context,
                                 duckdb::DataChunk &output)
 {
 	auto &bind_data = data.bind_data->CastNoConst<SharePointListScanBindData>();
+	auto &local_state = data.local_state->Cast<SharePointListScanLocalState>();
 
 	if (bind_data.done) {
 		output.SetCardinality(0);
@@ -90,19 +107,37 @@ static void SharePointListScan(duckdb::ClientContext &context,
 		}
 	}
 
-	const size_t col_count = bind_data.column_names.size();
+	const size_t output_col_count = local_state.column_ids.size();
 	idx_t row = 0;
 	yyjson_val *item;
 
 	while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
 		yyjson_val *fields_obj = yyjson_obj_get(item, "fields");
 
-		for (size_t col = 0; col < col_count; col++) {
-			const std::string &col_name = bind_data.column_names[col];
-			yyjson_val *field_val = (col_name == "id")
-			    ? yyjson_obj_get(item, "id")
-			    : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
-			WriteSharePointField(output.data[col], row, field_val, bind_data.column_types[col]);
+		for (size_t col = 0; col < output_col_count; col++) {
+			const duckdb::column_t col_id = local_state.column_ids[col];
+			if (col_id == COLUMN_IDENTIFIER_ROW_ID) {
+				// Output the SharePoint numeric item id as a BIGINT rowid.
+				// This allows DuckDB's DELETE machinery to identify rows without
+				// a separate virtual-rowid mechanism.
+				yyjson_val *id_val = yyjson_obj_get(item, "id");
+				if (id_val && yyjson_is_str(id_val)) {
+					try {
+						output.data[col].SetValue(row, duckdb::Value::BIGINT(
+						    std::stoll(yyjson_get_str(id_val))));
+					} catch (...) {
+						output.data[col].SetValue(row, duckdb::Value(duckdb::LogicalType::BIGINT));
+					}
+				} else {
+					output.data[col].SetValue(row, duckdb::Value(duckdb::LogicalType::BIGINT));
+				}
+			} else {
+				const std::string &col_name = bind_data.column_names[col_id];
+				yyjson_val *field_val = (col_name == "id")
+				    ? yyjson_obj_get(item, "id")
+				    : (fields_obj ? yyjson_obj_get(fields_obj, col_name.c_str()) : nullptr);
+				WriteSharePointField(output.data[col], row, field_val, bind_data.column_types[col_id]);
+			}
 		}
 		row++;
 	}
@@ -627,7 +662,9 @@ duckdb::TableFunction SharePointTableEntry::GetScanFunction(duckdb::ClientContex
 
 	bind_data = std::move(scan_bind_data);
 
-	duckdb::TableFunction table_function("sharepoint_list_scan", {}, SharePointListScan, nullptr, nullptr);
+	duckdb::TableFunction table_function("sharepoint_list_scan", {}, SharePointListScan,
+	                                     nullptr, nullptr, SharePointListScanInitLocal);
+	table_function.projection_pushdown = true;
 	table_function.get_bind_info = SharePointListScanGetBindInfo;
 	return table_function;
 }
@@ -771,8 +808,16 @@ duckdb::PhysicalOperator &SharePointCatalog::PlanDelete(duckdb::ClientContext &c
                                                          duckdb::PhysicalOperator &plan) {
 	auto &sp_table = op.table.Cast<SharePointTableEntry>();
 
-	// The "id" column is always column 0 in the scan output
-	constexpr idx_t id_col_idx = 0;
+	// BindRowIdColumns injects the virtual "rowid" (COLUMN_IDENTIFIER_ROW_ID) into
+	// the scan and records its resolved physical chunk index in op.expressions[0].
+	// By the time PlanDelete is called, ColumnBindingResolver has already run, so
+	// the expression is a BoundReferenceExpression (not a BoundColumnRefExpression).
+	// Its index is the position of the BIGINT rowid in the child plan's output chunk.
+	idx_t id_col_idx = 0;
+	if (!op.expressions.empty()) {
+		auto &id_expr = op.expressions[0]->Cast<duckdb::BoundReferenceExpression>();
+		id_col_idx = id_expr.index;
+	}
 
 	auto &del_op = planner.Make<PhysicalSharePointDelete>(
 	    op.types, sp_table.GetAuthParams(), site_id_, sp_table.GetListId(),

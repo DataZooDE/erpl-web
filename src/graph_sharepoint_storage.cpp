@@ -81,7 +81,7 @@ static duckdb::unique_ptr<duckdb::Catalog> SharePointAttach(duckdb::optional_ptr
 
 	for (auto &entry : info.options) {
 		auto lower_name = duckdb::StringUtil::Lower(entry.first);
-		if (lower_name == "type" || lower_name == "read_only") {
+		if (lower_name == "type" || lower_name == "read_only" || lower_name == "read_write") {
 			// already handled by the core attach machinery
 		} else if (lower_name == "secret") {
 			secret_name = entry.second.ToString();
