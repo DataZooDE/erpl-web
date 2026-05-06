@@ -38,6 +38,9 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 	yyjson_doc *parsed_doc = nullptr;
 	yyjson_arr_iter item_iter = {};
 	bool done = false;
+	// Pointer back to the owning table entry so LogicalGet::GetTable() works,
+	// which is required for DELETE/UPDATE to be recognized as a base table operation.
+	duckdb::TableCatalogEntry *table_entry = nullptr;
 
 	~SharePointListScanBindData() override {
 		if (parsed_doc) { yyjson_doc_free(parsed_doc); }
@@ -55,6 +58,11 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 		return true;
 	}
 };
+
+static duckdb::BindInfo SharePointListScanGetBindInfo(const duckdb::optional_ptr<duckdb::FunctionData> bind_data_p) {
+	auto &bind_data = bind_data_p->Cast<SharePointListScanBindData>();
+	return duckdb::BindInfo(*bind_data.table_entry);
+}
 
 static void SharePointListScan(duckdb::ClientContext &context,
                                 duckdb::TableFunctionInput &data,
@@ -615,10 +623,12 @@ duckdb::TableFunction SharePointTableEntry::GetScanFunction(duckdb::ClientContex
 	scan_bind_data->auth_params = auth_params_;
 	scan_bind_data->column_names = column_names_;
 	scan_bind_data->column_types = column_types_;
+	scan_bind_data->table_entry = this;
 
 	bind_data = std::move(scan_bind_data);
 
 	duckdb::TableFunction table_function("sharepoint_list_scan", {}, SharePointListScan, nullptr, nullptr);
+	table_function.get_bind_info = SharePointListScanGetBindInfo;
 	return table_function;
 }
 

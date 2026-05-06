@@ -18,6 +18,8 @@ require-env ERPL_MS_SHAREPOINT_LIST_ID
 
 require-env ERPL_MS_SHAREPOINT_SITE_NAME
 
+require-env ERPL_MS_SHAREPOINT_LIST_NAME
+
 statement ok
 CREATE SECRET ms_sp_write_test (
     TYPE microsoft_graph,
@@ -88,7 +90,7 @@ statement ok
 ATTACH '${ERPL_MS_SHAREPOINT_SITE_NAME}' AS sp_write_cleanup (TYPE sharepoint_lists, SECRET 'ms_sp_write_test');
 
 statement ok
-DELETE FROM sp_write_cleanup."${ERPL_MS_SHAREPOINT_LIST_ID}"
+DELETE FROM sp_write_cleanup."${ERPL_MS_SHAREPOINT_LIST_NAME}"
 WHERE Title = 'erpl_write_integration_test';
 
 statement ok
