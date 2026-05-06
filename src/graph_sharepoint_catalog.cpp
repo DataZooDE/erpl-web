@@ -209,8 +209,13 @@ public:
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
 		return make_uniq<GlobalSourceState>();
 	}
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
+#else
+	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk,
+	                         OperatorSourceInput &input) const override {
+#endif
 		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
 		chunk.SetCardinality(1);
 		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
@@ -272,8 +277,13 @@ public:
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
 		return make_uniq<GlobalSourceState>();
 	}
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
+#else
+	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk,
+	                         OperatorSourceInput &input) const override {
+#endif
 		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
 		chunk.SetCardinality(1);
 		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
@@ -370,8 +380,13 @@ public:
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
 		return make_uniq<GlobalSourceState>();
 	}
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
+#else
+	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk,
+	                         OperatorSourceInput &input) const override {
+#endif
 		auto &g = sink_state->Cast<SharePointWriteGlobalState>();
 		chunk.SetCardinality(1);
 		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(g.affected_count)));
