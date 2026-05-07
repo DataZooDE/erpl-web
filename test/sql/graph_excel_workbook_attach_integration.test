@@ -1,0 +1,120 @@
+# name: test/sql/graph_excel_workbook_attach_integration.test
+# description: Integration test for the excel_workbook ATTACH storage extension.
+#              Attaches an Excel workbook, reads SalesTable, inserts 2 rows,
+#              verifies the count increase, then cleans up.
+#              Prerequisite: SalesTable must exist in the test workbook.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_EXCEL_FILE_PATH
+
+require-env ERPL_MS_EXCEL_DRIVE_ID
+
+statement ok
+CREATE SECRET ms_graph_excel_attach_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# ============================================================================
+# Pre-cleanup: remove any stale rows from previous interrupted test runs
+# (uses the existing scalar graph_excel_delete_rows function)
+# ============================================================================
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_test_a',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_test_b',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_test'
+);
+
+statement ok
+SELECT sleep_ms(3000);
+
+# ============================================================================
+# Attach the workbook and snapshot count
+# ============================================================================
+
+statement ok
+ATTACH '${ERPL_MS_EXCEL_FILE_PATH}' AS wb (
+    TYPE   excel_workbook,
+    SECRET 'ms_graph_excel_attach_test',
+    DRIVE  '${ERPL_MS_EXCEL_DRIVE_ID}'
+);
+
+statement ok
+CREATE TEMP TABLE _attach_count_before AS
+SELECT COUNT(*) AS n FROM wb.SalesTable;
+
+# ============================================================================
+# Insert 2 rows via the catalog interface
+# ============================================================================
+
+statement ok
+INSERT INTO wb.SalesTable
+SELECT 'erpl_attach_test_a' AS col0, 'product_a' AS col1, '' AS col2, '2024-06-01' AS col3
+UNION ALL
+SELECT 'erpl_attach_test_b', 'product_b', '', '2024-06-02';
+
+statement ok
+SELECT sleep_ms(3000);
+
+# ============================================================================
+# Verify count increased by 2
+# ============================================================================
+
+query I
+SELECT (SELECT COUNT(*) FROM wb.SalesTable) - (SELECT n FROM _attach_count_before) = 2;
+----
+true
+
+# ============================================================================
+# Post-cleanup: delete the inserted rows
+# ============================================================================
+
+statement ok
+DETACH wb;
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_test_a',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_test_b',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_test'
+);
+
+statement ok
+SELECT sleep_ms(3000);
+
+# Cleanup
+statement ok
+DROP SECRET ms_graph_excel_attach_test;

@@ -97,6 +97,10 @@ public:
     // /workbook/tables/{table-name}/rows/add
     static std::string BuildTableRowsAddUrl(const std::string &workbook_url, const std::string &table_name);
     static std::string BuildTableRowDeleteUrl(const std::string &workbook_url, const std::string &table_name, idx_t row_index);
+
+    // Build URL for table columns (names/metadata, no cell values)
+    // /workbook/tables/{table-name}/columns?$select=id,index,name
+    static std::string BuildTableColumnsUrl(const std::string &workbook_url, const std::string &table_name);
 };
 
 // Represents an Excel table's data
@@ -141,6 +145,11 @@ public:
     // List worksheets in a workbook (pass drive_id for app-auth)
     std::string ListWorksheets(const std::string &item_id);
     std::string ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id = "");
+
+    // Fetch column names for a table. Returns names in column-index order.
+    std::vector<std::string> GetTableColumnsByPath(const std::string &file_path,
+                                                    const std::string &table_name,
+                                                    const std::string &drive_id = "");
 
     // Append rows to an Excel table.
     // rows_json is a 2-D JSON array: [[v1, v2, ...], [v1, v2, ...], ...]

@@ -1,0 +1,115 @@
+# name: test/sql/graph_sharepoint_scalar_write_integration.test
+# description: Round-trip integration test for graph_sharepoint_create_item,
+#              graph_sharepoint_update_item, and graph_sharepoint_delete_item.
+#              Creates one item, updates a field, reads back to verify,
+#              then deletes it and verifies the count is restored.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+
+require-env ERPL_MS_CLIENT_ID
+
+require-env ERPL_MS_CLIENT_SECRET
+
+require-env ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID
+
+require-env ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID
+
+statement ok
+CREATE SECRET ms_sp_scalar_write_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# ============================================================================
+# Snapshot row count before any writes
+# ============================================================================
+
+statement ok
+CREATE TEMP TABLE _sp_scalar_before AS
+SELECT COUNT(*) AS n FROM graph_sharepoint_list_read(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+    secret := 'ms_sp_scalar_write_test'
+);
+
+# ============================================================================
+# Create an item and capture its ID
+# ============================================================================
+
+statement ok
+CREATE TEMP TABLE _sp_created_item AS
+SELECT item_id FROM graph_sharepoint_create_item(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+    '{"Title":"erpl_scalar_write_test"}',
+    secret := 'ms_sp_scalar_write_test'
+);
+
+# Verify exactly one row was returned (the new item ID)
+query I
+SELECT COUNT(*) FROM _sp_created_item WHERE item_id IS NOT NULL AND item_id != '';
+----
+1
+
+# Verify item count increased by 1
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_sharepoint_list_read(
+        '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+        secret := 'ms_sp_scalar_write_test'
+    )
+) - (SELECT n FROM _sp_scalar_before) = 1;
+----
+true
+
+# ============================================================================
+# Update the item
+# ============================================================================
+
+query I
+SELECT updated FROM graph_sharepoint_update_item(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+    (SELECT item_id FROM _sp_created_item),
+    '{"Title":"erpl_scalar_write_test_updated"}',
+    secret := 'ms_sp_scalar_write_test'
+);
+----
+true
+
+# ============================================================================
+# Delete the item
+# ============================================================================
+
+query I
+SELECT deleted FROM graph_sharepoint_delete_item(
+    '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+    '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+    (SELECT item_id FROM _sp_created_item),
+    secret := 'ms_sp_scalar_write_test'
+);
+----
+true
+
+# Verify count is back to baseline
+query I
+SELECT (
+    SELECT COUNT(*) FROM graph_sharepoint_list_read(
+        '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
+        '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
+        secret := 'ms_sp_scalar_write_test'
+    )
+) = (SELECT n FROM _sp_scalar_before);
+----
+true
+
+# Cleanup
+statement ok
+DROP SECRET ms_sp_scalar_write_test;

@@ -120,6 +120,10 @@ std::string GraphExcelUrlBuilder::BuildTableRowDeleteUrl(const std::string &work
            "/rows/itemAt(index=" + std::to_string(row_index) + ")";
 }
 
+std::string GraphExcelUrlBuilder::BuildTableColumnsUrl(const std::string &workbook_url, const std::string &table_name) {
+    return workbook_url + "/tables/" + GraphClient::UrlEncode(table_name) + "/columns?$select=id,index,name";
+}
+
 // GraphExcelClient implementation
 GraphExcelClient::GraphExcelClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
@@ -282,6 +286,46 @@ std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path,
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
     return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(worksheets_url);
+}
+
+std::vector<std::string> GraphExcelClient::GetTableColumnsByPath(const std::string &file_path,
+                                                                   const std::string &table_name,
+                                                                   const std::string &drive_id)
+{
+    const auto item_url    = ResolveWorkbookItemUrl(file_path, drive_id);
+    const auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
+    const auto cols_url    = GraphExcelUrlBuilder::BuildTableColumnsUrl(workbook_url, table_name);
+    const std::string json = GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(cols_url);
+
+    std::vector<std::string> names;
+    duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json.c_str(), json.size(), 0);
+    if (!doc) {
+        return names;
+    }
+
+    duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    duckdb_yyjson::yyjson_val *arr  = duckdb_yyjson::yyjson_obj_get(root, "value");
+    if (arr && duckdb_yyjson::yyjson_is_arr(arr)) {
+        // Build index → name map first (API order may not be index order)
+        std::map<int, std::string> index_to_name;
+        size_t idx, max;
+        duckdb_yyjson::yyjson_val *col;
+        yyjson_arr_foreach(arr, idx, max, col) {
+            duckdb_yyjson::yyjson_val *name_val  = duckdb_yyjson::yyjson_obj_get(col, "name");
+            duckdb_yyjson::yyjson_val *index_val = duckdb_yyjson::yyjson_obj_get(col, "index");
+            if (name_val && duckdb_yyjson::yyjson_is_str(name_val) &&
+                index_val && duckdb_yyjson::yyjson_is_int(index_val)) {
+                index_to_name[static_cast<int>(duckdb_yyjson::yyjson_get_int(index_val))] =
+                    duckdb_yyjson::yyjson_get_str(name_val);
+            }
+        }
+        names.reserve(index_to_name.size());
+        for (const auto &kv : index_to_name) {
+            names.push_back(kv.second);
+        }
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return names;
 }
 
 // Extract the workbook-session-id from a createSession response JSON

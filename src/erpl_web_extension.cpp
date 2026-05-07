@@ -33,6 +33,7 @@
 #include "graph_excel_secret.hpp"
 #include "graph_excel_functions.hpp"
 #include "graph_excel_copy.hpp"
+#include "graph_excel_storage.hpp"
 #include "graph_sharepoint_functions.hpp"
 #include "graph_sharepoint_copy.hpp"
 #include "graph_sharepoint_storage.hpp"
@@ -776,6 +777,15 @@ static void RegisterGraphExcelFunctions(ExtensionLoader &loader)
 
     // Register COPY TO for Excel tables (FORMAT ms_excel_table)
     erpl_web::RegisterExcelTableCopyFunction(loader);
+
+    // Register excel_workbook ATTACH storage extension
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+    auto &callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
+    callback_manager.Register("excel_workbook", shared_ptr<StorageExtension>(erpl_web::CreateExcelStorageExtension().release()));
+#else
+    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+    config.storage_extensions["excel_workbook"] = erpl_web::CreateExcelStorageExtension();
+#endif
 }
 
 static void RegisterGraphSharePointFunctions(ExtensionLoader &loader)

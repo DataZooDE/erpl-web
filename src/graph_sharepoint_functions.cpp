@@ -652,6 +652,175 @@ void GraphSharePointFunctions::ShowDrivesScan(
 }
 
 // ============================================================================
+// graph_sharepoint_create_item / update_item / delete_item
+// ============================================================================
+
+struct CreateItemBindData : public TableFunctionData {
+    std::string secret_name;
+    std::string site_id;
+    std::string list_id;
+    std::string fields_json;
+    std::string new_item_id;
+    bool done = false;
+};
+
+struct UpdateItemBindData : public TableFunctionData {
+    std::string secret_name;
+    std::string site_id;
+    std::string list_id;
+    std::string item_id;
+    std::string fields_json;
+    bool done = false;
+};
+
+struct DeleteItemBindData : public TableFunctionData {
+    std::string secret_name;
+    std::string site_id;
+    std::string list_id;
+    std::string item_id;
+    bool done = false;
+};
+
+unique_ptr<FunctionData> GraphSharePointFunctions::CreateItemBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 3) {
+        throw BinderException("graph_sharepoint_create_item requires site, list, and fields_json parameters");
+    }
+
+    auto bind_data = make_uniq<CreateItemBindData>();
+    bind_data->site_id    = input.inputs[0].GetValue<std::string>();
+    bind_data->list_id    = input.inputs[1].GetValue<std::string>();
+    bind_data->fields_json = input.inputs[2].GetValue<std::string>();
+
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+
+    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    GraphSharePointClient client(auth_info.auth_params);
+    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
+    bind_data->new_item_id = client.CreateListItem(bind_data->site_id, bind_data->list_id, bind_data->fields_json);
+
+    names        = {"item_id"};
+    return_types = {LogicalType::VARCHAR};
+
+    return std::move(bind_data);
+}
+
+void GraphSharePointFunctions::CreateItemScan(
+    ClientContext &context,
+    TableFunctionInput &data,
+    DataChunk &output) {
+
+    auto &bind_data = data.bind_data->CastNoConst<CreateItemBindData>();
+    if (bind_data.done) {
+        output.SetCardinality(0);
+        return;
+    }
+    bind_data.done = true;
+    output.SetValue(0, 0, Value(bind_data.new_item_id));
+    output.SetCardinality(1);
+}
+
+unique_ptr<FunctionData> GraphSharePointFunctions::UpdateItemBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 4) {
+        throw BinderException("graph_sharepoint_update_item requires site, list, item_id, and fields_json parameters");
+    }
+
+    auto bind_data = make_uniq<UpdateItemBindData>();
+    bind_data->site_id     = input.inputs[0].GetValue<std::string>();
+    bind_data->list_id     = input.inputs[1].GetValue<std::string>();
+    bind_data->item_id     = input.inputs[2].GetValue<std::string>();
+    bind_data->fields_json = input.inputs[3].GetValue<std::string>();
+
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+
+    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    GraphSharePointClient client(auth_info.auth_params);
+    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
+    client.UpdateListItem(bind_data->site_id, bind_data->list_id, bind_data->item_id, bind_data->fields_json);
+
+    names        = {"updated"};
+    return_types = {LogicalType::BOOLEAN};
+
+    return std::move(bind_data);
+}
+
+void GraphSharePointFunctions::UpdateItemScan(
+    ClientContext &context,
+    TableFunctionInput &data,
+    DataChunk &output) {
+
+    auto &bind_data = data.bind_data->CastNoConst<UpdateItemBindData>();
+    if (bind_data.done) {
+        output.SetCardinality(0);
+        return;
+    }
+    bind_data.done = true;
+    output.SetValue(0, 0, Value::BOOLEAN(true));
+    output.SetCardinality(1);
+}
+
+unique_ptr<FunctionData> GraphSharePointFunctions::DeleteItemBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 3) {
+        throw BinderException("graph_sharepoint_delete_item requires site, list, and item_id parameters");
+    }
+
+    auto bind_data = make_uniq<DeleteItemBindData>();
+    bind_data->site_id = input.inputs[0].GetValue<std::string>();
+    bind_data->list_id = input.inputs[1].GetValue<std::string>();
+    bind_data->item_id = input.inputs[2].GetValue<std::string>();
+
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+
+    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    GraphSharePointClient client(auth_info.auth_params);
+    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
+    client.DeleteListItem(bind_data->site_id, bind_data->list_id, bind_data->item_id);
+
+    names        = {"deleted"};
+    return_types = {LogicalType::BOOLEAN};
+
+    return std::move(bind_data);
+}
+
+void GraphSharePointFunctions::DeleteItemScan(
+    ClientContext &context,
+    TableFunctionInput &data,
+    DataChunk &output) {
+
+    auto &bind_data = data.bind_data->CastNoConst<DeleteItemBindData>();
+    if (bind_data.done) {
+        output.SetCardinality(0);
+        return;
+    }
+    bind_data.done = true;
+    output.SetValue(0, 0, Value::BOOLEAN(true));
+    output.SetCardinality(1);
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -736,6 +905,59 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         desc.examples = {
             "SELECT * FROM graph_sharepoint_list_read('site-guid', 'list-guid', secret := 'ms_graph')",
             "SELECT * FROM graph_sharepoint_list_read('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')",
+        };
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+
+    {
+        TableFunction create_item("graph_sharepoint_create_item",
+                                  {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                  CreateItemScan, CreateItemBind);
+        create_item.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(create_item);
+        FunctionDescription desc;
+        desc.description = "Create a new item in a SharePoint list. fields_json is a JSON object of field name/value pairs.";
+        desc.parameter_names = {"site_id_or_url", "list_id_or_name", "fields_json", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_sharepoint_create_item('Finance', 'Budget', '{\"Title\":\"Q1\"}', secret := 'ms_graph')"
+        };
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction update_item("graph_sharepoint_update_item",
+                                  {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                   LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                  UpdateItemScan, UpdateItemBind);
+        update_item.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(update_item);
+        FunctionDescription desc;
+        desc.description = "Update fields of an existing SharePoint list item. fields_json is a JSON object of field name/value pairs.";
+        desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "fields_json", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_sharepoint_update_item('Finance', 'Budget', '42', '{\"Status\":\"Approved\"}', secret := 'ms_graph')"
+        };
+        desc.categories = {"microsoft", "graph", "sharepoint"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+    {
+        TableFunction delete_item("graph_sharepoint_delete_item",
+                                  {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                  DeleteItemScan, DeleteItemBind);
+        delete_item.named_parameters["secret"] = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(delete_item);
+        FunctionDescription desc;
+        desc.description = "Delete an item from a SharePoint list by its item ID.";
+        desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.examples = {
+            "SELECT * FROM graph_sharepoint_delete_item('Finance', 'Budget', '42', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));

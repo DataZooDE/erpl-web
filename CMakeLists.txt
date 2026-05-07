@@ -142,6 +142,8 @@ set(EXTENSION_SOURCES
     src/graph_sharepoint_catalog.cpp
     src/graph_sharepoint_storage.cpp
     src/graph_sharepoint_copy.cpp
+    src/graph_excel_catalog.cpp
+    src/graph_excel_storage.cpp
     src/graph_planner_client.cpp
     src/graph_planner_functions.cpp
     src/graph_outlook_client.cpp
