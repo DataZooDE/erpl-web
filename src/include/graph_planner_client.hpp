@@ -99,6 +99,11 @@ public:
                            const std::string &title,
                            const PlannerTaskCreateParams &params = {});
 
+    // Resolve a bucket name or GUID to a bucket GUID.
+    // If name_or_id already looks like a GUID (36-char with hyphens), returns it unchanged.
+    // Otherwise fetches all buckets for plan_id and matches by name (case-sensitive).
+    std::string ResolveBucketId(const std::string &plan_id, const std::string &name_or_id);
+
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
 

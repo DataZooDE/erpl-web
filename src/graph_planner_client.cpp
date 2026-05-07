@@ -115,6 +115,53 @@ std::string GraphPlannerClient::GetMyTasks() {
     return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
 }
 
+static bool LooksLikePlannerGuid(const std::string &s) {
+    // Planner GUIDs follow the standard 8-4-4-4-12 format (36 chars with hyphens)
+    return s.size() == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-';
+}
+
+std::string GraphPlannerClient::ResolveBucketId(const std::string &plan_id, const std::string &name_or_id) {
+    if (LooksLikePlannerGuid(name_or_id)) {
+        return name_or_id;
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Resolving bucket name '" + name_or_id + "' in plan " + plan_id);
+    const std::string buckets_json = GetPlanBuckets(plan_id);
+
+    duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(buckets_json.c_str(), buckets_json.size(), 0);
+    if (!doc) {
+        throw std::runtime_error("Failed to parse buckets response when resolving bucket: " + name_or_id);
+    }
+
+    std::string resolved;
+    duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    duckdb_yyjson::yyjson_val *arr  = duckdb_yyjson::yyjson_obj_get(root, "value");
+    if (arr && duckdb_yyjson::yyjson_is_arr(arr)) {
+        size_t idx, max;
+        duckdb_yyjson::yyjson_val *bucket;
+        yyjson_arr_foreach(arr, idx, max, bucket) {
+            duckdb_yyjson::yyjson_val *name_val = duckdb_yyjson::yyjson_obj_get(bucket, "name");
+            duckdb_yyjson::yyjson_val *id_val   = duckdb_yyjson::yyjson_obj_get(bucket, "id");
+            if (name_val && duckdb_yyjson::yyjson_is_str(name_val) &&
+                id_val   && duckdb_yyjson::yyjson_is_str(id_val)) {
+                if (name_or_id == duckdb_yyjson::yyjson_get_str(name_val)) {
+                    resolved = duckdb_yyjson::yyjson_get_str(id_val);
+                    break;
+                }
+            }
+        }
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+
+    if (resolved.empty()) {
+        throw std::runtime_error(
+            "No Planner bucket found with name '" + name_or_id + "' in plan '" + plan_id + "'");
+    }
+
+    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Resolved bucket '" + name_or_id + "' → " + resolved);
+    return resolved;
+}
+
 // Normalise a user-supplied date string to the UTC datetime format Planner expects.
 // "2024-06-15" → "2024-06-15T00:00:00Z"
 // "2024-06-15T12:00:00Z" → unchanged

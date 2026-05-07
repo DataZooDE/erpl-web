@@ -412,6 +412,12 @@ unique_ptr<FunctionData> GraphPlannerFunctions::CreateTaskBind(
 
     auto auth_info = ResolveGraphAuth(context, secret_name);
     GraphPlannerClient client(auth_info.auth_params);
+
+    // Resolve bucket name → GUID before creating the task (no-op if already a GUID)
+    if (!params.bucket_id.empty()) {
+        params.bucket_id = client.ResolveBucketId(plan_id, params.bucket_id);
+    }
+
     const std::string task_id = client.CreateTask(plan_id, title, params);
 
     auto bind_data = make_uniq<CreateTaskBindData>();
