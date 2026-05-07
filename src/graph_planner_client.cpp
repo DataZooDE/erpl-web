@@ -1,6 +1,9 @@
 #include "graph_planner_client.hpp"
 #include "graph_client.hpp"
 #include "tracing.hpp"
+#include "yyjson.hpp"
+#include <map>
+#include <stdexcept>
 
 namespace erpl_web {
 
@@ -48,6 +51,14 @@ std::string GraphPlannerUrlBuilder::BuildMyTasksUrl() {
 std::string GraphPlannerUrlBuilder::BuildMyPlansUrl() {
     // Note: This endpoint might require beta API for some features
     return GetBaseUrl() + "/me/planner/plans";
+}
+
+std::string GraphPlannerUrlBuilder::BuildTasksUrl() {
+    return GetBaseUrl() + "/planner/tasks";
+}
+
+std::string GraphPlannerUrlBuilder::BuildBucketsUrl() {
+    return GetBaseUrl() + "/planner/buckets";
 }
 
 // GraphPlannerClient implementation
@@ -102,6 +113,99 @@ std::string GraphPlannerClient::GetTaskDetails(const std::string &task_id) {
 std::string GraphPlannerClient::GetMyTasks() {
     auto url = GraphPlannerUrlBuilder::BuildMyTasksUrl();
     return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+}
+
+// Normalise a user-supplied date string to the UTC datetime format Planner expects.
+// "2024-06-15" → "2024-06-15T00:00:00Z"
+// "2024-06-15T12:00:00Z" → unchanged
+static std::string NormalisePlannerDate(const std::string &s) {
+    if (s.size() == 10 && s[4] == '-' && s[7] == '-') {
+        return s + "T00:00:00Z";
+    }
+    return s;
+}
+
+// Build a JSON string literal with basic escaping.
+static std::string JsonString(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    out += '"';
+    for (char c : s) {
+        if (c == '"')  { out += "\\\""; }
+        else if (c == '\\') { out += "\\\\"; }
+        else if (c == '\n')  { out += "\\n"; }
+        else if (c == '\r')  { out += "\\r"; }
+        else if (c == '\t')  { out += "\\t"; }
+        else { out += c; }
+    }
+    out += '"';
+    return out;
+}
+
+std::string GraphPlannerClient::CreateTask(const std::string &plan_id,
+                                            const std::string &title,
+                                            const PlannerTaskCreateParams &params)
+{
+    GraphClient graph_client(auth_params, "GRAPH_PLANNER");
+
+    // Build the POST body for /planner/tasks
+    std::string body = "{\"planId\":" + JsonString(plan_id) +
+                       ",\"title\":"  + JsonString(title);
+
+    if (!params.bucket_id.empty()) {
+        body += ",\"bucketId\":" + JsonString(params.bucket_id);
+    }
+    if (!params.due_date.empty()) {
+        body += ",\"dueDateTime\":" + JsonString(NormalisePlannerDate(params.due_date));
+    }
+    if (!params.start_date.empty()) {
+        body += ",\"startDateTime\":" + JsonString(NormalisePlannerDate(params.start_date));
+    }
+    if (params.priority >= 0 && params.priority <= 10) {
+        body += ",\"priority\":" + std::to_string(params.priority);
+    }
+    if (params.percent_complete >= 0 && params.percent_complete <= 100) {
+        body += ",\"percentComplete\":" + std::to_string(params.percent_complete);
+    }
+    if (!params.assigned_to.empty()) {
+        // assignments is a map: userId → { "@odata.type": "...", "orderHint": " !" }
+        body += ",\"assignments\":{" + JsonString(params.assigned_to) +
+                ":{\"@odata.type\":\"#microsoft.graph.plannerAssignment\",\"orderHint\":\" !\"}}";
+    }
+    body += "}";
+
+    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Creating task in plan " + plan_id + ": " + title);
+    const std::string task_json = graph_client.Post(GraphPlannerUrlBuilder::BuildTasksUrl(), body);
+
+    // Extract task ID from response
+    std::string task_id;
+    {
+        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(task_json.c_str(), task_json.size(), 0);
+        if (!doc) {
+            throw std::runtime_error("Failed to parse Planner task creation response");
+        }
+        duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
+        if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
+            task_id = duckdb_yyjson::yyjson_get_str(id_val);
+        }
+        duckdb_yyjson::yyjson_doc_free(doc);
+    }
+
+    if (task_id.empty()) {
+        throw std::runtime_error("Planner task creation succeeded but returned no task id");
+    }
+
+    // If a description was requested, PATCH /planner/tasks/{id}/details.
+    // Planner requires If-Match for optimistic concurrency; "If-Match: *" forces the update.
+    if (!params.description.empty()) {
+        const std::string details_url = GraphPlannerUrlBuilder::BuildTaskDetailsUrl(task_id);
+        const std::string details_body = "{\"description\":" + JsonString(params.description) + "}";
+        graph_client.PatchWithHeaders(details_url, details_body, {{"If-Match", "*"}});
+        ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Patched description for task " + task_id);
+    }
+
+    return task_id;
 }
 
 } // namespace erpl_web

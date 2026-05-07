@@ -51,6 +51,25 @@ public:
     // Build URL for listing plans I'm a member of
     // /me/planner/plans (requires beta API)
     static std::string BuildMyPlansUrl();
+
+    // Build URL for creating a new task
+    // /planner/tasks
+    static std::string BuildTasksUrl();
+
+    // Build URL for creating a bucket
+    // /planner/buckets
+    static std::string BuildBucketsUrl();
+};
+
+// Holds all optional fields for creating a Planner task.
+struct PlannerTaskCreateParams {
+    std::string bucket_id;        // optional — places task in a specific bucket
+    std::string due_date;         // optional — ISO 8601 date or datetime (e.g. "2024-06-15")
+    std::string start_date;       // optional — ISO 8601 date or datetime
+    std::string assigned_to;      // optional — single Graph user ID to assign
+    std::string description;      // optional — task notes (requires PATCH /details after creation)
+    int32_t     priority = -1;    // optional — 0-10: 1=urgent, 3=important, 5=medium, 9=low; -1=unset
+    int32_t     percent_complete = -1; // optional — 0-100; -1=unset
 };
 
 // Client for Microsoft Graph Planner API operations
@@ -72,6 +91,13 @@ public:
     std::string GetTask(const std::string &task_id);
     std::string GetTaskDetails(const std::string &task_id);
     std::string GetMyTasks();
+
+    // Write operations (requires Tasks.ReadWrite or Tasks.ReadWrite.All)
+    // Creates a task and (if description given) patches its details.
+    // Returns the new task ID.
+    std::string CreateTask(const std::string &plan_id,
+                           const std::string &title,
+                           const PlannerTaskCreateParams &params = {});
 
 private:
     std::shared_ptr<HttpAuthParams> auth_params;

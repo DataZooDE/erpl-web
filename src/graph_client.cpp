@@ -142,6 +142,11 @@ std::string GraphClient::PostWithHeaders(const std::string &url, const std::stri
 }
 
 void GraphClient::Patch(const std::string &url, const std::string &body) {
+    PatchWithHeaders(url, body, {});
+}
+
+void GraphClient::PatchWithHeaders(const std::string &url, const std::string &body,
+                                    const std::map<std::string, std::string> &extra_headers) {
     ERPL_TRACE_DEBUG(trace_component, "PATCH request to: " + url);
 
     HttpUrl http_url(url);
@@ -150,6 +155,9 @@ void GraphClient::Patch(const std::string &url, const std::string &body) {
         request.AuthHeadersFromParams(*auth_params);
     }
     request.headers["Accept"] = "application/json";
+    for (const auto &kv : extra_headers) {
+        request.headers[kv.first] = kv.second;
+    }
 
     auto response = http_client->SendRequest(request);
     GraphCheckResponse(response, trace_component, "PATCH");

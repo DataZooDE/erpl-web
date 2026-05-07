@@ -360,6 +360,87 @@ void GraphPlannerFunctions::TasksScan(
 }
 
 // ============================================================================
+// graph_planner_create_task — create a task, suitable for lateral joins
+// ============================================================================
+
+struct CreateTaskBindData : public TableFunctionData {
+    std::string task_id;
+    std::string task_url;
+    bool done = false;
+};
+
+unique_ptr<FunctionData> GraphPlannerFunctions::CreateTaskBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 2) {
+        throw BinderException("graph_planner_create_task requires plan_id and title parameters");
+    }
+
+    const std::string plan_id = input.inputs[0].GetValue<std::string>();
+    const std::string title   = input.inputs[1].GetValue<std::string>();
+
+    std::string secret_name;
+    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+
+    PlannerTaskCreateParams params;
+    if (input.named_parameters.find("bucket_id") != input.named_parameters.end()) {
+        params.bucket_id = input.named_parameters.at("bucket_id").GetValue<std::string>();
+    }
+    if (input.named_parameters.find("due_date") != input.named_parameters.end()) {
+        params.due_date = input.named_parameters.at("due_date").GetValue<std::string>();
+    }
+    if (input.named_parameters.find("start_date") != input.named_parameters.end()) {
+        params.start_date = input.named_parameters.at("start_date").GetValue<std::string>();
+    }
+    if (input.named_parameters.find("assigned_to") != input.named_parameters.end()) {
+        params.assigned_to = input.named_parameters.at("assigned_to").GetValue<std::string>();
+    }
+    if (input.named_parameters.find("description") != input.named_parameters.end()) {
+        params.description = input.named_parameters.at("description").GetValue<std::string>();
+    }
+    if (input.named_parameters.find("priority") != input.named_parameters.end()) {
+        params.priority = input.named_parameters.at("priority").GetValue<int32_t>();
+    }
+    if (input.named_parameters.find("percent_complete") != input.named_parameters.end()) {
+        params.percent_complete = input.named_parameters.at("percent_complete").GetValue<int32_t>();
+    }
+
+    auto auth_info = ResolveGraphAuth(context, secret_name);
+    GraphPlannerClient client(auth_info.auth_params);
+    const std::string task_id = client.CreateTask(plan_id, title, params);
+
+    auto bind_data = make_uniq<CreateTaskBindData>();
+    bind_data->task_id  = task_id;
+    bind_data->task_url = "https://planner.cloud.microsoft/webui/open/task/" + task_id;
+
+    names        = {"task_id", "task_url"};
+    return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+
+    return std::move(bind_data);
+}
+
+void GraphPlannerFunctions::CreateTaskScan(
+    ClientContext &context,
+    TableFunctionInput &data,
+    DataChunk &output) {
+
+    auto &bind_data = data.bind_data->CastNoConst<CreateTaskBindData>();
+    if (bind_data.done) {
+        output.SetCardinality(0);
+        return;
+    }
+    bind_data.done = true;
+    output.SetValue(0, 0, Value(bind_data.task_id));
+    output.SetValue(1, 0, Value(bind_data.task_url));
+    output.SetCardinality(1);
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -404,6 +485,51 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {"plan_id", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_planner_tasks('plan-id-here', secret := 'ms_graph')"};
+        desc.categories = {"microsoft", "graph", "planner"};
+        info.descriptions.push_back(std::move(desc));
+        loader.RegisterFunction(std::move(info));
+    }
+
+    {
+        TableFunction create_task("graph_planner_create_task",
+                                   {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                   CreateTaskScan, CreateTaskBind);
+        create_task.named_parameters["bucket_id"]        = LogicalType::VARCHAR;
+        create_task.named_parameters["due_date"]         = LogicalType::VARCHAR;
+        create_task.named_parameters["start_date"]       = LogicalType::VARCHAR;
+        create_task.named_parameters["assigned_to"]      = LogicalType::VARCHAR;
+        create_task.named_parameters["description"]      = LogicalType::VARCHAR;
+        create_task.named_parameters["priority"]         = LogicalType::INTEGER;
+        create_task.named_parameters["percent_complete"] = LogicalType::INTEGER;
+        create_task.named_parameters["secret"]           = LogicalType::VARCHAR;
+        CreateTableFunctionInfo info(create_task);
+        FunctionDescription desc;
+        desc.description =
+            "Create a Microsoft Planner task. Returns (task_id, task_url). "
+            "Designed for use with lateral joins to bulk-create tasks from a query result. "
+            "priority: 0-10 (1=urgent, 3=important, 5=medium, 9=low). "
+            "assigned_to: single Graph user ID. "
+            "due_date/start_date: ISO 8601 date or datetime string.";
+        desc.parameter_names = {"plan_id", "title", "bucket_id", "due_date", "start_date",
+                                "assigned_to", "description", "priority", "percent_complete", "secret"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                LogicalType::INTEGER, LogicalType::INTEGER, LogicalType::VARCHAR};
+        desc.examples = {
+            "-- Create a single task\n"
+            "SELECT * FROM graph_planner_create_task('plan-id', 'My Task',\n"
+            "    bucket_id := 'bucket-id', due_date := '2024-06-30',\n"
+            "    assigned_to := 'user-guid', description := 'Details here',\n"
+            "    priority := 5, secret := 'ms_graph')",
+            "-- Bulk-create from a table using a lateral join\n"
+            "SELECT t.title, pt.task_url\n"
+            "FROM todos t,\n"
+            "     graph_planner_create_task('plan-id', t.title,\n"
+            "         due_date := t.due_date::VARCHAR,\n"
+            "         description := t.notes,\n"
+            "         secret := 'ms_graph') pt"
+        };
         desc.categories = {"microsoft", "graph", "planner"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

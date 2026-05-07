@@ -46,6 +46,21 @@ private:
         duckdb::ClientContext &context,
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
+
+    // graph_planner_create_task(plan_id, title, bucket_id:=, due_date:=, start_date:=,
+    //   assigned_to:=, description:=, priority:=, percent_complete:=, secret:=)
+    // Creates a Planner task and returns (task_id, task_url).
+    // Suitable for use with lateral joins to bulk-create tasks from a query result.
+    static duckdb::unique_ptr<duckdb::FunctionData> CreateTaskBind(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionBindInput &input,
+        duckdb::vector<duckdb::LogicalType> &return_types,
+        duckdb::vector<std::string> &names);
+
+    static void CreateTaskScan(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionInput &data,
+        duckdb::DataChunk &output);
 };
 
 } // namespace erpl_web

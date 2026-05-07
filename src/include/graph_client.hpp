@@ -21,6 +21,8 @@ public:
     std::string PostWithHeaders(const std::string &url, const std::string &body,
                                 const std::map<std::string, std::string> &extra_headers);
     void Patch(const std::string &url, const std::string &body);
+    void PatchWithHeaders(const std::string &url, const std::string &body,
+                          const std::map<std::string, std::string> &extra_headers);
     void Delete(const std::string &url);
     void DeleteWithHeaders(const std::string &url, const std::map<std::string, std::string> &extra_headers);
 
