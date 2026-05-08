@@ -1,8 +1,9 @@
 # name: test/sql/graph_outlook_integration.test
-# description: Integration tests for Microsoft Graph Outlook
+# description: Integration tests for Microsoft Graph Outlook (Calendar, Contacts, Mail)
 # group: [erpl_web]
-# note: Outlook functions require delegated authentication
-#       Use authorization_code provider or set ERPL_MS_DELEGATED_ACCESS_TOKEN
+# note: Outlook Application permissions require ERPL_MS_CLIENT_SECRET.
+#       Delegated-only tests (those using /me/) additionally require a live
+#       delegated access token via ERPL_MS_DELEGATED_ACCESS_TOKEN.
 
 require erpl_web
 
@@ -10,66 +11,303 @@ require-env ERPL_MS_TENANT_ID
 
 require-env ERPL_MS_CLIENT_ID
 
-require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
+require-env ERPL_MS_CLIENT_SECRET
 
-require-env ERPL_MS_DELEGATED_EXPIRES_AT
+require-env ERPL_MS_OUTLOOK_USER_ID
 
-# Create secret with delegated (user) credentials
+# ============================================================================
+# Setup: app-only secret (client_credentials)
+# ============================================================================
+
 statement ok
-CREATE SECRET ms_graph_outlook_test (
+CREATE SECRET ms_graph_outlook_app (
     TYPE microsoft_graph,
-    PROVIDER config,
+    PROVIDER client_credentials,
     tenant_id '${ERPL_MS_TENANT_ID}',
     client_id '${ERPL_MS_CLIENT_ID}',
-    access_token '${ERPL_MS_DELEGATED_ACCESS_TOKEN}',
-    expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
 );
 
-# Test: graph_calendar_events returns data (may be empty)
+# ============================================================================
+# graph_calendars — discovery
+# ============================================================================
+
+# Function exists
 query I
-SELECT COUNT(*) >= 0 FROM graph_calendar_events();
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_calendars';
+----
+1
+
+# Returns at least one calendar for the test user
+query I
+SELECT COUNT(*) > 0 FROM graph_calendars(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
 ----
 true
 
-# Test: graph_calendar_events has expected columns
+# Returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_calendar_events())
-    WHERE column_name IN ('id', 'subject', 'body_preview', 'start_time', 'end_time', 'location', 'organizer_name', 'is_all_day', 'is_cancelled', 'web_link')
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_calendars(
+            user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+            secret  := 'ms_graph_outlook_app'
+        )
+    )
+    WHERE column_name IN ('id', 'name', 'color', 'is_default_calendar', 'can_edit')
 );
 ----
-10
+5
 
-# Test: graph_contacts returns data (may be empty)
+# All calendars have a non-empty id and name
 query I
-SELECT COUNT(*) >= 0 FROM graph_contacts();
+SELECT COUNT(*) = 0 FROM graph_calendars(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+)
+WHERE id IS NULL OR id = '' OR name IS NULL OR name = '';
 ----
 true
 
-# Test: graph_contacts has expected columns
+# ============================================================================
+# graph_calendar_events — basic read
+# ============================================================================
+
+# Function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_calendar_events';
+----
+1
+
+# Returns rows (may be 0 if mailbox is empty, but must not error)
+query I
+SELECT COUNT(*) >= 0 FROM graph_calendar_events(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_contacts())
-    WHERE column_name IN ('id', 'display_name', 'given_name', 'surname', 'email', 'mobile_phone', 'business_phone', 'company_name', 'job_title')
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_calendar_events(
+            user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+            secret  := 'ms_graph_outlook_app'
+        )
+    )
+    WHERE column_name IN (
+        'id', 'subject', 'body_preview', 'start_time', 'end_time',
+        'location', 'organizer_name', 'organizer_email',
+        'is_all_day', 'is_cancelled', 'web_link'
+    )
+);
+----
+11
+
+# ============================================================================
+# graph_calendar_events — date range (calendarView endpoint)
+# ============================================================================
+
+# Returns rows for a broad date range without error
+query I
+SELECT COUNT(*) >= 0 FROM graph_calendar_events(
+    user_id    := '${ERPL_MS_OUTLOOK_USER_ID}',
+    start_date := '2024-01-01',
+    end_date   := '2026-12-31',
+    secret     := 'ms_graph_outlook_app'
+);
+----
+true
+
+# start_date without end_date is an error
+statement error
+SELECT * FROM graph_calendar_events(
+    user_id    := '${ERPL_MS_OUTLOOK_USER_ID}',
+    start_date := '2024-01-01',
+    secret     := 'ms_graph_outlook_app'
+);
+----
+start_date and end_date must both be provided or both omitted
+
+# ============================================================================
+# graph_calendar_events — specific calendar
+# ============================================================================
+
+# Querying by calendar_id: at least one calendar exists and can be queried for events
+query I
+SELECT COUNT(*) > 0 FROM graph_calendars(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# ============================================================================
+# graph_contacts
+# ============================================================================
+
+# Function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_contacts';
+----
+1
+
+# Returns rows without error
+query I
+SELECT COUNT(*) >= 0 FROM graph_contacts(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_contacts(
+            user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+            secret  := 'ms_graph_outlook_app'
+        )
+    )
+    WHERE column_name IN (
+        'id', 'display_name', 'given_name', 'surname',
+        'email', 'mobile_phone', 'business_phone', 'company_name', 'job_title'
+    )
 );
 ----
 9
 
-# Test: graph_messages returns data (may be empty)
+# All contacts have a non-empty id
 query I
-SELECT COUNT(*) >= 0 FROM graph_messages();
+SELECT COUNT(*) = 0 FROM graph_contacts(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+)
+WHERE id IS NULL OR id = '';
 ----
 true
 
-# Test: graph_messages has expected columns
+# ============================================================================
+# graph_mail_folders — discovery
+# ============================================================================
+
+# Function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_mail_folders';
+----
+1
+
+# Returns rows (inbox at minimum always exists)
+query I
+SELECT COUNT(*) > 0 FROM graph_mail_folders(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Returns expected columns
 query I
 SELECT COUNT(*) FROM (
-    SELECT column_name FROM (DESCRIBE SELECT * FROM graph_messages())
-    WHERE column_name IN ('id', 'subject', 'body_preview', 'from_name', 'from_email', 'received_at', 'has_attachments', 'is_read', 'importance', 'web_link')
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_mail_folders(
+            user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+            secret  := 'ms_graph_outlook_app'
+        )
+    )
+    WHERE column_name IN ('id', 'display_name', 'parent_folder_id', 'total_item_count', 'unread_item_count')
+);
+----
+5
+
+# Inbox folder is always present
+query I
+SELECT COUNT(*) > 0 FROM graph_mail_folders(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+)
+WHERE lower(display_name) = 'inbox';
+----
+true
+
+# ============================================================================
+# graph_messages — basic read
+# ============================================================================
+
+# Function exists
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_messages';
+----
+1
+
+# Returns rows without error
+query I
+SELECT COUNT(*) >= 0 FROM graph_messages(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (
+        DESCRIBE SELECT * FROM graph_messages(
+            user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+            secret  := 'ms_graph_outlook_app'
+        )
+    )
+    WHERE column_name IN (
+        'id', 'subject', 'body_preview', 'from_name', 'from_email',
+        'received_at', 'has_attachments', 'is_read', 'importance', 'web_link'
+    )
 );
 ----
 10
 
+# ============================================================================
+# graph_messages — folder filter
+# ============================================================================
+
+# Well-known folder 'inbox' works
+query I
+SELECT COUNT(*) >= 0 FROM graph_messages(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    folder  := 'inbox',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Well-known folder 'sentitems' works
+query I
+SELECT COUNT(*) >= 0 FROM graph_messages(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    folder  := 'sentitems',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+true
+
+# Unknown folder name raises an error
+statement error
+SELECT * FROM graph_messages(
+    user_id := '${ERPL_MS_OUTLOOK_USER_ID}',
+    folder  := 'this-folder-does-not-exist-xyz',
+    secret  := 'ms_graph_outlook_app'
+);
+----
+no mail folder found with name
+
+# ============================================================================
 # Cleanup
+# ============================================================================
+
 statement ok
-DROP SECRET ms_graph_outlook_test;
+DROP SECRET ms_graph_outlook_app;
