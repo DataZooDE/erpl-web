@@ -171,6 +171,11 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
         DetectODataVersion();
     }
 
+    if (get_next && current_response == nullptr) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "get_next=true with no prior response — nothing to advance from");
+        return nullptr;
+    }
+
     if (get_next && current_response != nullptr) {
         auto next_url = current_response->NextUrl();
         if (!next_url) {
