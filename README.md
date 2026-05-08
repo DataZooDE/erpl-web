@@ -746,6 +746,43 @@ ORDER BY due_at;
 
 Functions: `graph_planner_plans(group_id, [secret])`, `graph_planner_buckets(plan_id, [secret])`, `graph_planner_tasks(plan_id, [secret])`
 
+#### Creating tasks
+
+Required permissions: `Tasks.ReadWrite.All` (Application).
+
+`graph_planner_create_task` is a table function that calls the Graph API once per invocation and returns `(task_id, task_url)`. Use it with a **lateral join** to bulk-create tasks from any query result.
+
+```sql
+-- Create a single task
+SELECT task_id, task_url
+FROM graph_planner_create_task(
+    plan_id          := 'your-plan-id',
+    title            := 'Review Q2 budget',
+    bucket_id        := 'Backlog',          -- name or GUID
+    due_date         := '2024-07-31',
+    assigned_to      := 'user-object-id',
+    description      := 'Check the finance sheet before the board meeting.',
+    priority         := 3,                  -- 1=urgent 3=important 5=medium 9=low
+    percent_complete := 0,
+    secret           := 'ms_graph'
+);
+
+-- Bulk-create tasks from a DuckDB table using a lateral join
+SELECT t.title, p.task_id, p.task_url
+FROM todos t,
+     LATERAL graph_planner_create_task(
+         plan_id   := 'your-plan-id',
+         title     := t.title,
+         bucket_id := t.bucket,
+         due_date  := t.due_date,
+         secret    := 'ms_graph'
+     ) p;
+```
+
+`bucket_id` accepts either a bucket GUID or a human-readable bucket name (resolved automatically). `due_date` / `start_date` accept `'YYYY-MM-DD'` or full ISO 8601 datetimes.
+
+Functions: `graph_planner_create_task(plan_id, title, [bucket_id, due_date, start_date, assigned_to, description, priority, percent_complete, secret])`
+
 ---
 
 ### SharePoint Lists
@@ -784,6 +821,48 @@ SELECT * FROM graph_list_items(
 ```
 
 Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id_or_name, list_id_or_name, [secret])`, `graph_list_items(site_id_or_name, list_id_or_name, [secret])`
+
+#### Writing list items
+
+Required permissions: `Sites.ReadWrite.All` (Application).
+
+`graph_sharepoint_create_item`, `graph_sharepoint_update_item`, and `graph_sharepoint_delete_item` are table functions — use them in `SELECT` or with a lateral join for per-row mutations.
+
+```sql
+-- Create a new item (fields as JSON object)
+SELECT item_id, item_url
+FROM graph_sharepoint_create_item(
+    'Finance',
+    'Budget',
+    '{"Title": "New Entry", "Status": "Draft", "Amount": 1500}',
+    secret := 'ms_graph'
+);
+
+-- Update an existing item by ID
+SELECT item_id, item_url
+FROM graph_sharepoint_update_item(
+    'Finance',
+    'Budget',
+    'item-id-here',
+    '{"Status": "Approved"}',
+    secret := 'ms_graph'
+);
+
+-- Delete an item by ID
+SELECT item_id
+FROM graph_sharepoint_delete_item('Finance', 'Budget', 'item-id-here', secret := 'ms_graph');
+
+-- Bulk-create items from a query result
+SELECT src.title, p.item_id
+FROM staging_items src,
+     LATERAL graph_sharepoint_create_item(
+         'Finance', 'Budget',
+         json_object('Title', src.title, 'Amount', src.amount::VARCHAR),
+         secret := 'ms_graph'
+     ) p;
+```
+
+Functions: `graph_sharepoint_create_item(site, list, fields_json, [secret])`, `graph_sharepoint_update_item(site, list, item_id, fields_json, [secret])`, `graph_sharepoint_delete_item(site, list, item_id, [secret])`
 
 ---
 
@@ -851,6 +930,47 @@ SELECT * FROM graph_excel_range('Budget.xlsx', 'Sheet1',
 ```
 
 Functions: `graph_list_files([secret, drive_id, site, drive])`, `graph_excel_worksheets(file_path, [secret, drive_id, site, drive])`, `graph_excel_tables(file_path, [secret, drive_id, site, drive])`, `graph_excel_table_data(file_path, table_name, [secret, drive_id, site, drive])`, `graph_excel_range(file_path, sheet_name, [secret, drive_id, site, drive])`
+
+#### Writing Excel data
+
+Required permissions: `Files.ReadWrite.All` (Application).
+
+**Append rows via ATTACH:**
+
+Attach a workbook as an `excel_workbook` catalog and use standard `INSERT INTO` to append rows to a named Excel table.
+
+```sql
+ATTACH '/sites/Finance/Shared Documents/Budget.xlsx' AS budget
+    (TYPE excel_workbook, SECRET 'ms_graph');
+
+-- Tables in the workbook become DuckDB tables
+SHOW TABLES IN budget;
+
+-- Append rows
+INSERT INTO budget.main."SalesData"
+SELECT region, product, revenue::VARCHAR
+FROM local_sales
+WHERE quarter = 'Q2';
+```
+
+The `drive` option scopes the path to a specific SharePoint drive: `(TYPE excel_workbook, SECRET 'ms_graph', drive 'b!drive-id...')`.
+
+**Delete rows by column value:**
+
+```sql
+-- Delete all rows where a named column equals a given value
+SELECT rows_deleted
+FROM graph_excel_delete_rows(
+    'Budget.xlsx', 'SalesData',
+    'Region', 'North',          -- column name and match value
+    site   := 'Finance',
+    secret := 'ms_graph'
+);
+```
+
+Functions: `graph_excel_delete_rows(file_path, table_name, col_name, col_value, [secret, drive_id, site, drive])`
+
+Storage extension: `ATTACH '<file-path>' AS <catalog> (TYPE excel_workbook, SECRET '<secret>'[, drive '<drive-id>'])`
 
 ---
 
