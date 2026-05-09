@@ -3,9 +3,7 @@
 #include "graph_teams_client.hpp"
 #include "graph_excel_secret.hpp"
 #include "graph_output_utils.hpp"
-#include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-#include "tracing.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb;
@@ -14,57 +12,109 @@ using namespace duckdb_yyjson;
 namespace erpl_web {
 
 // =============================================================================
-// Bind Data Structures
+// Shared lazy-streaming bind data
+//
+// Bind stores parameters and first_url — no HTTP calls happen there.
+// Scan fetches first_url on the first call, then follows @odata.nextLink pages
+// transparently across vector boundaries. Peak memory is one page at a time.
 // =============================================================================
 
-struct GraphMyTeamsBindData : public TableFunctionData {
+struct TeamsBindData : public TableFunctionData {
     std::string secret_name;
+    std::string user;
     std::shared_ptr<HttpAuthParams> auth_params;
-    std::vector<std::string> team_ids;
-    std::vector<std::string> display_names;
-    std::vector<std::string> descriptions;
-    std::vector<std::string> visibilities;
-    idx_t current_idx = 0;
+
+    std::string first_url;
+    std::string next_url;
+
+    yyjson_doc *current_doc = nullptr;
+    yyjson_arr_iter item_iter = {};
+    bool initialized = false;
     bool done = false;
+
+    ~TeamsBindData() override {
+        if (current_doc) {
+            yyjson_doc_free(current_doc);
+        }
+    }
+
+    bool LoadPage(const std::string &body) {
+        if (current_doc) {
+            yyjson_doc_free(current_doc);
+            current_doc = nullptr;
+        }
+        current_doc = yyjson_read(body.c_str(), body.size(), 0);
+        if (!current_doc) {
+            return false;
+        }
+        yyjson_val *root = yyjson_doc_get_root(current_doc);
+        yyjson_val *nl = yyjson_obj_get(root, "@odata.nextLink");
+        next_url = (nl && yyjson_is_str(nl)) ? yyjson_get_str(nl) : "";
+        yyjson_val *arr = yyjson_obj_get(root, "value");
+        if (!arr || !yyjson_is_arr(arr)) {
+            return false;
+        }
+        yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
 };
 
-struct GraphTeamChannelsBindData : public TableFunctionData {
-    std::string secret_name;
+struct TeamChannelsBindData : public TeamsBindData {
     std::string team_id;
-    std::shared_ptr<HttpAuthParams> auth_params;
-    std::vector<std::string> channel_ids;
-    std::vector<std::string> display_names;
-    std::vector<std::string> descriptions;
-    std::vector<std::string> membership_types;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
-struct GraphTeamMembersBindData : public TableFunctionData {
-    std::string secret_name;
+struct TeamMembersBindData : public TeamsBindData {
     std::string team_id;
-    std::shared_ptr<HttpAuthParams> auth_params;
-    std::vector<std::string> member_ids;
-    std::vector<std::string> display_names;
-    std::vector<std::string> emails;
-    std::vector<std::string> roles;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
-struct GraphChannelMessagesBindData : public TableFunctionData {
-    std::string secret_name;
+struct ChannelMessagesBindData : public TeamsBindData {
     std::string team_id;
     std::string channel_id;
-    std::shared_ptr<HttpAuthParams> auth_params;
-    std::vector<std::string> message_ids;
-    std::vector<std::string> created_datetimes;
-    std::vector<std::string> from_names;
-    std::vector<std::string> body_contents;
-    std::vector<std::string> importance_levels;
-    idx_t current_idx = 0;
-    bool done = false;
 };
+
+// =============================================================================
+// Pagination helpers
+// =============================================================================
+
+static bool FetchTeamsPage(TeamsBindData &bd, const std::string &url) {
+    const auto body = GraphClient(bd.auth_params, "GRAPH_TEAMS").Get(url);
+    return bd.LoadPage(body);
+}
+
+static bool InitTeamsScan(TeamsBindData &bd, DataChunk &output) {
+    if (bd.done) {
+        output.SetCardinality(0);
+        return false;
+    }
+    if (!bd.initialized) {
+        if (!FetchTeamsPage(bd, bd.first_url)) {
+            bd.done = true;
+            output.SetCardinality(0);
+            return false;
+        }
+        bd.initialized = true;
+    }
+    return true;
+}
+
+static yyjson_val *NextTeamsItem(TeamsBindData &bd) {
+    yyjson_val *item = yyjson_arr_iter_next(&bd.item_iter);
+    if (item) {
+        return item;
+    }
+    if (bd.next_url.empty() || !FetchTeamsPage(bd, bd.next_url)) {
+        return nullptr;
+    }
+    return yyjson_arr_iter_next(&bd.item_iter);
+}
+
+static std::string GetNamedStr(TableFunctionBindInput &input, const char *name) {
+    auto it = input.named_parameters.find(name);
+    if (it != input.named_parameters.end() && !it->second.IsNull()) {
+        return it->second.GetValue<std::string>();
+    }
+    return {};
+}
 
 // =============================================================================
 // graph_my_teams Implementation
@@ -76,89 +126,51 @@ unique_ptr<FunctionData> GraphTeamsFunctions::MyTeamsBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names) {
 
-    auto bind_data = make_uniq<GraphMyTeamsBindData>();
-
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-    bind_data->secret_name = secret_name;
-
-    std::string user;
-    if (input.named_parameters.find("user") != input.named_parameters.end()) {
-        user = input.named_parameters.at("user").GetValue<std::string>();
-    }
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    auto bind_data         = make_uniq<TeamsBindData>();
+    bind_data->secret_name = GetNamedStr(input, "secret");
+    bind_data->user        = GetNamedStr(input, "user");
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphTeamsUrlBuilder::BuildMyTeamsUrl(bind_data->user);
 
-    names = {"id", "display_name", "description", "visibility"};
+    names        = {"id", "display_name", "description", "visibility", "web_url", "is_archived"};
     return_types = {
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
-        LogicalType::VARCHAR
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::BOOLEAN,
     };
-
-    GraphTeamsClient client(bind_data->auth_params);
-    auto response = client.GetMyTeams(user);
-
-    auto doc = yyjson_read(response.c_str(), response.length(), 0);
-    if (!doc) {
-        throw IOException("Failed to parse Graph API response");
-    }
-
-    auto root = yyjson_doc_get_root(doc);
-    auto value_arr = yyjson_obj_get(root, "value");
-
-    if (value_arr && yyjson_is_arr(value_arr)) {
-        size_t idx, max;
-        yyjson_val *item;
-        yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->team_ids.push_back(GraphJsonGetString(item, "id"));
-            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
-            bind_data->descriptions.push_back(GraphJsonGetString(item, "description"));
-            bind_data->visibilities.push_back(GraphJsonGetString(item, "visibility"));
-        }
-    }
-
-    yyjson_doc_free(doc);
-    return bind_data;
+    return std::move(bind_data);
 }
 
 void GraphTeamsFunctions::MyTeamsScan(
-    ClientContext &context,
+    ClientContext &,
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphMyTeamsBindData>();
-
-    if (bind_data.done) {
-        output.SetCardinality(0);
+    auto &bd = data.bind_data->CastNoConst<TeamsBindData>();
+    if (!InitTeamsScan(bd, output)) {
         return;
     }
 
-    idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
-
-    while (bind_data.current_idx < bind_data.team_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
-
-        SetStrCellNN(output.data[0], count, bind_data.team_ids[i].c_str());
-        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
-        SetStrCellNN(output.data[2], count, bind_data.descriptions[i].c_str());
-        SetStrCellNN(output.data[3], count, bind_data.visibilities[i].c_str());
-
-        bind_data.current_idx++;
-        count++;
+    idx_t row = 0;
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextTeamsItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "displayName"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "description"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "visibility"));
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "webUrl"));
+        SetBoolCell(output.data[5], row, yyjson_obj_get(item, "isArchived"));
+        row++;
     }
-
-    if (bind_data.current_idx >= bind_data.team_ids.size()) {
-        bind_data.done = true;
-    }
-
-    output.SetCardinality(count);
+    output.SetCardinality(row);
 }
 
 // =============================================================================
@@ -171,90 +183,53 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names) {
 
-    auto bind_data = make_uniq<GraphTeamChannelsBindData>();
-
-    // team_id is required positional parameter
     if (input.inputs.empty()) {
         throw BinderException("graph_team_channels requires a team_id parameter");
     }
-    bind_data->team_id = input.inputs[0].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-    bind_data->secret_name = secret_name;
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    auto bind_data         = make_uniq<TeamChannelsBindData>();
+    bind_data->team_id     = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = GetNamedStr(input, "secret");
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphTeamsUrlBuilder::BuildTeamChannelsUrl(bind_data->team_id);
 
-    names = {"id", "display_name", "description", "membership_type"};
+    names        = {"id", "display_name", "description", "membership_type", "created_datetime"};
     return_types = {
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
-        LogicalType::VARCHAR
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
     };
-
-    GraphTeamsClient client(bind_data->auth_params);
-    auto response = client.GetTeamChannels(bind_data->team_id);
-
-    auto doc = yyjson_read(response.c_str(), response.length(), 0);
-    if (!doc) {
-        throw IOException("Failed to parse Graph API response");
-    }
-
-    auto root = yyjson_doc_get_root(doc);
-    auto value_arr = yyjson_obj_get(root, "value");
-
-    if (value_arr && yyjson_is_arr(value_arr)) {
-        size_t idx, max;
-        yyjson_val *item;
-        yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->channel_ids.push_back(GraphJsonGetString(item, "id"));
-            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
-            bind_data->descriptions.push_back(GraphJsonGetString(item, "description"));
-            bind_data->membership_types.push_back(GraphJsonGetString(item, "membershipType"));
-        }
-    }
-
-    yyjson_doc_free(doc);
-    return bind_data;
+    return std::move(bind_data);
 }
 
 void GraphTeamsFunctions::TeamChannelsScan(
-    ClientContext &context,
+    ClientContext &,
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphTeamChannelsBindData>();
-
-    if (bind_data.done) {
-        output.SetCardinality(0);
+    auto &bd = data.bind_data->CastNoConst<TeamChannelsBindData>();
+    if (!InitTeamsScan(bd, output)) {
         return;
     }
 
-    idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
-
-    while (bind_data.current_idx < bind_data.channel_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
-
-        SetStrCellNN(output.data[0], count, bind_data.channel_ids[i].c_str());
-        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
-        SetStrCellNN(output.data[2], count, bind_data.descriptions[i].c_str());
-        SetStrCellNN(output.data[3], count, bind_data.membership_types[i].c_str());
-
-        bind_data.current_idx++;
-        count++;
+    idx_t row = 0;
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextTeamsItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "displayName"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "description"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "membershipType"));
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "createdDateTime"));
+        row++;
     }
-
-    if (bind_data.current_idx >= bind_data.channel_ids.size()) {
-        bind_data.done = true;
-    }
-
-    output.SetCardinality(count);
+    output.SetCardinality(row);
 }
 
 // =============================================================================
@@ -267,102 +242,61 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names) {
 
-    auto bind_data = make_uniq<GraphTeamMembersBindData>();
-
-    // team_id is required positional parameter
     if (input.inputs.empty()) {
         throw BinderException("graph_team_members requires a team_id parameter");
     }
-    bind_data->team_id = input.inputs[0].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-    bind_data->secret_name = secret_name;
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    auto bind_data         = make_uniq<TeamMembersBindData>();
+    bind_data->team_id     = input.inputs[0].GetValue<std::string>();
+    bind_data->secret_name = GetNamedStr(input, "secret");
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphTeamsUrlBuilder::BuildTeamMembersUrl(bind_data->team_id);
 
-    names = {"id", "display_name", "email", "role"};
+    names        = {"id", "user_id", "display_name", "email", "role"};
     return_types = {
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
-        LogicalType::VARCHAR
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
     };
-
-    GraphTeamsClient client(bind_data->auth_params);
-    auto response = client.GetTeamMembers(bind_data->team_id);
-
-    auto doc = yyjson_read(response.c_str(), response.length(), 0);
-    if (!doc) {
-        throw IOException("Failed to parse Graph API response");
-    }
-
-    auto root = yyjson_doc_get_root(doc);
-    auto value_arr = yyjson_obj_get(root, "value");
-
-    if (value_arr && yyjson_is_arr(value_arr)) {
-        size_t idx, max;
-        yyjson_val *item;
-        yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->member_ids.push_back(GraphJsonGetString(item, "id"));
-            bind_data->display_names.push_back(GraphJsonGetString(item, "displayName"));
-            bind_data->emails.push_back(GraphJsonGetString(item, "email"));
-
-            // Roles is an array, get first role if available
-            auto roles_arr = yyjson_obj_get(item, "roles");
-            if (roles_arr && yyjson_is_arr(roles_arr) && yyjson_arr_size(roles_arr) > 0) {
-                auto first_role = yyjson_arr_get_first(roles_arr);
-                if (first_role && yyjson_is_str(first_role)) {
-                    bind_data->roles.push_back(yyjson_get_str(first_role));
-                } else {
-                    bind_data->roles.push_back("member");
-                }
-            } else {
-                bind_data->roles.push_back("member");
-            }
-        }
-    }
-
-    yyjson_doc_free(doc);
-    return bind_data;
+    return std::move(bind_data);
 }
 
 void GraphTeamsFunctions::TeamMembersScan(
-    ClientContext &context,
+    ClientContext &,
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphTeamMembersBindData>();
-
-    if (bind_data.done) {
-        output.SetCardinality(0);
+    auto &bd = data.bind_data->CastNoConst<TeamMembersBindData>();
+    if (!InitTeamsScan(bd, output)) {
         return;
     }
 
-    idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
+    idx_t row = 0;
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextTeamsItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "userId"));
+        SetStrCell(output.data[2], row, yyjson_obj_get(item, "displayName"));
+        SetStrCell(output.data[3], row, yyjson_obj_get(item, "email"));
 
-    while (bind_data.current_idx < bind_data.member_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
-
-        SetStrCellNN(output.data[0], count, bind_data.member_ids[i].c_str());
-        SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
-        SetStrCellNN(output.data[2], count, bind_data.emails[i].c_str());
-        SetStrCellNN(output.data[3], count, bind_data.roles[i].c_str());
-
-        bind_data.current_idx++;
-        count++;
+        // roles is an array; pick first element or default to "member"
+        auto *roles_arr = yyjson_obj_get(item, "roles");
+        if (roles_arr && yyjson_is_arr(roles_arr) && yyjson_arr_size(roles_arr) > 0) {
+            auto *first_role = yyjson_arr_get_first(roles_arr);
+            SetStrCell(output.data[4], row, first_role);
+        } else {
+            SetStrCellNN(output.data[4], row, "member");
+        }
+        row++;
     }
-
-    if (bind_data.current_idx >= bind_data.member_ids.size()) {
-        bind_data.done = true;
-    }
-
-    output.SetCardinality(count);
+    output.SetCardinality(row);
 }
 
 // =============================================================================
@@ -375,114 +309,63 @@ unique_ptr<FunctionData> GraphTeamsFunctions::ChannelMessagesBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names) {
 
-    auto bind_data = make_uniq<GraphChannelMessagesBindData>();
-
-    // team_id and channel_id are required positional parameters
     if (input.inputs.size() < 2) {
         throw BinderException("graph_channel_messages requires team_id and channel_id parameters");
     }
-    bind_data->team_id = input.inputs[0].GetValue<std::string>();
-    bind_data->channel_id = input.inputs[1].GetValue<std::string>();
 
-    // Get secret name from named parameter (optional)
-    std::string secret_name;
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-    bind_data->secret_name = secret_name;
+    auto bind_data          = make_uniq<ChannelMessagesBindData>();
+    bind_data->team_id      = input.inputs[0].GetValue<std::string>();
+    bind_data->channel_id   = input.inputs[1].GetValue<std::string>();
+    bind_data->secret_name  = GetNamedStr(input, "secret");
+    auto auth_info          = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params  = auth_info.auth_params;
+    bind_data->first_url    = GraphTeamsUrlBuilder::BuildChannelMessagesUrl(
+        bind_data->team_id, bind_data->channel_id);
 
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    bind_data->auth_params = auth_info.auth_params;
-
-    names = {"id", "created_datetime", "from_name", "body_content", "importance"};
+    names        = {"id", "created_datetime", "from_name", "body_content", "importance", "message_type"};
     return_types = {
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
         LogicalType::VARCHAR,
-        LogicalType::VARCHAR
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
     };
-
-    GraphTeamsClient client(bind_data->auth_params);
-    auto response = client.GetChannelMessages(bind_data->team_id, bind_data->channel_id);
-
-    auto doc = yyjson_read(response.c_str(), response.length(), 0);
-    if (!doc) {
-        throw IOException("Failed to parse Graph API response");
-    }
-
-    auto root = yyjson_doc_get_root(doc);
-    auto value_arr = yyjson_obj_get(root, "value");
-
-    if (value_arr && yyjson_is_arr(value_arr)) {
-        size_t idx, max;
-        yyjson_val *item;
-        yyjson_arr_foreach(value_arr, idx, max, item) {
-            bind_data->message_ids.push_back(GraphJsonGetString(item, "id"));
-            bind_data->created_datetimes.push_back(GraphJsonGetString(item, "createdDateTime"));
-
-            // from is a nested object
-            auto from_obj = yyjson_obj_get(item, "from");
-            if (from_obj) {
-                auto user_obj = yyjson_obj_get(from_obj, "user");
-                if (user_obj) {
-                    bind_data->from_names.push_back(GraphJsonGetString(user_obj, "displayName"));
-                } else {
-                    bind_data->from_names.push_back("");
-                }
-            } else {
-                bind_data->from_names.push_back("");
-            }
-
-            // body is a nested object
-            auto body_obj = yyjson_obj_get(item, "body");
-            if (body_obj) {
-                bind_data->body_contents.push_back(GraphJsonGetString(body_obj, "content"));
-            } else {
-                bind_data->body_contents.push_back("");
-            }
-
-            bind_data->importance_levels.push_back(GraphJsonGetString(item, "importance"));
-        }
-    }
-
-    yyjson_doc_free(doc);
-    return bind_data;
+    return std::move(bind_data);
 }
 
 void GraphTeamsFunctions::ChannelMessagesScan(
-    ClientContext &context,
+    ClientContext &,
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphChannelMessagesBindData>();
-
-    if (bind_data.done) {
-        output.SetCardinality(0);
+    auto &bd = data.bind_data->CastNoConst<ChannelMessagesBindData>();
+    if (!InitTeamsScan(bd, output)) {
         return;
     }
 
-    idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
+    idx_t row = 0;
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextTeamsItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
+        SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
+        SetStrCell(output.data[1], row, yyjson_obj_get(item, "createdDateTime"));
 
-    while (bind_data.current_idx < bind_data.message_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
+        auto *from_obj = yyjson_obj_get(item, "from");
+        auto *user_obj = from_obj ? yyjson_obj_get(from_obj, "user") : nullptr;
+        SetStrCell(output.data[2], row, user_obj ? yyjson_obj_get(user_obj, "displayName") : nullptr);
 
-        SetStrCellNN(output.data[0], count, bind_data.message_ids[i].c_str());
-        SetStrCellNN(output.data[1], count, bind_data.created_datetimes[i].c_str());
-        SetStrCellNN(output.data[2], count, bind_data.from_names[i].c_str());
-        SetStrCellNN(output.data[3], count, bind_data.body_contents[i].c_str());
-        SetStrCellNN(output.data[4], count, bind_data.importance_levels[i].c_str());
+        auto *body_obj = yyjson_obj_get(item, "body");
+        SetStrCell(output.data[3], row, body_obj ? yyjson_obj_get(body_obj, "content") : nullptr);
 
-        bind_data.current_idx++;
-        count++;
+        SetStrCell(output.data[4], row, yyjson_obj_get(item, "importance"));
+        SetStrCell(output.data[5], row, yyjson_obj_get(item, "messageType"));
+        row++;
     }
-
-    if (bind_data.current_idx >= bind_data.message_ids.size()) {
-        bind_data.done = true;
-    }
-
-    output.SetCardinality(count);
+    output.SetCardinality(row);
 }
 
 // =============================================================================
@@ -514,8 +397,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(team_channels_func);
         FunctionDescription desc;
         desc.description = "List all channels in a Microsoft Teams team.";
-        desc.parameter_names = {"team_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_names = {"team_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_team_channels('team-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
@@ -527,21 +410,24 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         CreateTableFunctionInfo info(team_members_func);
         FunctionDescription desc;
         desc.description = "List all members of a Microsoft Teams team.";
-        desc.parameter_names = {"team_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_names = {"team_id"};
+        desc.parameter_types = {LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_team_members('team-id-here', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction channel_messages_func("graph_channel_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ChannelMessagesScan, ChannelMessagesBind);
+        TableFunction channel_messages_func("graph_channel_messages",
+            {LogicalType::VARCHAR, LogicalType::VARCHAR},
+            ChannelMessagesScan, ChannelMessagesBind);
         channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(channel_messages_func);
         FunctionDescription desc;
-        desc.description = "List messages in a Microsoft Teams channel.";
-        desc.parameter_names = {"team_id", "channel_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.description = "List messages in a Microsoft Teams channel. Pages lazily through "
+                           "large message histories via @odata.nextLink.";
+        desc.parameter_names = {"team_id", "channel_id"};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {"SELECT * FROM graph_channel_messages('team-id', 'channel-id', secret := 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));

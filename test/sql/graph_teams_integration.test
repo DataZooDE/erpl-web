@@ -43,10 +43,10 @@ true
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (DESCRIBE SELECT * FROM graph_my_teams())
-    WHERE column_name IN ('id', 'display_name', 'description', 'web_url')
+    WHERE column_name IN ('id', 'display_name', 'description', 'visibility', 'web_url', 'is_archived')
 );
 ----
-4
+6
 
 # Test: graph_team_channels function exists
 query I
