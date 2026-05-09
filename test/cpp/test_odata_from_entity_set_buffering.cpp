@@ -45,13 +45,17 @@ static void SeedEdmCache() {
     EdmCache::GetInstance().Set(METADATA_URL, edmx);
 }
 
-static std::shared_ptr<ODataEntitySetClient> MakeClient(ODataVersion version) {
+static std::shared_ptr<ODataEntitySetClient> MakeClientForUrl(ODataVersion version, const std::string &url_string) {
     auto http_client = std::make_shared<HttpClient>();
-    HttpUrl url(TEST_URL);
+    HttpUrl url(url_string);
     auto auth_params = std::make_shared<HttpAuthParams>();
     auto client = std::make_shared<ODataEntitySetClient>(http_client, url, auth_params);
     client->SetODataVersionDirectly(version);
     return client;
+}
+
+static std::shared_ptr<ODataEntitySetClient> MakeClient(ODataVersion version) {
+    return MakeClientForUrl(version, TEST_URL);
 }
 
 // ============================================================================
@@ -80,6 +84,16 @@ TEST_CASE("FromEntitySetClient - extracts column names from OData V2 initial_con
     bool has_name = std::find(names.begin(), names.end(), "name") != names.end();
     REQUIRE(has_id);
     REQUIRE(has_name);
+}
+
+TEST_CASE("FromEntitySetClient - extracts initial_content columns without metadata") {
+    auto client = MakeClientForUrl(
+        ODataVersion::V4,
+        "http://127.0.0.1:65534/NoMetadataService/Customers");
+    auto bind_data = ODataReadBindData::FromEntitySetClient(client, TWO_ROW_V4_JSON);
+
+    auto names = bind_data->GetResultNames();
+    REQUIRE(names == std::vector<std::string>({"id", "name"}));
 }
 
 // ============================================================================

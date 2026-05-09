@@ -9,12 +9,116 @@
 
 #include "tracing.hpp"
 #include "telemetry.hpp"
-#include <set>
-#include <unordered_map>
 
 namespace erpl_web {
 
 using duckdb::PostHogTelemetry;
+
+namespace {
+
+using JsonDoc = duckdb_yyjson::yyjson_doc;
+using JsonValue = duckdb_yyjson::yyjson_val;
+
+struct JsonDocHandle {
+  explicit JsonDocHandle(JsonDoc *doc) : doc(doc) {}
+  ~JsonDocHandle() {
+    if (doc) {
+      duckdb_yyjson::yyjson_doc_free(doc);
+    }
+  }
+
+  JsonDocHandle(const JsonDocHandle &) = delete;
+  JsonDocHandle &operator=(const JsonDocHandle &) = delete;
+
+  JsonValue *Root() const {
+    return doc ? duckdb_yyjson::yyjson_doc_get_root(doc) : nullptr;
+  }
+
+  explicit operator bool() const { return doc != nullptr; }
+
+private:
+  JsonDoc *doc;
+};
+
+static bool IsODataMetadataField(const std::string &field_name) {
+  return field_name == "__metadata" || field_name == "__deferred";
+}
+
+static bool IsODataV2DeferredNavigationProperty(duckdb_yyjson::yyjson_val *val) {
+  // In OData V2 JSON, navigation properties appear as {"__deferred": {"uri": "..."}}
+  // Skip these — they are not queryable columns.
+  if (!val || !duckdb_yyjson::yyjson_is_obj(val)) {
+    return false;
+  }
+  return duckdb_yyjson::yyjson_obj_get(val, "__deferred") != nullptr;
+}
+
+static bool AppendColumnNamesFromObject(
+    JsonValue *row_obj, std::vector<std::string> &column_names) {
+  if (!row_obj || !duckdb_yyjson::yyjson_is_obj(row_obj)) {
+    return false;
+  }
+
+  const auto initial_size = column_names.size();
+  duckdb_yyjson::yyjson_obj_iter iter;
+  duckdb_yyjson::yyjson_obj_iter_init(row_obj, &iter);
+
+  duckdb_yyjson::yyjson_val *key;
+  while ((key = duckdb_yyjson::yyjson_obj_iter_next(&iter))) {
+    if (!duckdb_yyjson::yyjson_is_str(key)) {
+      continue;
+    }
+    std::string column_name = duckdb_yyjson::yyjson_get_str(key);
+    if (IsODataMetadataField(column_name)) {
+      continue;
+    }
+    auto *val = duckdb_yyjson::yyjson_obj_iter_get_val(key);
+    if (IsODataV2DeferredNavigationProperty(val)) {
+      continue;  // Skip V2 navigation properties (__deferred links)
+    }
+    column_names.push_back(std::move(column_name));
+  }
+
+  return column_names.size() > initial_size;
+}
+
+static JsonValue *FirstObjectInArray(JsonValue *array_value) {
+  if (!array_value || !duckdb_yyjson::yyjson_is_arr(array_value)) {
+    return nullptr;
+  }
+
+  auto first_row = duckdb_yyjson::yyjson_arr_get_first(array_value);
+  return first_row && duckdb_yyjson::yyjson_is_obj(first_row) ? first_row
+                                                              : nullptr;
+}
+
+static JsonValue *FirstODataV4Row(JsonValue *root) {
+  return FirstObjectInArray(duckdb_yyjson::yyjson_obj_get(root, "value"));
+}
+
+static JsonValue *FirstODataV2Row(JsonValue *root) {
+  auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
+  if (!data_obj || !duckdb_yyjson::yyjson_is_obj(data_obj)) {
+    return nullptr;
+  }
+  return FirstObjectInArray(duckdb_yyjson::yyjson_obj_get(data_obj, "results"));
+}
+
+static bool AppendFirstODataRowColumnNames(
+    JsonValue *root, std::vector<std::string> &column_names) {
+  if (AppendColumnNamesFromObject(FirstODataV4Row(root), column_names)) {
+    return true;
+  }
+  if (AppendColumnNamesFromObject(FirstODataV2Row(root), column_names)) {
+    return true;
+  }
+
+  // Some callers already pass the first row object rather than the response
+  // envelope. Accept that shape to keep extraction local and metadata-free.
+  return AppendColumnNamesFromObject(root, column_names);
+}
+
+} // namespace
 
 void ODataReadBindData::SetNestedExpandPaths(
     const std::vector<std::string> &nested_paths) {
@@ -30,64 +134,25 @@ void ODataReadBindData::SetNestedExpandPaths(
 // Helper function to extract column names from a JSON object
 std::vector<std::string>
 ExtractColumnNamesFromJson(const std::string &json_content) {
-    std::vector<std::string> column_names;
-    
-  auto doc =
-      duckdb_yyjson::yyjson_read(json_content.c_str(), json_content.size(), 0);
-    if (!doc) {
-        return column_names;
-    }
-    
-    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
-    if (!root) {
-        duckdb_yyjson::yyjson_doc_free(doc);
-        return column_names;
-    }
-    
-    // Try OData V4 format first
-    auto value_arr = duckdb_yyjson::yyjson_obj_get(root, "value");
-    if (value_arr && duckdb_yyjson::yyjson_is_arr(value_arr)) {
-        // Get first row to extract column names
-        auto first_row = duckdb_yyjson::yyjson_arr_get_first(value_arr);
-        if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
-            duckdb_yyjson::yyjson_obj_iter iter;
-            duckdb_yyjson::yyjson_obj_iter_init(first_row, &iter);
-      duckdb_yyjson::yyjson_val *key;
-            while ((key = duckdb_yyjson::yyjson_obj_iter_next(&iter))) {
-                if (duckdb_yyjson::yyjson_is_str(key)) {
-                    column_names.push_back(duckdb_yyjson::yyjson_get_str(key));
-                }
-            }
-        }
-    } else {
-        // Try OData V2 format
-        auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
-        if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
-            auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
-            if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
-                auto first_row = duckdb_yyjson::yyjson_arr_get_first(results_arr);
-                if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
-                    duckdb_yyjson::yyjson_obj_iter iter;
-                    duckdb_yyjson::yyjson_obj_iter_init(first_row, &iter);
-          duckdb_yyjson::yyjson_val *key;
-                    while ((key = duckdb_yyjson::yyjson_obj_iter_next(&iter))) {
-                        if (duckdb_yyjson::yyjson_is_str(key)) {
-                            column_names.push_back(duckdb_yyjson::yyjson_get_str(key));
-                        }
-                    }
-                }
-            } else {
-        ERPL_TRACE_WARN("ODATA_READ_BIND",
-                        "Could not find 'results' array in OData v2 response");
-            }
-        } else {
-      ERPL_TRACE_WARN("ODATA_READ_BIND",
-                      "Could not find 'd' object in OData v2 response");
-        }
-    }
-    
-    duckdb_yyjson::yyjson_doc_free(doc);
+  std::vector<std::string> column_names;
+
+  JsonDocHandle doc(duckdb_yyjson::yyjson_read(json_content.c_str(),
+                                               json_content.size(), 0));
+  if (!doc) {
     return column_names;
+  }
+
+  auto root = doc.Root();
+  if (!root) {
+    return column_names;
+  }
+
+  if (!AppendFirstODataRowColumnNames(root, column_names)) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    "Could not find a row object for column-name extraction");
+  }
+
+  return column_names;
 }
 
 // ============================================================================
@@ -275,13 +340,13 @@ ODataTypeResolver::ResolveEntityType(const std::string &type_name) const {
     try {
         auto edmx = odata_client->GetMetadata();
         auto target_type = edmx.FindType(type_name);
-        
+
         // Use DuckTypeConverter to get proper DuckDB type
         auto type_conv = DuckTypeConverter(edmx);
         return std::visit(type_conv, target_type);
-  } catch (const std::exception &e) {
-    ERPL_TRACE_WARN("TYPE_RESOLVER", "Failed to resolve entity type '" +
-                                         type_name + "': " + e.what());
+    } catch (const std::exception &e) {
+        ERPL_TRACE_WARN("TYPE_RESOLVER", "Failed to resolve entity type '" +
+                                             type_name + "': " + e.what());
         return duckdb::LogicalTypeId::VARCHAR;
     }
 }
@@ -291,1021 +356,15 @@ ODataTypeResolver::ResolveComplexType(const std::string &type_name) const {
     try {
         auto edmx = odata_client->GetMetadata();
         auto target_type = edmx.FindType(type_name);
-        
+
         // Use DuckTypeConverter to get proper DuckDB type
         auto type_conv = DuckTypeConverter(edmx);
         return std::visit(type_conv, target_type);
-  } catch (const std::exception &e) {
-    ERPL_TRACE_WARN("TYPE_RESOLVER", "Failed to resolve complex type '" +
+    } catch (const std::exception &e) {
+        ERPL_TRACE_WARN("TYPE_RESOLVER", "Failed to resolve complex type '" +
                                          type_name + "': " + e.what());
         return duckdb::LogicalTypeId::VARCHAR;
     }
-}
-
-// ============================================================================
-// ODataDataExtractor Implementation
-// ============================================================================
-
-ODataDataExtractor::ODataDataExtractor(
-    std::shared_ptr<ODataEntitySetClient> odata_client)
-    : odata_client(odata_client) {
-    type_resolver = std::make_shared<ODataTypeResolver>(odata_client);
-}
-
-void ODataDataExtractor::SetExpandedDataSchema(
-    const std::vector<std::string> &expand_paths) {
-    expanded_data_schema.clear();
-    expanded_data_types.clear();
-    this->expand_paths.clear();
-    expanded_data_cache.clear();
-    
-    // Determine proper types for expanded columns using EDM metadata
-    expanded_data_types.reserve(expand_paths.size());
-    
-  for (const auto &expand_path : expand_paths) {
-    duckdb::LogicalType column_type =
-        type_resolver->ResolveNavigationPropertyType(expand_path);
-        
-        // Check if type resolution failed (likely V2 without proper metadata)
-        if (column_type.id() == duckdb::LogicalTypeId::VARCHAR) {
-            // For V2 expands, we know the structure: { "results": [...] }
-            // Since we can't determine the exact entity structure from metadata,
-      // we'll use LIST(VARCHAR) as a safe fallback that can hold the JSON
-      // strings This allows the expand to work while preserving the data
-      // structure
-            column_type = duckdb::LogicalType::LIST(duckdb::LogicalTypeId::VARCHAR);
-      ERPL_TRACE_INFO(
-          "DATA_EXTRACTOR",
-          "Using V2 fallback type LIST(VARCHAR) for expanded column '" +
-              expand_path + "' (EDM metadata unavailable)");
-    }
-
-    // If there are nested paths such as "DefaultSystem/Services", and this is
-    // the top-level (e.g., "DefaultSystem"), augment the STRUCT type to include
-    // a field for each nested navigation as an embedded list/struct, without
-    // creating new top-level columns.
-    if (!nested_expand_paths.empty()) {
-      // Collect immediate nested props for this top-level path
-      std::vector<std::string> nested_for_top;
-      for (const auto &nested : nested_expand_paths) {
-        if (nested.find(expand_path + "/") == 0) {
-          auto rest = nested.substr(expand_path.size() + 1);
-          auto slash = rest.find('/');
-          std::string child =
-              (slash == std::string::npos) ? rest : rest.substr(0, slash);
-          if (!child.empty())
-            nested_for_top.push_back(child);
-        }
-      }
-      if (!nested_for_top.empty()) {
-        // Delegate to EDM type builder for augmentation
-        try {
-          auto edmx_opt = EdmCache::GetInstance().Get(
-              odata_client->GetMetadataContextUrl());
-          if (edmx_opt) {
-            ODataEdmTypeBuilder builder(*edmx_opt.get());
-            // Resolve root entity type name from client
-            auto root_entity = odata_client->GetCurrentEntityType().name;
-            auto built = builder.BuildExpandedColumnType(
-                root_entity, expand_path, nested_for_top);
-            if (built.id() != duckdb::LogicalTypeId::INVALID) {
-              column_type = built;
-            }
-          }
-        } catch (...) {
-          // keep previous column_type on failure
-        }
-      }
-        }
-        
-        expanded_data_schema.push_back(expand_path);
-        expanded_data_types.push_back(column_type);
-        this->expand_paths.push_back(expand_path);
-        
-    ERPL_TRACE_INFO("DATA_EXTRACTOR", "Resolved expanded column type for '" +
-                                          expand_path +
-                                          "': " + column_type.ToString());
-  }
-
-  ERPL_TRACE_INFO("DATA_EXTRACTOR",
-                  "Set expanded data schema with " +
-                      std::to_string(expand_paths.size()) +
-                      " navigation properties and proper types");
-}
-
-void ODataDataExtractor::SetNestedExpandPaths(
-    const std::vector<std::string> &nested_paths) {
-  nested_expand_paths = nested_paths;
-}
-
-void ODataDataExtractor::UpdateExpandedColumnType(
-    size_t index, const duckdb::LogicalType &new_type) {
-    if (index < expanded_data_types.size()) {
-    ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                     "Updating expanded column type at index " +
-                         std::to_string(index) + " from " +
-                         expanded_data_types[index].ToString() + " to " +
-                         new_type.ToString());
-        expanded_data_types[index] = new_type;
-    } else {
-    ERPL_TRACE_WARN(
-        "DATA_EXTRACTOR",
-        "Attempted to update expanded column type at invalid index " +
-            std::to_string(index));
-    }
-}
-
-std::vector<std::string> ODataDataExtractor::GetExpandedDataSchema() const {
-    return expanded_data_schema;
-}
-
-std::vector<duckdb::LogicalType>
-ODataDataExtractor::GetExpandedDataTypes() const {
-    return expanded_data_types;
-}
-
-std::vector<std::string> ODataDataExtractor::GetNestedExpandPaths() const {
-  return nested_expand_paths;
-}
-
-bool ODataDataExtractor::HasExpandedData() const {
-    return !expanded_data_schema.empty();
-}
-
-void ODataDataExtractor::ExtractExpandedDataFromResponse(
-    const std::string &response_content) {
-    if (!HasExpandedData() || expand_paths.empty()) {
-        return;
-    }
-    
-  ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                   "Extracting expanded data from response of " +
-                       std::to_string(response_content.size()) + " bytes");
-    
-    // Parse the JSON response
-  auto doc = duckdb_yyjson::yyjson_read(response_content.c_str(),
-                                        response_content.size(), 0);
-    if (!doc) {
-    ERPL_TRACE_WARN(
-        "DATA_EXTRACTOR",
-        "Failed to parse JSON response for expanded data extraction");
-        return;
-    }
-    
-    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
-    
-    try {
-        // Handle OData V4 format
-        auto value_arr = duckdb_yyjson::yyjson_obj_get(root, "value");
-        if (value_arr && duckdb_yyjson::yyjson_is_arr(value_arr)) {
-      ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                       "Processing OData V4 response format for expanded data");
-            ProcessODataV4ExpandedData(value_arr);
-        } else {
-            // Handle OData V2 format
-            auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
-            if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
-                auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
-                if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
-          ERPL_TRACE_DEBUG(
-              "DATA_EXTRACTOR",
-              "Processing OData V2 response format for expanded data");
-                    ProcessODataV2ExpandedData(results_arr);
-                }
-            }
-        }
-  } catch (const std::exception &e) {
-    ERPL_TRACE_WARN("DATA_EXTRACTOR",
-                    "Error processing expanded data: " + std::string(e.what()));
-    }
-    
-    duckdb_yyjson::yyjson_doc_free(doc);
-}
-
-duckdb::Value
-ODataDataExtractor::ExtractExpandedDataForRow(const std::string &row_id,
-                                              const std::string &expand_path) {
-    auto it = expanded_data_cache.find(expand_path);
-    if (it != expanded_data_cache.end()) {
-        // Return value for this row index if available
-        try {
-            size_t row_index = static_cast<size_t>(std::stoull(row_id));
-            if (row_index < it->second.size()) {
-                return it->second[row_index];
-            }
-        } catch (...) {
-            // ignore parse errors, fall through to NULL
-        }
-    }
-    return duckdb::Value();
-}
-
-void ODataDataExtractor::ProcessODataV4ExpandedData(
-    duckdb_yyjson::yyjson_val *value_arr) {
-  ERPL_TRACE_INFO("DATA_EXTRACTOR", "ProcessODataV4ExpandedData called with " +
-                                        std::to_string(expand_paths.size()) +
-                                        " expand paths");
-    
-    duckdb_yyjson::yyjson_arr_iter arr_it;
-    duckdb_yyjson::yyjson_arr_iter_init(value_arr, &arr_it);
-    
-  duckdb_yyjson::yyjson_val *row;
-    size_t row_index = 0;
-    while ((row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
-        if (duckdb_yyjson::yyjson_is_obj(row)) {
-      for (const auto &expand_path : expand_paths) {
-        auto expand_data =
-            duckdb_yyjson::yyjson_obj_get(row, expand_path.c_str());
-                if (expand_data) {
-                    try {
-            duckdb::LogicalType target_type =
-                duckdb::LogicalTypeId::VARCHAR; // Default fallback
-                        for (size_t i = 0; i < expanded_data_schema.size(); ++i) {
-                            if (expanded_data_schema[i] == expand_path) {
-                                target_type = expanded_data_types[i];
-                                break;
-                            }
-                        }
-            // Recursively parse nested expands for V4 similarly to V2 flow
-            // Ensure nested fields inside the parent struct (e.g., Services
-            // list) are preserved
-            duckdb::Value parsed_value = ParseExpandedDataRecursively(
-                expand_data, expand_path, target_type);
-                            expanded_data_cache[expand_path].push_back(parsed_value);
-          } catch (const std::exception &e) {
-            ERPL_TRACE_WARN("DATA_EXTRACTOR",
-                            "Failed to parse expand data for path '" +
-                                expand_path + "': " + e.what());
-                        expanded_data_cache[expand_path].push_back(duckdb::Value());
-                    }
-                } else {
-                    // Keep alignment
-                    expanded_data_cache[expand_path].push_back(duckdb::Value());
-                }
-            }
-        }
-        row_index++;
-    }
-    
-  ERPL_TRACE_INFO("DATA_EXTRACTOR",
-                  "ProcessODataV4ExpandedData completed, processed " +
-                      std::to_string(row_index) + " rows");
-}
-
-void ODataDataExtractor::ProcessODataV2ExpandedData(
-    duckdb_yyjson::yyjson_val *results_arr) {
-    duckdb_yyjson::yyjson_arr_iter arr_it;
-    duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
-    
-  duckdb_yyjson::yyjson_val *row;
-    size_t row_index = 0;
-    while ((row = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
-        if (duckdb_yyjson::yyjson_is_obj(row)) {
-      for (const auto &expand_path : expand_paths) {
-        auto expand_data =
-            duckdb_yyjson::yyjson_obj_get(row, expand_path.c_str());
-                if (expand_data) {
-                    try {
-                        // Find the corresponding type for this expand path
-            duckdb::LogicalType target_type =
-                duckdb::LogicalTypeId::VARCHAR; // Default fallback
-                        for (size_t i = 0; i < expanded_data_schema.size(); ++i) {
-                            if (expanded_data_schema[i] == expand_path) {
-                                target_type = expanded_data_types[i];
-                                break;
-                            }
-                        }
-                        
-                        // Parse the expanded data recursively, handling nested expands
-            duckdb::Value parsed_value = ParseExpandedDataRecursively(
-                expand_data, expand_path, target_type);
-                        
-                        expanded_data_cache[expand_path].push_back(parsed_value);
-            ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                             "Extracted and parsed expanded data for path '" +
-                                 expand_path + "' at row " +
-                                 std::to_string(row_index));
-          } catch (const std::exception &e) {
-            ERPL_TRACE_WARN("DATA_EXTRACTOR",
-                            "Failed to parse expand data for path '" +
-                                expand_path + "': " + e.what());
-                        expanded_data_cache[expand_path].push_back(duckdb::Value());
-                    }
-                } else {
-          // No expanded data for this path at this row, add NULL value to keep
-          // row alignment
-                    expanded_data_cache[expand_path].push_back(duckdb::Value());
-                }
-            }
-        }
-        row_index++;
-    }
-}
-
-// Parse expanded data recursively, handling nested expands like
-// Products/Suppliers
-duckdb::Value ODataDataExtractor::ParseExpandedDataRecursively(
-    duckdb_yyjson::yyjson_val *expand_data, const std::string &expand_path,
-    const duckdb::LogicalType &target_type) {
-    if (!expand_data) {
-        return duckdb::Value();
-    }
-    
-    // OData V2 often wraps expanded data in a 'results' array
-  duckdb_yyjson::yyjson_val *payload = expand_data;
-    if (duckdb_yyjson::yyjson_is_obj(expand_data)) {
-        auto results_field = duckdb_yyjson::yyjson_obj_get(expand_data, "results");
-        if (results_field && duckdb_yyjson::yyjson_is_arr(results_field)) {
-            payload = results_field;
-        }
-    }
-    
-    // Handle LIST types - for OData V2, we need to infer the proper struct type
-    if (target_type.id() == duckdb::LogicalTypeId::LIST) {
-        if (duckdb_yyjson::yyjson_is_arr(payload)) {
-            // For OData V2, we need to infer the struct type from the first item
-            // and then parse each item as that struct type
-            auto child_type = duckdb::ListType::GetChildType(target_type);
-            
-      // If the child type is still VARCHAR (fallback), infer the actual struct
-      // type
-            if (child_type.id() == duckdb::LogicalTypeId::VARCHAR) {
-                // Get the first item to infer the struct type
-                duckdb_yyjson::yyjson_arr_iter sample_it;
-                duckdb_yyjson::yyjson_arr_iter_init(payload, &sample_it);
-                auto first_item = duckdb_yyjson::yyjson_arr_iter_next(&sample_it);
-                
-                if (first_item && duckdb_yyjson::yyjson_is_obj(first_item)) {
-                    // Infer struct type from the first item, handling nested expands
-          child_type = InferStructTypeFromJsonObjectWithNestedExpands(
-              first_item, expand_path);
-                    // Update the target type with the inferred child type
-                    auto new_target_type = duckdb::LogicalType::LIST(child_type);
-                    
-                    // Update the stored type for future use
-                    for (size_t i = 0; i < expanded_data_types.size(); ++i) {
-                        if (expanded_data_types[i].id() == duckdb::LogicalTypeId::LIST && 
-                duckdb::ListType::GetChildType(expanded_data_types[i]).id() ==
-                    duckdb::LogicalTypeId::VARCHAR) {
-                            expanded_data_types[i] = new_target_type;
-                            break;
-                        }
-                    }
-                    
-          ERPL_TRACE_DEBUG("DATA_EXTRACTOR", "Inferred struct type for '" +
-                                                 expand_path +
-                                                 "': " + child_type.ToString());
-                    
-                    // Now parse the array with the proper child type
-                    return ParseJsonArray(payload, new_target_type);
-                }
-            }
-            
-            // Now parse the array with the proper child type
-            return ParseJsonArray(payload, target_type);
-        } else {
-            // If payload is not an array, create an empty list
-      return duckdb::Value::LIST(duckdb::ListType::GetChildType(target_type),
-                                 {});
-        }
-    } else {
-        // For non-LIST types, convert to JSON string and parse
-    char *json_str = duckdb_yyjson::yyjson_val_write(payload, 0, nullptr);
-        if (json_str) {
-            std::string json_string(json_str);
-            free(json_str);
-            return ParseJsonToDuckDBValue(json_string, target_type);
-        } else {
-            return duckdb::Value();
-        }
-    }
-}
-
-duckdb::Value ODataDataExtractor::ParseJsonToDuckDBValue(
-    const std::string &json_str, const duckdb::LogicalType &target_type) {
-    if (json_str.empty()) {
-        return duckdb::Value();
-    }
-    
-    // Parse the JSON string
-    auto doc = duckdb_yyjson::yyjson_read(json_str.c_str(), json_str.length(), 0);
-    if (!doc) {
-        throw std::runtime_error("Failed to parse JSON string");
-    }
-    
-    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
-    if (!root) {
-        duckdb_yyjson::yyjson_doc_free(doc);
-        throw std::runtime_error("Failed to get JSON root");
-    }
-    
-    try {
-        auto result = ParseJsonValueToDuckDBValue(root, target_type);
-        duckdb_yyjson::yyjson_doc_free(doc);
-        return result;
-    } catch (...) {
-        duckdb_yyjson::yyjson_doc_free(doc);
-        throw;
-    }
-}
-
-duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
-    duckdb_yyjson::yyjson_val *value, const duckdb::LogicalType &target_type) {
-    if (!value) {
-        ERPL_TRACE_WARN("DATA_EXTRACTOR", "Null JSON value passed to parser");
-        return duckdb::Value();
-    }
-    
-    // Handle NULL values
-    if (duckdb_yyjson::yyjson_is_null(value)) {
-        return duckdb::Value();
-    }
-    
-    try {
-    // Delegate complex types to small helpers for readability and reuse
-        if (target_type.id() == duckdb::LogicalTypeId::LIST) {
-      return ConvertList(value, target_type);
-    }
-
-        if (target_type.id() == duckdb::LogicalTypeId::STRUCT) {
-      return ConvertStruct(value, target_type);
-        }
-        
-        // Enhanced primitive type handling with robust fallbacks
-        if (target_type.id() == duckdb::LogicalTypeId::VARCHAR) {
-            if (duckdb_yyjson::yyjson_is_str(value)) {
-                const char *s = duckdb_yyjson::yyjson_get_str(value);
-                const size_t s_len = strlen(s);
-                // Normalize OData V2 legacy date format /Date(ms[+/-HHMM])/
-                if (s_len >= 8 && strncmp(s, "/Date(", 6) == 0 &&
-                    s[s_len - 2] == ')' && s[s_len - 1] == '/') {
-                    const char *inner = s + 6;
-                    const size_t inner_len = s_len - 8;
-                    // Find optional timezone sign after first digit
-                    size_t pos = std::string::npos;
-                    for (size_t i = 1; i < inner_len; i++) {
-                        if (inner[i] == '+' || inner[i] == '-') { pos = i; break; }
-                    }
-                    std::string ms_str(inner, pos == std::string::npos ? inner_len : pos);
-                    try {
-                        long long ms = std::stoll(ms_str);
-                        long long sec = ms / 1000;
-                        auto ts_val = duckdb::Value::TIMESTAMP(
-                            duckdb::Timestamp::FromEpochSeconds(sec));
-                        return ts_val.DefaultCastAs(duckdb::LogicalTypeId::VARCHAR);
-                    } catch (...) {
-                        // fall through to raw string
-                    }
-                }
-                return duckdb::Value(s);  // const char* → avoids string copy in common case
-            } else {
-                // Convert any type to string for VARCHAR
-        char *json_str = duckdb_yyjson::yyjson_val_write(value, 0, nullptr);
-                if (json_str) {
-                    std::string result(json_str);
-                    free(json_str);
-                    return duckdb::Value(result);
-                }
-                return duckdb::Value("");
-            }
-        } else if (target_type.id() == duckdb::LogicalTypeId::INTEGER) {
-            if (duckdb_yyjson::yyjson_is_int(value)) {
-        return duckdb::Value(
-            static_cast<int32_t>(duckdb_yyjson::yyjson_get_int(value)));
-            } else if (duckdb_yyjson::yyjson_is_uint(value)) {
-                uint64_t uval = duckdb_yyjson::yyjson_get_uint(value);
-                if (uval <= static_cast<uint64_t>(INT32_MAX)) {
-                    return duckdb::Value(static_cast<int32_t>(uval));
-                } else {
-                    return CreateFallbackValue(target_type);
-                }
-            } else if (duckdb_yyjson::yyjson_is_str(value)) {
-                // Enhanced string-to-integer conversion with error handling
-                try {
-                    std::string str_val = duckdb_yyjson::yyjson_get_str(value);
-                    return duckdb::Value(std::stoi(str_val));
-        } catch (const std::exception &e) {
-          LogError("INTEGER_CONVERSION",
-                   "Failed to convert string '" +
-                       std::string(duckdb_yyjson::yyjson_get_str(value)) +
-                       "' to integer: " + e.what());
-                    return CreateFallbackValue(target_type);
-                }
-            }
-        } else if (target_type.id() == duckdb::LogicalTypeId::BIGINT) {
-            if (duckdb_yyjson::yyjson_is_int(value)) {
-                return duckdb::Value(duckdb_yyjson::yyjson_get_int(value));
-            } else if (duckdb_yyjson::yyjson_is_uint(value)) {
-        return duckdb::Value(
-            static_cast<int64_t>(duckdb_yyjson::yyjson_get_uint(value)));
-            } else if (duckdb_yyjson::yyjson_is_str(value)) {
-                // Enhanced string-to-bigint conversion with error handling
-                try {
-                    std::string str_val = duckdb_yyjson::yyjson_get_str(value);
-                    return duckdb::Value(static_cast<int64_t>(std::stoll(str_val)));
-        } catch (const std::exception &e) {
-          LogError("BIGINT_CONVERSION",
-                   "Failed to convert string '" +
-                       std::string(duckdb_yyjson::yyjson_get_str(value)) +
-                       "' to bigint: " + e.what());
-                    return CreateFallbackValue(target_type);
-                }
-            }
-    } else if (target_type.id() == duckdb::LogicalTypeId::FLOAT ||
-               target_type.id() == duckdb::LogicalTypeId::DOUBLE) {
-            if (duckdb_yyjson::yyjson_is_real(value)) {
-                return duckdb::Value(duckdb_yyjson::yyjson_get_real(value));
-            } else if (duckdb_yyjson::yyjson_is_int(value)) {
-        return duckdb::Value(
-            static_cast<double>(duckdb_yyjson::yyjson_get_int(value)));
-            } else if (duckdb_yyjson::yyjson_is_uint(value)) {
-        return duckdb::Value(
-            static_cast<double>(duckdb_yyjson::yyjson_get_uint(value)));
-            } else if (duckdb_yyjson::yyjson_is_str(value)) {
-                // Enhanced string-to-float conversion with error handling
-                try {
-                    std::string str_val = duckdb_yyjson::yyjson_get_str(value);
-                    return duckdb::Value(std::stod(str_val));
-        } catch (const std::exception &e) {
-          LogError("FLOAT_CONVERSION",
-                   "Failed to convert string '" +
-                       std::string(duckdb_yyjson::yyjson_get_str(value)) +
-                       "' to float: " + e.what());
-                    return CreateFallbackValue(target_type);
-                }
-            }
-        } else if (target_type.id() == duckdb::LogicalTypeId::DECIMAL) {
-            // Accept string/int/real and cast to DECIMAL(p,s)
-            try {
-                if (duckdb_yyjson::yyjson_is_str(value)) {
-                    std::string s = duckdb_yyjson::yyjson_get_str(value);
-                    return duckdb::Value(s).DefaultCastAs(target_type);
-                } else if (duckdb_yyjson::yyjson_is_int(value)) {
-                    int64_t v = duckdb_yyjson::yyjson_get_int(value);
-                    return duckdb::Value::BIGINT(v).DefaultCastAs(target_type);
-                } else if (duckdb_yyjson::yyjson_is_uint(value)) {
-                    uint64_t v = duckdb_yyjson::yyjson_get_uint(value);
-                    return duckdb::Value::UBIGINT(v).DefaultCastAs(target_type);
-                } else if (duckdb_yyjson::yyjson_is_real(value)) {
-                    double v = duckdb_yyjson::yyjson_get_real(value);
-                    return duckdb::Value::DOUBLE(v).DefaultCastAs(target_type);
-                }
-            } catch (const std::exception &e) {
-                LogError("DECIMAL_CONVERSION", e.what());
-                return CreateFallbackValue(target_type);
-            }
-        } else if (target_type.id() == duckdb::LogicalTypeId::BOOLEAN) {
-            if (duckdb_yyjson::yyjson_is_bool(value)) {
-                return duckdb::Value(duckdb_yyjson::yyjson_get_bool(value));
-            } else if (duckdb_yyjson::yyjson_is_str(value)) {
-                // Enhanced string-to-boolean conversion
-                std::string str_val = duckdb_yyjson::yyjson_get_str(value);
-        std::transform(str_val.begin(), str_val.end(), str_val.begin(),
-                       ::tolower);
-        if (str_val == "true" || str_val == "1" || str_val == "yes" ||
-            str_val == "on") {
-                    return duckdb::Value(true);
-        } else if (str_val == "false" || str_val == "0" || str_val == "no" ||
-                   str_val == "off") {
-                    return duckdb::Value(false);
-                } else {
-          LogError("BOOLEAN_CONVERSION",
-                   "Failed to convert string '" + str_val + "' to boolean");
-                    return CreateFallbackValue(target_type);
-                }
-            }
-        } else if (target_type.id() == duckdb::LogicalTypeId::TIMESTAMP) {
-            if (duckdb_yyjson::yyjson_is_str(value)) {
-                // Parse ISO 8601 timestamp format (e.g., "2014-01-01T00:00:00Z")
-                std::string timestamp_str = duckdb_yyjson::yyjson_get_str(value);
-                // Handle OData V2 legacy format: /Date(ms[+/-HHMM])/ -> UTC
-        if (timestamp_str.size() >= 8 &&
-            timestamp_str.rfind("/Date(", 0) == 0 &&
-            timestamp_str.substr(timestamp_str.size() - 2) == ")/") {
-                    std::string inner = timestamp_str.substr(6, timestamp_str.size() - 8);
-                    size_t pos = inner.find_first_of("+-", 1);
-          std::string ms_str =
-              (pos == std::string::npos) ? inner : inner.substr(0, pos);
-                    try {
-                        long long ms = std::stoll(ms_str);
-                        long long sec = ms / 1000;
-            return duckdb::Value::TIMESTAMP(
-                duckdb::Timestamp::FromEpochSeconds(sec));
-                    } catch (...) {
-                        // fall through to ISO handling below
-                    }
-                }
-                try {
-          // Handle ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ or
-          // YYYY-MM-DDTHH:MM:SS.SSSZ
-                    if (timestamp_str.length() >= 19) { // Minimum: "2014-01-01T00:00:00"
-                        // Replace 'T' with space and remove 'Z' for DuckDB parsing
-                        std::string duckdb_format = timestamp_str.substr(0, 19);
-                        std::replace(duckdb_format.begin(), duckdb_format.end(), 'T', ' ');
-                        
-                        // Parse using DuckDB's timestamp constructor
-            auto timestamp_value = duckdb::Value::TIMESTAMP(
-                duckdb::Timestamp::FromString(duckdb_format, false));
-            ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                             "Successfully parsed timestamp: '" +
-                                 timestamp_str + "' -> '" + duckdb_format +
-                                 "'");
-                        return timestamp_value;
-                    } else {
-            LogError("TIMESTAMP_CONVERSION",
-                     "Timestamp string too short: '" + timestamp_str + "'");
-                        return CreateFallbackValue(target_type);
-                    }
-        } catch (const std::exception &e) {
-          LogError("TIMESTAMP_CONVERSION", "Failed to parse timestamp '" +
-                                               timestamp_str +
-                                               "': " + e.what());
-                    return CreateFallbackValue(target_type);
-                }
-            } else if (duckdb_yyjson::yyjson_is_int(value)) {
-                // Handle Unix timestamp (seconds since epoch)
-                try {
-                    int64_t unix_timestamp = duckdb_yyjson::yyjson_get_int(value);
-          auto timestamp_value = duckdb::Value::TIMESTAMP(
-              duckdb::Timestamp::FromEpochSeconds(unix_timestamp));
-          ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                           "Successfully parsed Unix timestamp: " +
-                               std::to_string(unix_timestamp));
-                    return timestamp_value;
-        } catch (const std::exception &e) {
-          LogError("TIMESTAMP_CONVERSION",
-                   std::string("Failed to parse Unix timestamp: ") + e.what());
-                    return CreateFallbackValue(target_type);
-                }
-            }
-        }
-        
-        // Final fallback: convert to string representation
-    char *fallback_json_str =
-        duckdb_yyjson::yyjson_val_write(value, 0, nullptr);
-        if (fallback_json_str) {
-            std::string result(fallback_json_str);
-            free(fallback_json_str);
-            if (target_type.id() == duckdb::LogicalTypeId::VARCHAR) {
-                return duckdb::Value(result);
-            } else {
-                try {
-                    return duckdb::Value(result).DefaultCastAs(target_type);
-                } catch (...) {
-                    return CreateFallbackValue(target_type);
-                }
-            }
-        }
-        
-        return CreateFallbackValue(target_type);
-        
-  } catch (const std::exception &e) {
-    LogError("JSON_PARSING",
-             "Unexpected error parsing JSON value: " + std::string(e.what()));
-        return CreateFallbackValue(target_type);
-    }
-}
-
-// Small modular helpers for complex types
-duckdb::Value ODataDataExtractor::ConvertList(duckdb_yyjson::yyjson_val *value,
-                                              const duckdb::LogicalType &target_type) {
-    if (duckdb_yyjson::yyjson_is_arr(value)) {
-        return ParseJsonArray(value, target_type);
-    }
-    ERPL_TRACE_WARN("DATA_EXTRACTOR",
-                    "Expected array for LIST type but got different JSON type");
-    return CreateFallbackValue(target_type);
-}
-
-duckdb::Value
-ODataDataExtractor::ConvertStruct(duckdb_yyjson::yyjson_val *value,
-                                  const duckdb::LogicalType &target_type) {
-    if (duckdb_yyjson::yyjson_is_obj(value)) {
-        return ParseJsonObject(value, target_type);
-    }
-    ERPL_TRACE_WARN("DATA_EXTRACTOR",
-                    "Expected object for STRUCT type but got different JSON type");
-    return CreateFallbackValue(target_type);
-}
-
-// Enhanced parsing methods for better type resolution
-duckdb::Value
-ODataDataExtractor::ParseJsonArray(duckdb_yyjson::yyjson_val *array_val,
-                                   const duckdb::LogicalType &target_type) {
-    auto child_type = duckdb::ListType::GetChildType(target_type);
-    duckdb::vector<duckdb::Value> list_values;
-    
-    try {
-        duckdb_yyjson::yyjson_arr_iter arr_it;
-        duckdb_yyjson::yyjson_arr_iter_init(array_val, &arr_it);
-        
-    duckdb_yyjson::yyjson_val *item;
-        size_t item_count = 0;
-        while ((item = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
-            if (item_count >= batch_size_) {
-        ERPL_TRACE_WARN("DATA_EXTRACTOR", "Array too large, truncating at " +
-                                              std::to_string(batch_size_) +
-                                              " items");
-                break;
-            }
-            
-            list_values.push_back(ParseJsonValueToDuckDBValue(item, child_type));
-            item_count++;
-        }
-        
-        return duckdb::Value::LIST(child_type, list_values);
-        
-  } catch (const std::exception &e) {
-    LogError("ARRAY_PARSING",
-             "Failed to parse JSON array: " + std::string(e.what()));
-        return CreateFallbackValue(target_type);
-    }
-}
-
-duckdb::Value
-ODataDataExtractor::ParseJsonObject(duckdb_yyjson::yyjson_val *obj_val,
-                                    const duckdb::LogicalType &target_type) {
-    try {
-    auto &struct_types = duckdb::StructType::GetChildTypes(target_type);
-        duckdb::vector<duckdb::Value> struct_values;
-        struct_values.resize(struct_types.size(), duckdb::Value());
-        
-        // Build child name map (lowercase and underscore-stripped) -> index
-        std::unordered_map<std::string, size_t> child_index;
-        for (size_t i = 0; i < struct_types.size(); ++i) {
-            const auto &field_name = struct_types[i].first;
-            std::string lower = field_name;
-            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            child_index.emplace(lower, i);
-            std::string nos = lower;
-            nos.erase(std::remove(nos.begin(), nos.end(), '_'), nos.end());
-            child_index.emplace(nos, i);
-        }
-        
-        // Iterate JSON object keys and assign where matching
-        size_t idx, max;
-        duckdb_yyjson::yyjson_val *json_key, *json_val;
-        yyjson_obj_foreach(obj_val, idx, max, json_key, json_val) {
-      if (!duckdb_yyjson::yyjson_is_str(json_key))
-        continue;
-            std::string key = duckdb_yyjson::yyjson_get_str(json_key);
-            std::string lower = key;
-            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            auto it = child_index.find(lower);
-            if (it == child_index.end()) {
-                std::string nos = lower;
-                nos.erase(std::remove(nos.begin(), nos.end(), '_'), nos.end());
-                it = child_index.find(nos);
-            }
-            if (it != child_index.end()) {
-                size_t pos = it->second;
-                const auto &field_type = struct_types[pos].second;
-                struct_values[pos] = ParseJsonValueToDuckDBValue(json_val, field_type);
-            }
-        }
-        
-        return duckdb::Value::STRUCT(target_type, struct_values);
-        
-  } catch (const std::exception &e) {
-    LogError("OBJECT_PARSING",
-             "Failed to parse JSON object: " + std::string(e.what()));
-        return CreateFallbackValue(target_type);
-    }
-}
-
-// Infer DuckDB struct type from JSON object
-duckdb::LogicalType ODataDataExtractor::InferStructTypeFromJsonObject(
-    duckdb_yyjson::yyjson_val *obj_val) {
-    if (!obj_val || !duckdb_yyjson::yyjson_is_obj(obj_val)) {
-        return duckdb::LogicalTypeId::VARCHAR; // Fallback to VARCHAR if not an object
-    }
-    
-    duckdb::child_list_t<duckdb::LogicalType> struct_fields;
-    
-    size_t idx, max;
-    duckdb_yyjson::yyjson_val *json_key, *json_val;
-    yyjson_obj_foreach(obj_val, idx, max, json_key, json_val) {
-    if (!duckdb_yyjson::yyjson_is_str(json_key))
-      continue;
-        
-        std::string field_name = duckdb_yyjson::yyjson_get_str(json_key);
-        
-        // Skip metadata fields that are OData-specific
-        if (field_name == "__metadata" || field_name == "__deferred") {
-            continue;
-        }
-        
-        // Infer the type for this field
-        duckdb::LogicalType field_type = InferTypeFromJsonValue(json_val);
-        
-        // Add the field to our struct
-        struct_fields.emplace_back(field_name, field_type);
-    }
-    
-    if (struct_fields.empty()) {
-        return duckdb::LogicalTypeId::VARCHAR; // Fallback if no fields
-    }
-    
-    return duckdb::LogicalType::STRUCT(struct_fields);
-}
-
-// Infer DuckDB type from JSON value
-duckdb::LogicalType
-ODataDataExtractor::InferTypeFromJsonValue(duckdb_yyjson::yyjson_val *value) {
-    if (!value) {
-        return duckdb::LogicalTypeId::VARCHAR;
-    }
-    
-    if (duckdb_yyjson::yyjson_is_null(value)) {
-        return duckdb::LogicalTypeId::VARCHAR; // NULL values get VARCHAR type
-    }
-    
-    if (duckdb_yyjson::yyjson_is_str(value)) {
-        std::string str_val = duckdb_yyjson::yyjson_get_str(value);
-        
-        // Check for special OData V2 date format: "/Date(timestamp)/"
-    if (str_val.length() > 8 && str_val.substr(0, 6) == "/Date(" &&
-        str_val.substr(str_val.length() - 2) == ")/") {
-            return duckdb::LogicalTypeId::TIMESTAMP;
-        }
-        
-        // Check if it looks like a date
-        if (str_val.length() == 10 && str_val[4] == '-' && str_val[7] == '-') {
-            return duckdb::LogicalTypeId::DATE;
-        }
-        
-        // Check if it looks like a timestamp
-    if (str_val.length() >= 19 && str_val[4] == '-' && str_val[7] == '-' &&
-        str_val[10] == 'T') {
-            return duckdb::LogicalTypeId::TIMESTAMP;
-        }
-        
-        return duckdb::LogicalTypeId::VARCHAR;
-    }
-    
-    if (duckdb_yyjson::yyjson_is_int(value)) {
-        int64_t int_val = duckdb_yyjson::yyjson_get_int(value);
-    if (int_val >= std::numeric_limits<int32_t>::min() &&
-        int_val <= std::numeric_limits<int32_t>::max()) {
-            return duckdb::LogicalTypeId::INTEGER;
-        } else {
-            return duckdb::LogicalTypeId::BIGINT;
-        }
-    }
-    
-    if (duckdb_yyjson::yyjson_is_uint(value)) {
-        uint64_t uint_val = duckdb_yyjson::yyjson_get_uint(value);
-        if (uint_val <= std::numeric_limits<int32_t>::max()) {
-            return duckdb::LogicalTypeId::INTEGER;
-        } else {
-            return duckdb::LogicalTypeId::BIGINT;
-        }
-    }
-    
-    if (duckdb_yyjson::yyjson_is_real(value)) {
-        return duckdb::LogicalTypeId::DOUBLE;
-    }
-    
-    if (duckdb_yyjson::yyjson_is_bool(value)) {
-        return duckdb::LogicalTypeId::BOOLEAN;
-    }
-    
-    if (duckdb_yyjson::yyjson_is_arr(value)) {
-        // For arrays, we'll use LIST(VARCHAR) as a safe default
-        // The actual item types could be inferred later if needed
-        return duckdb::LogicalType::LIST(duckdb::LogicalTypeId::VARCHAR);
-    }
-    
-    if (duckdb_yyjson::yyjson_is_obj(value)) {
-        // For objects, we could recursively infer the struct type
-        // But for now, we'll use VARCHAR to avoid infinite recursion
-        return duckdb::LogicalTypeId::VARCHAR;
-    }
-    
-    return duckdb::LogicalTypeId::VARCHAR; // Default fallback
-}
-
-// This method was removed as it required HTTP requests that aren't available in
-// the current architecture
-
-// Error handling helpers
-void ODataDataExtractor::LogError(const std::string &context,
-                                  const std::string &error_msg) const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    
-    last_error_ = "[" + context + "] " + error_msg;
-    error_counts_[context]++;
-    
-    // Rate-limit error logging to avoid spam
-    if (error_counts_[context] <= 10 || error_counts_[context] % 100 == 0) {
-    ERPL_TRACE_ERROR("DATA_EXTRACTOR",
-                     last_error_ + " (count: " +
-                         std::to_string(error_counts_[context]) + ")");
-    }
-}
-
-bool ODataDataExtractor::ShouldRetryAfterError(
-    const std::string &context) const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    auto it = error_counts_.find(context);
-    return it == error_counts_.end() || it->second < 3; // Retry up to 3 times
-}
-
-duckdb::Value ODataDataExtractor::CreateFallbackValue(
-    const duckdb::LogicalType &target_type) const {
-    switch (target_type.id()) {
-        case duckdb::LogicalTypeId::VARCHAR:
-            return duckdb::Value("");
-        case duckdb::LogicalTypeId::INTEGER:
-            return duckdb::Value(0);
-        case duckdb::LogicalTypeId::BIGINT:
-            return duckdb::Value(static_cast<int64_t>(0));
-        case duckdb::LogicalTypeId::FLOAT:
-        case duckdb::LogicalTypeId::DOUBLE:
-            return duckdb::Value(0.0);
-        case duckdb::LogicalTypeId::BOOLEAN:
-            return duckdb::Value(false);
-        case duckdb::LogicalTypeId::LIST:
-            return duckdb::Value::LIST(duckdb::ListType::GetChildType(target_type), {});
-  case duckdb::LogicalTypeId::STRUCT: {
-    auto &struct_types = duckdb::StructType::GetChildTypes(target_type);
-            duckdb::vector<duckdb::Value> null_values;
-            for (size_t i = 0; i < struct_types.size(); ++i) {
-                null_values.push_back(duckdb::Value());
-            }
-            return duckdb::Value::STRUCT(target_type, null_values);
-        }
-        default:
-            return duckdb::Value(); // NULL for unknown types
-    }
-}
-
-// Performance and memory management methods
-void ODataDataExtractor::SetBatchSize(size_t batch_size) {
-    batch_size_ = batch_size;
-  ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                   "Set batch size to " + std::to_string(batch_size));
-}
-
-void ODataDataExtractor::EnableCompression(bool enable) {
-    compression_enabled_ = enable;
-  ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
-                   "Compression " +
-                       std::string(enable ? "enabled" : "disabled"));
-}
-
-void ODataDataExtractor::ClearCache() {
-    expanded_data_cache.clear();
-    ERPL_TRACE_DEBUG("DATA_EXTRACTOR", "Cleared expanded data cache");
-}
-
-size_t ODataDataExtractor::GetCacheSize() const {
-    size_t total_size = 0;
-  for (const auto &[path, values] : expanded_data_cache) {
-        total_size += values.size();
-    }
-    return total_size;
-}
-
-bool ODataDataExtractor::ValidateExpandedData(
-    const std::string &expand_path) const {
-    auto it = expanded_data_cache.find(expand_path);
-    return it != expanded_data_cache.end() && !it->second.empty();
-}
-
-std::string ODataDataExtractor::GetLastError() const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    return last_error_;
-}
-
-void ODataDataExtractor::ResetErrorState() {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    last_error_.clear();
-    error_counts_.clear();
-}
-
-void ODataDataExtractor::OptimizeCacheMemory() {
-    // Remove empty cache entries
-  for (auto it = expanded_data_cache.begin();
-       it != expanded_data_cache.end();) {
-        if (it->second.empty()) {
-            it = expanded_data_cache.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    
-    ERPL_TRACE_DEBUG("DATA_EXTRACTOR", "Optimized cache memory usage");
-}
-
-void ODataDataExtractor::CompressCacheData() {
-    if (!compression_enabled_) {
-        return;
-    }
-    
-    // This is a placeholder for potential compression logic
-    // In a real implementation, we could serialize and compress the data
-    ERPL_TRACE_DEBUG("DATA_EXTRACTOR", "Cache compression completed");
 }
 
 // ============================================================================
@@ -1418,13 +477,13 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(
         ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Parsing JSON response of " +
                                                 std::to_string(content.size()) +
                                                 " bytes");
-        auto doc =
-            duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0);
+        JsonDocHandle doc(
+            duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0));
                 
                 if (doc) {
           ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                            "Successfully parsed JSON document");
-                    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+                    auto root = doc.Root();
                     ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Got JSON root object");
                     
                     // Check for @odata.context (OData v4)
@@ -1457,8 +516,6 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetRoot(
                         // Parse OData V2 response format
                         ParseODataV2Response(root, odata_client, extracted_column_names);
                     }
-                    
-                    duckdb_yyjson::yyjson_doc_free(doc);
                 }
             } else {
         ERPL_TRACE_WARN("ODATA_READ_BIND",
@@ -1618,10 +675,10 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetClient(
   if (!initial_content.empty()) {
     // Parse the initial content to extract column names and types
     try {
-      auto doc = duckdb_yyjson::yyjson_read(initial_content.c_str(),
-                                            initial_content.length(), 0);
+      JsonDocHandle doc(duckdb_yyjson::yyjson_read(
+          initial_content.c_str(), initial_content.length(), 0));
       if (doc) {
-        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto root = doc.Root();
         if (root) {
           std::vector<std::string> extracted_column_names;
 
@@ -1634,7 +691,6 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetClient(
 
           bind_data->SetExtractedColumnNames(extracted_column_names);
         }
-        duckdb_yyjson::yyjson_doc_free(doc);
       }
     } catch (...) {
       // If parsing fails, we'll fall back to normal metadata-based approach
@@ -1768,81 +824,37 @@ ODataReadBindData::FromServiceClient(std::shared_ptr<ODataServiceClient> client,
 // Helper methods for parsing OData responses
 void ODataReadBindData::ParseODataV4Response(
     duckdb_yyjson::yyjson_val *root,
-                                           std::shared_ptr<ODataEntitySetClient> odata_client,
+    std::shared_ptr<ODataEntitySetClient> odata_client,
     std::vector<std::string> &extracted_column_names) {
-                        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Parsing OData v4 response format");
-                        auto value_arr = duckdb_yyjson::yyjson_obj_get(root, "value");
-                        if (value_arr && duckdb_yyjson::yyjson_is_arr(value_arr)) {
+  (void)odata_client;
+  ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Parsing OData v4 response format");
+  if (AppendColumnNamesFromObject(FirstODataV4Row(root),
+                                  extracted_column_names)) {
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     "Found 'value' array in OData v4 response");
-                            duckdb_yyjson::yyjson_arr_iter arr_it;
-                            duckdb_yyjson::yyjson_arr_iter_init(value_arr, &arr_it);
-    duckdb_yyjson::yyjson_val *first_row =
-        duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
-        
-                            if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
-      ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                       "Found first row object in OData v4 response");
-                                
-            // Extract column names from first row
-      char *json_str = duckdb_yyjson::yyjson_val_write(first_row, 0, nullptr);
-            if (json_str) {
-        extracted_column_names =
-            ExtractColumnNamesFromJson(std::string(json_str));
-                free(json_str);
-                                }
-                            } else {
-      ERPL_TRACE_WARN("ODATA_READ_BIND",
-                      "First row is not an object in OData v4 response");
-                            }
-                        } else {
-    ERPL_TRACE_WARN("ODATA_READ_BIND",
-                    "Could not find 'value' array in OData v4 response");
-                        }
+                     "Extracted column names from OData v4 first row");
+    return;
+  }
+
+  ERPL_TRACE_WARN("ODATA_READ_BIND",
+                  "Could not extract column names from OData v4 response");
 }
 
 void ODataReadBindData::ParseODataV2Response(
     duckdb_yyjson::yyjson_val *root,
-                                           std::shared_ptr<ODataEntitySetClient> odata_client,
+    std::shared_ptr<ODataEntitySetClient> odata_client,
     std::vector<std::string> &extracted_column_names) {
+  (void)odata_client;
   ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                    "No @odata.context found, trying OData v2 format");
-                        auto data_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
-                        if (data_obj && duckdb_yyjson::yyjson_is_obj(data_obj)) {
+  if (AppendColumnNamesFromObject(FirstODataV2Row(root),
+                                  extracted_column_names)) {
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     "Found 'd' object in OData v2 response");
-                            auto results_arr = duckdb_yyjson::yyjson_obj_get(data_obj, "results");
-                            if (results_arr && duckdb_yyjson::yyjson_is_arr(results_arr)) {
-      ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                       "Found 'results' array in OData v2 response");
-                                duckdb_yyjson::yyjson_arr_iter arr_it;
-                                duckdb_yyjson::yyjson_arr_iter_init(results_arr, &arr_it);
-      duckdb_yyjson::yyjson_val *first_row =
-          duckdb_yyjson::yyjson_arr_iter_next(&arr_it);
-            
-                                if (first_row && duckdb_yyjson::yyjson_is_obj(first_row)) {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                         "Found first row object in OData v2 response");
-                                    
-                // Extract column names from first row
-        char *json_str = duckdb_yyjson::yyjson_val_write(first_row, 0, nullptr);
-                if (json_str) {
-          extracted_column_names =
-              ExtractColumnNamesFromJson(std::string(json_str));
-                    free(json_str);
-                }
-                                } else {
-        ERPL_TRACE_WARN("ODATA_READ_BIND",
-                        "First row is not an object in OData v2 response");
-                                }
-                            } else {
-      ERPL_TRACE_WARN("ODATA_READ_BIND",
-                      "Could not find 'results' array in OData v2 response");
-                            }
-                        } else {
-    ERPL_TRACE_WARN("ODATA_READ_BIND",
-                    "Could not find 'd' object in OData v2 response");
+                     "Extracted column names from OData v2 first row");
+    return;
   }
+
+  ERPL_TRACE_WARN("ODATA_READ_BIND",
+                  "Could not extract column names from OData v2 response");
 }
 
 std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns) {
@@ -1851,7 +863,7 @@ std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns) {
                       (service_root_mode_ ? "true" : "false"));
 
     std::vector<std::string> base_names;
-    
+
     // If we have extracted column names from the first data row, use those
     if (!extracted_column_names.empty()) {
         base_names = extracted_column_names;
@@ -2491,8 +1503,7 @@ ODataReadBindData::PredicatePushdownHelper() {
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                      "Creating new predicate pushdown helper");
         
-    // Use extracted column names if available, otherwise fall back to OData
-    // client
+    // Use extracted column names if available, otherwise fall back to OData client
         std::vector<std::string> column_names;
         if (!extracted_column_names.empty()) {
             column_names = extracted_column_names;
@@ -2671,43 +1682,44 @@ std::string ODataReadBindData::GetOriginalColumnName(
     
     auto original_index = activated_to_original_mapping[activated_column_index];
     
-  // Use extracted column names if available, otherwise fall back to
-  // all_result_names
-    if (!extracted_column_names.empty()) {
-        if (original_index >= extracted_column_names.size()) {
-      ERPL_TRACE_ERROR(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format("Original column index %d is out of "
-                                     "bounds for extracted column names",
-                                     original_index));
-            return "";
-        }
-        auto column_name = extracted_column_names[original_index];
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     duckdb::StringUtil::Format(
-                         "Activated index %d maps to original index %d which "
-                         "is column '%s' (from extracted names)",
-                         activated_column_index, original_index,
-                         column_name.c_str()));
-        return column_name;
-    } else {
+  // Always use all_result_names (EDMX-derived, no navigation properties).
+  // extracted_column_names comes from JSON key order and may include nav
+  // properties at lower indices, causing off-by-one mismatches against the
+  // DuckDB catalog column indices which are built from EDMX only.
+    if (!all_result_names.empty()) {
         if (original_index >= all_result_names.size()) {
       ERPL_TRACE_ERROR(
           "ODATA_READ_BIND",
           duckdb::StringUtil::Format(
-              "Original column index %d is out of bounds for result names",
-              original_index));
+              "Original column index %d is out of bounds for result names (%d total)",
+              original_index, (int)all_result_names.size()));
             return "";
         }
         auto column_name = all_result_names[original_index];
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                      duckdb::StringUtil::Format(
                          "Activated index %d maps to original index %d which "
-                         "is column '%s' (from result names)",
-                         activated_column_index, original_index,
+                         "is column '%s' (from EDMX result names)",
+                         (int)activated_column_index, (int)original_index,
                          column_name.c_str()));
         return column_name;
     }
+    if (original_index >= extracted_column_names.size()) {
+      ERPL_TRACE_ERROR(
+          "ODATA_READ_BIND",
+          duckdb::StringUtil::Format("Original column index %d is out of "
+                                     "bounds for extracted column names (%d total)",
+                                     original_index, (int)extracted_column_names.size()));
+        return "";
+    }
+    auto column_name = extracted_column_names[original_index];
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     duckdb::StringUtil::Format(
+                         "Activated index %d maps to original index %d which "
+                         "is column '%s' (from JSON-extracted names, EDMX unavailable)",
+                         (int)activated_column_index, (int)original_index,
+                         column_name.c_str()));
+    return column_name;
 }
 
 void ODataReadBindData::SetInputParameters(
@@ -2783,76 +1795,6 @@ void ODataReadBindData::UpdateExpandedColumnType(
             }
         }
     }
-}
-
-// Infer struct type from JSON object, handling nested expands
-duckdb::LogicalType
-ODataDataExtractor::InferStructTypeFromJsonObjectWithNestedExpands(
-    duckdb_yyjson::yyjson_val *obj_val, const std::string &expand_path) {
-    if (!obj_val || !duckdb_yyjson::yyjson_is_obj(obj_val)) {
-        return duckdb::LogicalTypeId::VARCHAR; // Fallback to VARCHAR if not an object
-    }
-    
-    duckdb::child_list_t<duckdb::LogicalType> struct_fields;
-    
-    size_t idx, max;
-    duckdb_yyjson::yyjson_val *json_key, *json_val;
-    yyjson_obj_foreach(obj_val, idx, max, json_key, json_val) {
-    if (!duckdb_yyjson::yyjson_is_str(json_key))
-      continue;
-        
-        std::string field_name = duckdb_yyjson::yyjson_get_str(json_key);
-        
-        // Skip metadata fields that are OData-specific
-        if (field_name == "__metadata" || field_name == "__deferred") {
-            continue;
-        }
-        
-    // Check if this field is a nested expand (e.g., if expand_path is
-    // "Products/Suppliers" and we're processing "Products")
-        bool is_nested_expand = false;
-    for (const auto &path : expand_paths) {
-      if (path.find(expand_path + "/") == 0 &&
-          path.substr(expand_path.length() + 1) == field_name) {
-                is_nested_expand = true;
-                break;
-            }
-        }
-        
-        duckdb::LogicalType field_type;
-        if (is_nested_expand) {
-            // This is a nested expand, so we need to handle it recursively
-            if (duckdb_yyjson::yyjson_is_obj(json_val)) {
-                // Check if it has a 'results' array (OData V2 collection)
-                auto results_field = duckdb_yyjson::yyjson_obj_get(json_val, "results");
-                if (results_field && duckdb_yyjson::yyjson_is_arr(results_field)) {
-                    // It's a collection, so use LIST(STRUCT)
-          auto nested_struct_type =
-              InferStructTypeFromJsonObjectWithNestedExpands(
-                  json_val, expand_path + "/" + field_name);
-                    field_type = duckdb::LogicalType::LIST(nested_struct_type);
-                } else {
-                    // It's a single entity, so use STRUCT
-          field_type = InferStructTypeFromJsonObjectWithNestedExpands(
-              json_val, expand_path + "/" + field_name);
-                }
-            } else {
-                field_type = duckdb::LogicalTypeId::VARCHAR; // Fallback
-            }
-        } else {
-            // Regular field, infer the type normally
-            field_type = InferTypeFromJsonValue(json_val);
-        }
-        
-        // Add the field to our struct
-        struct_fields.emplace_back(field_name, field_type);
-    }
-    
-    if (struct_fields.empty()) {
-        return duckdb::LogicalTypeId::VARCHAR; // Fallback if no fields
-    }
-    
-    return duckdb::LogicalType::STRUCT(struct_fields);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -3207,526 +2149,5 @@ TableFunctionSet CreateODataReadFunction() {
     return function_set;
 }
 
-// ============================================================================
-// OData Describe Function Implementation
-// ============================================================================
-
-class ODataDescribeBindData : public TableFunctionData {
-public:
-    std::string url;
-    std::string resource_type;  // "service" or "entity_set"
-    std::string entity_set_name;
-    std::shared_ptr<ODataEntitySetClient> entity_client;
-    std::shared_ptr<ODataServiceClient> service_client;
-    std::shared_ptr<HttpAuthParams> auth_params;
-    bool data_loaded = false;
-    std::vector<duckdb::Value> result_row;  // Single row result
-};
-
-// Helper to create empty property list with proper schema
-static duckdb::Value CreateEmptyPropertyList() {
-    child_list_t<LogicalType> property_struct;
-    property_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("duckdb_type", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("edm_type", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("is_nullable", LogicalTypeId::BOOLEAN);
-    property_struct.emplace_back("is_key", LogicalTypeId::BOOLEAN);
-    property_struct.emplace_back("max_length", LogicalTypeId::INTEGER);
-    property_struct.emplace_back("precision", LogicalTypeId::INTEGER);
-    property_struct.emplace_back("scale", LogicalTypeId::INTEGER);
-    return Value::LIST(LogicalType::STRUCT(property_struct), vector<Value>());
-}
-
-// Helper to create empty navigation property list with proper schema
-static duckdb::Value CreateEmptyNavigationList() {
-    child_list_t<LogicalType> nav_struct;
-    nav_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    nav_struct.emplace_back("target_entity", LogicalTypeId::VARCHAR);
-    
-    child_list_t<LogicalType> target_type_struct;
-    target_type_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    target_type_struct.emplace_back("property_count", LogicalTypeId::BIGINT);
-    target_type_struct.emplace_back("nav_property_count", LogicalTypeId::BIGINT);
-    nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
-    
-    nav_struct.emplace_back("is_collection", LogicalTypeId::BOOLEAN);
-    nav_struct.emplace_back("partner", LogicalTypeId::VARCHAR);
-    
-    child_list_t<LogicalType> constraint_struct;
-    constraint_struct.emplace_back("property", LogicalTypeId::VARCHAR);
-    constraint_struct.emplace_back("referenced_property", LogicalTypeId::VARCHAR);
-    nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
-    
-    return Value::LIST(LogicalType::STRUCT(nav_struct), vector<Value>());
-}
-
-// Helper to create empty entity sets list with proper schema
-static duckdb::Value CreateEmptyEntitySetsList() {
-    child_list_t<LogicalType> entity_set_struct;
-    entity_set_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    entity_set_struct.emplace_back("entity_type", LogicalTypeId::VARCHAR);
-    entity_set_struct.emplace_back("url", LogicalTypeId::VARCHAR);
-    return Value::LIST(LogicalType::STRUCT(entity_set_struct), vector<Value>());
-}
-
-// Helper to create empty functions list with proper schema
-static duckdb::Value CreateEmptyFunctionsList() {
-    child_list_t<LogicalType> function_struct;
-    function_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    function_struct.emplace_back("return_type", LogicalTypeId::VARCHAR);
-    
-    child_list_t<LogicalType> param_struct;
-    param_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    param_struct.emplace_back("type", LogicalTypeId::VARCHAR);
-    param_struct.emplace_back("nullable", LogicalTypeId::BOOLEAN);
-    function_struct.emplace_back("parameters", LogicalType::LIST(LogicalType::STRUCT(param_struct)));
-    
-    return Value::LIST(LogicalType::STRUCT(function_struct), vector<Value>());
-}
-
-// Helper to build property struct
-static duckdb::Value BuildPropertyStruct(const Property& prop, bool is_key = false) {
-    auto duck_type_str = DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(prop.type_name);
-    
-    child_list_t<Value> property_struct;
-    property_struct.emplace_back("name", Value(prop.name));
-    property_struct.emplace_back("duckdb_type", Value(duck_type_str));
-    property_struct.emplace_back("edm_type", Value(prop.type_name));
-    property_struct.emplace_back("is_nullable", Value(prop.nullable));
-    property_struct.emplace_back("is_key", Value(is_key));
-    property_struct.emplace_back("max_length", prop.max_length > 0 ? Value(prop.max_length) : Value::INTEGER(0));
-    property_struct.emplace_back("precision", prop.precision > 0 ? Value(prop.precision) : Value::INTEGER(0));
-    property_struct.emplace_back("scale", prop.scale > 0 ? Value(prop.scale) : Value::INTEGER(0));
-    
-    return Value::STRUCT(property_struct);
-}
-
-// Helper to recursively build navigation property info
-static duckdb::Value BuildNavigationPropertyStruct(
-    const NavigationProperty& nav_prop, 
-    const Edmx& edmx,
-    std::set<std::string>& visited_types  // Prevent infinite recursion
-) {
-    child_list_t<Value> nav_struct;
-    nav_struct.emplace_back("name", Value(nav_prop.name));
-    
-    // Extract target entity type
-    DuckTypeConverter converter(const_cast<Edmx&>(edmx));
-    auto [is_collection, target_type] = converter.ExtractCollectionType(nav_prop.type);
-    nav_struct.emplace_back("target_entity", Value(target_type));
-    
-    // Recursive: Get target entity type info (if not already visited)
-    child_list_t<Value> type_info;
-    if (visited_types.find(target_type) == visited_types.end()) {
-        visited_types.insert(target_type);
-        
-        auto entity_type_variant = edmx.FindType(target_type);
-        if (std::holds_alternative<EntityType>(entity_type_variant)) {
-            // Build a simplified struct of the target entity
-            auto& target_entity = std::get<EntityType>(entity_type_variant);
-            
-            type_info.emplace_back("name", Value(target_entity.name));
-            type_info.emplace_back("property_count", Value((int64_t)target_entity.properties.size()));
-            type_info.emplace_back("nav_property_count", Value((int64_t)target_entity.navigation_properties.size()));
-        } else {
-            // Provide empty values when target entity not found
-            type_info.emplace_back("name", Value(""));
-            type_info.emplace_back("property_count", Value((int64_t)0));
-            type_info.emplace_back("nav_property_count", Value((int64_t)0));
-        }
-    } else {
-        // Provide empty values when already visited (to avoid infinite recursion)
-        type_info.emplace_back("name", Value(""));
-        type_info.emplace_back("property_count", Value((int64_t)0));
-        type_info.emplace_back("nav_property_count", Value((int64_t)0));
-    }
-    Value target_type_value = Value::STRUCT(type_info);
-    nav_struct.emplace_back("target_entity_type", target_type_value);
-    nav_struct.emplace_back("is_collection", Value(is_collection));
-    nav_struct.emplace_back("partner", nav_prop.partner.empty() ? Value("") : Value(nav_prop.partner));
-    
-    // Add referential constraints
-    vector<Value> constraints;
-    for (const auto& constraint : nav_prop.referential_constraints) {
-        child_list_t<Value> constraint_struct;
-        constraint_struct.emplace_back("property", Value(constraint.property));
-        constraint_struct.emplace_back("referenced_property", Value(constraint.referenced_property));
-        constraints.push_back(Value::STRUCT(constraint_struct));
-    }
-    
-    // Handle empty constraints list
-    if (constraints.empty()) {
-        child_list_t<LogicalType> constraint_struct;
-        constraint_struct.emplace_back("property", LogicalTypeId::VARCHAR);
-        constraint_struct.emplace_back("referenced_property", LogicalTypeId::VARCHAR);
-        nav_struct.emplace_back("referential_constraints", Value::LIST(LogicalType::STRUCT(constraint_struct), vector<Value>()));
-    } else {
-        nav_struct.emplace_back("referential_constraints", Value::LIST(constraints));
-    }
-    
-    return Value::STRUCT(nav_struct);
-}
-
-// Bind function for odata_describe
-static unique_ptr<FunctionData> ODataDescribeBind(
-    ClientContext &context,
-    TableFunctionBindInput &input,
-    vector<LogicalType> &return_types,
-    vector<string> &names
-) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_describe");
-    ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Starting OData describe bind");
-
-    // Reuse authentication handling from ODataReadBind
-    auto auth_params = AuthParamsFromInput(context, input);
-    
-    // Get URL argument
-    auto url = input.inputs[0].GetValue<string>();
-    ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Describing URL: " + url);
-    
-    // Reuse probe logic from ODataClientFactory
-    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
-    
-    auto bind_data = make_uniq<ODataDescribeBindData>();
-    bind_data->url = url;
-    bind_data->auth_params = auth_params;
-    
-    // Create appropriate client based on probe result
-    if (probe_result.is_service_root) {
-        bind_data->resource_type = "service";
-        bind_data->service_client = ODataClientFactory::CreateServiceClient(probe_result);
-        ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Detected service root");
-    } else {
-        bind_data->resource_type = "entity_set";
-        bind_data->entity_client = ODataClientFactory::CreateEntitySetClient(probe_result);
-        
-        // Extract entity set name from URL
-        HttpUrl parsed_url(url);
-        auto path = parsed_url.Path();
-        auto last_slash = path.find_last_of('/');
-        if (last_slash != std::string::npos) {
-            auto entity_set_part = path.substr(last_slash + 1);
-            // Remove any query parameters
-            auto query_pos = entity_set_part.find('?');
-            if (query_pos != std::string::npos) {
-                entity_set_part = entity_set_part.substr(0, query_pos);
-            }
-            // Remove any parentheses (for specific entity access)
-            auto paren_pos = entity_set_part.find('(');
-            if (paren_pos != std::string::npos) {
-                entity_set_part = entity_set_part.substr(0, paren_pos);
-            }
-            bind_data->entity_set_name = entity_set_part;
-        }
-        ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Detected entity set: " + bind_data->entity_set_name);
-    }
-    
-    // Define output schema
-    names = {"url", "resource_type", "entity_set_name", "entity_type_name", 
-             "properties", "navigation_properties", "entity_sets", "functions"};
-    
-    // Build types for the complex columns
-    // Properties struct
-    child_list_t<LogicalType> property_struct;
-    property_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("duckdb_type", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("edm_type", LogicalTypeId::VARCHAR);
-    property_struct.emplace_back("is_nullable", LogicalTypeId::BOOLEAN);
-    property_struct.emplace_back("is_key", LogicalTypeId::BOOLEAN);
-    property_struct.emplace_back("max_length", LogicalTypeId::INTEGER);
-    property_struct.emplace_back("precision", LogicalTypeId::INTEGER);
-    property_struct.emplace_back("scale", LogicalTypeId::INTEGER);
-    auto property_type = LogicalType::STRUCT(property_struct);
-    
-    // Navigation properties struct
-    child_list_t<LogicalType> nav_struct;
-    nav_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    nav_struct.emplace_back("target_entity", LogicalTypeId::VARCHAR);
-    
-    // Target entity type sub-struct (nullable)
-    child_list_t<LogicalType> target_type_struct;
-    target_type_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    target_type_struct.emplace_back("property_count", LogicalTypeId::BIGINT);
-    target_type_struct.emplace_back("nav_property_count", LogicalTypeId::BIGINT);
-    nav_struct.emplace_back("target_entity_type", LogicalType::STRUCT(target_type_struct));
-    
-    nav_struct.emplace_back("is_collection", LogicalTypeId::BOOLEAN);
-    nav_struct.emplace_back("partner", LogicalTypeId::VARCHAR);
-    
-    // Referential constraints sub-struct
-    child_list_t<LogicalType> constraint_struct;
-    constraint_struct.emplace_back("property", LogicalTypeId::VARCHAR);
-    constraint_struct.emplace_back("referenced_property", LogicalTypeId::VARCHAR);
-    nav_struct.emplace_back("referential_constraints", LogicalType::LIST(LogicalType::STRUCT(constraint_struct)));
-    
-    auto nav_type = LogicalType::STRUCT(nav_struct);
-    
-    // Entity sets struct (for service root)
-    child_list_t<LogicalType> entity_set_struct;
-    entity_set_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    entity_set_struct.emplace_back("entity_type", LogicalTypeId::VARCHAR);
-    entity_set_struct.emplace_back("url", LogicalTypeId::VARCHAR);
-    auto entity_set_type = LogicalType::STRUCT(entity_set_struct);
-    
-    // Functions struct
-    child_list_t<LogicalType> function_struct;
-    function_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    function_struct.emplace_back("return_type", LogicalTypeId::VARCHAR);
-    
-    // Function parameters sub-struct
-    child_list_t<LogicalType> param_struct;
-    param_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-    param_struct.emplace_back("type", LogicalTypeId::VARCHAR);
-    param_struct.emplace_back("nullable", LogicalTypeId::BOOLEAN);
-    function_struct.emplace_back("parameters", LogicalType::LIST(LogicalType::STRUCT(param_struct)));
-    
-    auto function_type = LogicalType::STRUCT(function_struct);
-    
-    return_types = {
-        LogicalTypeId::VARCHAR,                    // url
-        LogicalTypeId::VARCHAR,                    // resource_type
-        LogicalTypeId::VARCHAR,                    // entity_set_name
-        LogicalTypeId::VARCHAR,                    // entity_type_name
-        LogicalType::LIST(property_type),        // properties
-        LogicalType::LIST(nav_type),            // navigation_properties
-        LogicalType::LIST(entity_set_type),     // entity_sets
-        LogicalType::LIST(function_type)        // functions
-    };
-    
-    return bind_data;
-}
-
-// Helper to build properties list for an entity type
-static duckdb::Value BuildPropertiesList(const EntityType& entity_type, const std::set<std::string>& key_properties) {
-    vector<Value> properties;
-    for (const auto& prop : entity_type.properties) {
-        bool is_key = key_properties.count(prop.name) > 0;
-        properties.push_back(BuildPropertyStruct(prop, is_key));
-    }
-    return properties.empty() ? CreateEmptyPropertyList() : Value::LIST(properties);
-}
-
-// Helper to build navigation properties list for an entity type
-static duckdb::Value BuildNavigationPropertiesList(
-    const EntityType& entity_type, 
-    const Edmx& metadata,
-    const std::string& entity_type_name
-) {
-    vector<Value> nav_properties;
-    std::set<std::string> visited_types;
-    visited_types.insert(entity_type_name);
-    
-    for (const auto& nav_prop : entity_type.navigation_properties) {
-        nav_properties.push_back(BuildNavigationPropertyStruct(nav_prop, metadata, visited_types));
-    }
-    
-    return nav_properties.empty() ? CreateEmptyNavigationList() : Value::LIST(nav_properties);
-}
-
-// Helper to build entity sets list for service root
-static duckdb::Value BuildEntitySetsList(const Edmx& metadata, const std::string& base_url) {
-    vector<Value> entity_sets;
-    
-    for (const auto& schema : metadata.data_services.schemas) {
-        for (const auto& container : schema.entity_containers) {
-            for (const auto& entity_set : container.entity_sets) {
-                child_list_t<Value> es_struct;
-                es_struct.emplace_back("name", Value(entity_set.name));
-                es_struct.emplace_back("entity_type", Value(entity_set.entity_type_name));
-                
-                // Build full URL for entity set
-                std::string entity_url = base_url;
-                if (!entity_url.empty() && entity_url.back() != '/') {
-                    entity_url += "/";
-                }
-                entity_url += entity_set.name;
-                
-                es_struct.emplace_back("url", Value(entity_url));
-                entity_sets.push_back(Value::STRUCT(es_struct));
-            }
-        }
-    }
-    
-    return entity_sets.empty() ? CreateEmptyEntitySetsList() : Value::LIST(entity_sets);
-}
-
-// Helper to build functions list
-static duckdb::Value BuildFunctionsList(const Edmx& metadata) {
-    vector<Value> functions;
-    
-    for (const auto& schema : metadata.data_services.schemas) {
-        for (const auto& func : schema.functions) {
-            child_list_t<Value> func_struct;
-            func_struct.emplace_back("name", Value(func.name));
-            func_struct.emplace_back("return_type", Value(func.return_type));
-            
-            vector<Value> params;
-            for (const auto& param : func.parameters) {
-                child_list_t<Value> param_struct;
-                param_struct.emplace_back("name", Value(param.name));
-                param_struct.emplace_back("type", Value(param.type));
-                param_struct.emplace_back("nullable", Value(param.nullable));
-                params.push_back(Value::STRUCT(param_struct));
-            }
-            
-            // Handle empty params list
-            if (params.empty()) {
-                child_list_t<LogicalType> param_struct;
-                param_struct.emplace_back("name", LogicalTypeId::VARCHAR);
-                param_struct.emplace_back("type", LogicalTypeId::VARCHAR);
-                param_struct.emplace_back("nullable", LogicalTypeId::BOOLEAN);
-                func_struct.emplace_back("parameters", Value::LIST(LogicalType::STRUCT(param_struct), vector<Value>()));
-            } else {
-                func_struct.emplace_back("parameters", Value::LIST(params));
-            }
-            functions.push_back(Value::STRUCT(func_struct));
-        }
-    }
-    
-    return functions.empty() ? CreateEmptyFunctionsList() : Value::LIST(functions);
-}
-
-// Helper to find entity set in metadata
-static std::optional<EntitySet> FindEntitySet(const Edmx& metadata, const std::string& entity_set_name) {
-    // Search in all schemas and containers
-    for (const auto& schema : metadata.data_services.schemas) {
-        for (const auto& container : schema.entity_containers) {
-            for (const auto& es : container.entity_sets) {
-                if (es.name == entity_set_name) {
-                    return es;
-                }
-            }
-        }
-    }
-    
-    // Try alternative search method
-    auto all_entity_sets = metadata.FindEntitySets();
-    for (const auto& es : all_entity_sets) {
-        if (es.name == entity_set_name) {
-            return es;
-        }
-    }
-    
-    return std::nullopt;
-}
-
-// Helper to process entity set description
-static void ProcessEntitySetDescription(
-    ODataDescribeBindData& bind_data,
-    const Edmx& metadata,
-    vector<Value>& row_values
-) {
-    row_values.push_back(Value(bind_data.entity_set_name));
-    
-    auto entity_set_opt = FindEntitySet(metadata, bind_data.entity_set_name);
-    
-    if (entity_set_opt.has_value()) {
-        const auto& entity_set = entity_set_opt.value();
-        row_values.push_back(Value(entity_set.entity_type_name));
-        
-        // Get entity type
-        auto entity_type_variant = metadata.FindType(entity_set.entity_type_name);
-        if (std::holds_alternative<EntityType>(entity_type_variant)) {
-            const auto& entity_type = std::get<EntityType>(entity_type_variant);
-            
-            // Get key properties
-            std::set<std::string> key_properties;
-            for (const auto& key_ref : entity_type.key.property_refs) {
-                key_properties.insert(key_ref.name);
-            }
-            
-            // Build properties and navigation properties
-            row_values.push_back(BuildPropertiesList(entity_type, key_properties));
-            row_values.push_back(BuildNavigationPropertiesList(entity_type, metadata, entity_set.entity_type_name));
-        } else {
-            // Entity type not found
-            row_values.push_back(CreateEmptyPropertyList());
-            row_values.push_back(CreateEmptyNavigationList());
-        }
-    } else {
-        // Entity set not found
-        row_values.push_back(Value(""));  // entity_type_name
-        row_values.push_back(CreateEmptyPropertyList());
-        row_values.push_back(CreateEmptyNavigationList());
-    }
-    
-    // Empty entity_sets and functions for entity set description
-    row_values.push_back(CreateEmptyEntitySetsList());
-    row_values.push_back(CreateEmptyFunctionsList());
-}
-
-// Helper to process service root description
-static void ProcessServiceRootDescription(
-    ODataDescribeBindData& bind_data,
-    const Edmx& metadata,
-    vector<Value>& row_values
-) {
-    row_values.push_back(Value(""));  // entity_set_name
-    row_values.push_back(Value(""));  // entity_type_name
-    row_values.push_back(CreateEmptyPropertyList());
-    row_values.push_back(CreateEmptyNavigationList());
-    row_values.push_back(BuildEntitySetsList(metadata, bind_data.url));
-    row_values.push_back(BuildFunctionsList(metadata));
-}
-
-// Scan function for odata_describe
-static void ODataDescribeScan(
-    ClientContext &context,
-    TableFunctionInput &data_p,
-    DataChunk &output
-) {
-    auto &bind_data = data_p.bind_data->CastNoConst<ODataDescribeBindData>();
-    
-    if (!bind_data.data_loaded) {
-        ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Loading metadata for: " + bind_data.url);
-        
-        // Load metadata
-        Edmx metadata;
-        try {
-            metadata = (bind_data.resource_type == "service") 
-                ? bind_data.service_client->GetMetadata()
-                : bind_data.entity_client->GetMetadata();
-        } catch (const std::exception& e) {
-            throw InvalidInputException("Failed to fetch metadata: " + std::string(e.what()));
-        }
-        
-        // Build result row
-        vector<Value> row_values;
-        row_values.push_back(Value(bind_data.url));
-        row_values.push_back(Value(bind_data.resource_type));
-        
-        if (bind_data.resource_type == "entity_set") {
-            ProcessEntitySetDescription(bind_data, metadata, row_values);
-        } else {
-            ProcessServiceRootDescription(bind_data, metadata, row_values);
-        }
-        
-        bind_data.result_row = row_values;
-        bind_data.data_loaded = true;
-        ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Metadata loaded successfully");
-    }
-    
-    // Output single row
-    if (!bind_data.result_row.empty()) {
-        for (idx_t i = 0; i < bind_data.result_row.size(); i++) {
-            output.SetValue(i, 0, bind_data.result_row[i]);
-        }
-        output.SetCardinality(1);
-        bind_data.result_row.clear();  // Clear to indicate we've returned the row
-    } else {
-        output.SetCardinality(0);
-    }
-}
-
-// Create the odata_describe function
-TableFunctionSet CreateODataDescribeFunction() {
-    TableFunctionSet describe_func("odata_describe");
-    
-    TableFunction describe_function({LogicalTypeId::VARCHAR}, ODataDescribeScan, ODataDescribeBind);
-    describe_function.named_parameters["secret"] = LogicalTypeId::VARCHAR;
-    
-    describe_func.AddFunction(describe_function);
-    return describe_func;
-}
 
 } // namespace erpl_web

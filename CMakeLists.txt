@@ -79,6 +79,8 @@ set(EXTENSION_SOURCES
     src/odata_edm.cpp
     src/odata_predicate_pushdown_helper.cpp
     src/odata_expand_parser.cpp
+    src/odata_data_extractor.cpp
+    src/odata_describe_functions.cpp
     src/odata_read_functions.cpp
     src/odata_storage.cpp
     src/odata_catalog.cpp

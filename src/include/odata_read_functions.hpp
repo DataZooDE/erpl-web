@@ -246,6 +246,8 @@ private:
     // Processing methods
     void ProcessODataV4ExpandedData(duckdb_yyjson::yyjson_val* value_arr);
     void ProcessODataV2ExpandedData(duckdb_yyjson::yyjson_val* results_arr);
+    void ProcessExpandedDataRows(duckdb_yyjson::yyjson_val* rows_arr, const std::string& response_format);
+    duckdb::LogicalType GetExpandedTargetType(const std::string& expand_path) const;
     duckdb::Value ParseJsonToDuckDBValue(const std::string& json_str, const duckdb::LogicalType& target_type);
     duckdb::Value ParseJsonValueToDuckDBValue(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
     
