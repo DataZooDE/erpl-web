@@ -85,6 +85,11 @@ unique_ptr<FunctionData> GraphTeamsFunctions::MyTeamsBind(
     }
     bind_data->secret_name = secret_name;
 
+    std::string user;
+    if (input.named_parameters.find("user") != input.named_parameters.end()) {
+        user = input.named_parameters.at("user").GetValue<std::string>();
+    }
+
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
 
@@ -97,7 +102,7 @@ unique_ptr<FunctionData> GraphTeamsFunctions::MyTeamsBind(
     };
 
     GraphTeamsClient client(bind_data->auth_params);
-    auto response = client.GetMyTeams();
+    auto response = client.GetMyTeams(user);
 
     auto doc = yyjson_read(response.c_str(), response.length(), 0);
     if (!doc) {
@@ -487,13 +492,18 @@ void GraphTeamsFunctions::ChannelMessagesScan(
 void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction my_teams_func("graph_my_teams", {}, MyTeamsScan, MyTeamsBind);
+        my_teams_func.named_parameters["user"]   = LogicalType::VARCHAR;
         my_teams_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(my_teams_func);
         FunctionDescription desc;
-        desc.description = "List Microsoft Teams that the authenticated user is a member of.";
+        desc.description = "List Microsoft Teams for a user. Omit user to query the authenticated "
+                           "user's teams (delegated); provide user (GUID, UPN, or email) for app-only auth.";
         desc.parameter_names = {};
         desc.parameter_types = {};
-        desc.examples = {"SELECT * FROM graph_my_teams(secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_my_teams(secret := 'ms_graph')",
+            "SELECT * FROM graph_my_teams(user := 'jr@data-zoo.de', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

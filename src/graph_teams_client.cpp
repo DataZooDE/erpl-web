@@ -9,8 +9,8 @@ std::string GraphTeamsUrlBuilder::GetBaseUrl() {
     return GraphClient::BaseUrl();
 }
 
-std::string GraphTeamsUrlBuilder::BuildMyTeamsUrl() {
-    return GetBaseUrl() + "/me/joinedTeams";
+std::string GraphTeamsUrlBuilder::BuildMyTeamsUrl(const std::string &user) {
+    return GetBaseUrl() + "/" + GraphClient::ResolveUserSegment(user) + "/joinedTeams";
 }
 
 std::string GraphTeamsUrlBuilder::BuildTeamUrl(const std::string &team_id) {
@@ -42,8 +42,8 @@ std::string GraphTeamsClient::DoGraphGet(const std::string &url) {
     return GraphClient(auth_params, "GRAPH_TEAMS").Get(url);
 }
 
-std::string GraphTeamsClient::GetMyTeams() {
-    auto url = GraphTeamsUrlBuilder::BuildMyTeamsUrl();
+std::string GraphTeamsClient::GetMyTeams(const std::string &user) {
+    auto url = GraphTeamsUrlBuilder::BuildMyTeamsUrl(user);
     return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(url);
 }
 

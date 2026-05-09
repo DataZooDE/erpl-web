@@ -248,6 +248,20 @@ std::string GraphClient::GetAllPagesMerged(const std::string &url) {
     return merged;
 }
 
+std::string GraphClient::ResolveUserSegment(const std::string &user) {
+    if (user.empty()) {
+        return "me";
+    }
+    // GUID (8-4-4-4-12, 36 chars): safe for URL paths, no encoding needed.
+    if (user.size() == 36 && user[8] == '-' && user[13] == '-' &&
+        user[18] == '-' && user[23] == '-') {
+        return "users/" + user;
+    }
+    // UPN (user@tenant.com) or email: percent-encode @ -> %40 so the segment
+    // is valid in a URL path. Dots and hyphens are RFC 3986 unreserved.
+    return "users/" + UrlEncode(user);
+}
+
 std::string GraphJsonGetString(yyjson_val *obj, const char *key) {
     auto val = obj ? yyjson_obj_get(obj, key) : nullptr;
     if (val && yyjson_is_str(val)) {

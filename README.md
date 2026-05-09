@@ -978,13 +978,15 @@ Storage extension: `ATTACH '<file-path>' AS <catalog> (TYPE excel_workbook, SECR
 
 Required permissions: `Calendars.Read`, `Contacts.Read`, `Mail.Read` — both **Delegated** and **Application** are supported.
 
-- **Delegated** (`authorization_code` secret): use `/me/...` by omitting `user_id`
-- **Application** (`client_credentials` secret): provide `user_id` to route to `/users/{id}/...`
+- **Delegated** (`authorization_code` secret): use `/me/...` by omitting `user`
+- **Application** (`client_credentials` secret): provide `user` to route to `/users/{id}/...`
+
+The `user` parameter accepts a GUID, a `userPrincipalName` (e.g. `jr@contoso.com`), or an email address — all three forms are resolved correctly.
 
 ```sql
--- List calendars for a user (app-only)
+-- List calendars for a user (app-only) — GUID, UPN, or email all work
 SELECT id, name, is_default_calendar
-FROM graph_calendars(user_id := 'user-id', secret := 'ms_graph');
+FROM graph_calendars(user := 'jr@contoso.com', secret := 'ms_graph');
 
 -- All calendar events for the current user (delegated)
 SELECT subject, start_time, end_time, organizer_name, location
@@ -994,7 +996,7 @@ ORDER BY start_time DESC;
 -- Date-bounded events via calendarView (app-only, returns events in range)
 SELECT subject, start_time, end_time, is_all_day
 FROM graph_calendar_events(
-    user_id    := 'user-id',
+    user       := 'user-guid-or-upn',
     start_date := '2024-01-01',
     end_date   := '2024-12-31',
     secret     := 'ms_graph'
@@ -1002,29 +1004,29 @@ FROM graph_calendar_events(
 
 -- Specific calendar by id
 SELECT subject, start_time FROM graph_calendar_events(
-    user_id     := 'user-id',
+    user        := 'user-guid-or-upn',
     calendar_id := 'calendar-guid',
     secret      := 'ms_graph'
 );
 
 -- Contacts
 SELECT display_name, email, company_name, job_title
-FROM graph_contacts(user_id := 'user-id', secret := 'ms_graph');
+FROM graph_contacts(user := 'user-guid-or-upn', secret := 'ms_graph');
 
 -- Discover mail folders
 SELECT display_name, total_item_count, unread_item_count
-FROM graph_mail_folders(user_id := 'user-id', secret := 'ms_graph');
+FROM graph_mail_folders(user := 'user-guid-or-upn', secret := 'ms_graph');
 
 -- Email messages — metadata only, no body content
 SELECT subject, from_name, from_email, received_at, importance, is_read
-FROM graph_messages(user_id := 'user-id', folder := 'inbox', secret := 'ms_graph')
+FROM graph_messages(user := 'user-guid-or-upn', folder := 'inbox', secret := 'ms_graph')
 ORDER BY received_at DESC;
 
 -- folder accepts well-known names or any display name from graph_mail_folders()
 -- well-known: inbox, sentitems, drafts, deleteditems, junkemail, outbox, archive
 ```
 
-Functions: `graph_calendars([user_id, secret])`, `graph_calendar_events([user_id, calendar_id, start_date, end_date, secret])`, `graph_contacts([user_id, secret])`, `graph_mail_folders([user_id, secret])`, `graph_messages([user_id, folder, secret])`
+Functions: `graph_calendars([user, secret])`, `graph_calendar_events([user, calendar_id, start_date, end_date, secret])`, `graph_contacts([user, secret])`, `graph_mail_folders([user, secret])`, `graph_messages([user, folder, secret])`
 
 `start_date` and `end_date` must be provided together; bare ISO dates (`'2024-01-01'`) are accepted alongside full datetimes.
 
@@ -1053,7 +1055,9 @@ FROM graph_channel_messages('your-team-id', 'your-channel-id')
 ORDER BY created_at DESC;
 ```
 
-Functions: `graph_my_teams([secret])`, `graph_team_channels(team_id, [secret])`, `graph_team_members(team_id, [secret])`, `graph_channel_messages(team_id, channel_id, [secret])`
+Functions: `graph_my_teams([user, secret])`, `graph_team_channels(team_id, [secret])`, `graph_team_members(team_id, [secret])`, `graph_channel_messages(team_id, channel_id, [secret])`
+
+`user` accepts a GUID, UPN, or email. Omit it for delegated (`/me/joinedTeams`); provide it for app-only auth (`/users/{id}/joinedTeams`).
 
 ---
 

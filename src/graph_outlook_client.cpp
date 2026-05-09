@@ -12,8 +12,8 @@ std::string GraphOutlookUrlBuilder::GetBaseUrl() {
     return GraphClient::BaseUrl();
 }
 
-std::string GraphOutlookUrlBuilder::UserSegment(const std::string &user_id) {
-    return user_id.empty() ? "me" : "users/" + user_id;
+std::string GraphOutlookUrlBuilder::UserSegment(const std::string &user) {
+    return GraphClient::ResolveUserSegment(user);
 }
 
 std::string GraphOutlookUrlBuilder::BuildEventsUrl(const std::string &user_id) {

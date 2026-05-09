@@ -14,6 +14,8 @@ require-env ERPL_MS_DELEGATED_ACCESS_TOKEN
 
 require-env ERPL_MS_DELEGATED_EXPIRES_AT
 
+require-env ERPL_MS_OUTLOOK_USER_ID
+
 # Create secret with delegated (user) credentials
 statement ok
 CREATE SECRET ms_graph_teams_test (
@@ -25,9 +27,15 @@ CREATE SECRET ms_graph_teams_test (
     expires_at '${ERPL_MS_DELEGATED_EXPIRES_AT}'
 );
 
-# Test: graph_my_teams returns data (may be empty if user has no teams)
+# Test: graph_my_teams returns data without explicit user (delegated /me/ path)
 query I
 SELECT COUNT(*) >= 0 FROM graph_my_teams();
+----
+true
+
+# Test: graph_my_teams accepts user param (same result when GUID matches token owner)
+query I
+SELECT COUNT(*) >= 0 FROM graph_my_teams(user := '${ERPL_MS_OUTLOOK_USER_ID}', secret := 'ms_graph_teams_test');
 ----
 true
 

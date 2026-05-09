@@ -32,6 +32,11 @@ public:
     static std::string EscapeODataStringLiteral(const std::string &value);
     static std::optional<std::string> ExtractNextLink(const std::string &json_body);
 
+    // Returns the URL path component for a user: "me" when user is empty,
+    // "users/{id}" for a GUID, or "users/{encoded}" for a UPN/email (@ -> %40).
+    // Use as: BaseUrl() + "/" + ResolveUserSegment(user) + "/events"
+    static std::string ResolveUserSegment(const std::string &user);
+
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<HttpClient> http_client;

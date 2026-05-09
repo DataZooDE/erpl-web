@@ -14,7 +14,7 @@ public:
     static std::string GetBaseUrl();
 
     // Teams
-    static std::string BuildMyTeamsUrl();
+    static std::string BuildMyTeamsUrl(const std::string &user = {});
     static std::string BuildTeamUrl(const std::string &team_id);
 
     // Channels
@@ -34,7 +34,7 @@ public:
     explicit GraphTeamsClient(std::shared_ptr<HttpAuthParams> auth_params);
 
     // Teams
-    std::string GetMyTeams();
+    std::string GetMyTeams(const std::string &user = {});
     std::string GetTeam(const std::string &team_id);
 
     // Channels

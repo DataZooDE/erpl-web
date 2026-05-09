@@ -19,7 +19,7 @@ using namespace duckdb;
 
 struct OutlookBindData : public TableFunctionData {
     std::string secret_name;
-    std::string user_id;
+    std::string user;
     std::string json_response;
     yyjson_doc *parsed_doc  = nullptr;
     yyjson_arr_iter item_iter = {};
@@ -78,11 +78,11 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarsBind(
 {
     auto bind_data = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
-    bind_data->user_id     = GetNamedStr(input, "user_id");
+    bind_data->user        = GetNamedStr(input, "user");
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetCalendars(bind_data->user_id);
+    bind_data->json_response = client.GetCalendars(bind_data->user);
 
     names        = {"id", "name", "color", "is_default_calendar", "can_edit"};
     return_types = {
@@ -142,7 +142,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarEventsBind(
 {
     auto bind_data = make_uniq<CalendarEventsBindData>();
     bind_data->secret_name  = GetNamedStr(input, "secret");
-    bind_data->user_id      = GetNamedStr(input, "user_id");
+    bind_data->user      = GetNamedStr(input, "user");
     bind_data->calendar_id  = GetNamedStr(input, "calendar_id");
     bind_data->start_date   = GetNamedStr(input, "start_date");
     bind_data->end_date     = GetNamedStr(input, "end_date");
@@ -159,14 +159,14 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarEventsBind(
 
     if (has_start) {
         bind_data->json_response = client.GetCalendarView(
-            bind_data->user_id,
+            bind_data->user,
             NormaliseCalendarViewDate(bind_data->start_date),
             NormaliseCalendarViewDate(bind_data->end_date));
     } else if (!bind_data->calendar_id.empty()) {
         bind_data->json_response = client.GetCalendarEvents(
-            bind_data->user_id, bind_data->calendar_id);
+            bind_data->user, bind_data->calendar_id);
     } else {
-        bind_data->json_response = client.GetEvents(bind_data->user_id);
+        bind_data->json_response = client.GetEvents(bind_data->user);
     }
 
     names        = {"id", "subject", "body_preview", "start_time", "end_time",
@@ -245,11 +245,11 @@ unique_ptr<FunctionData> GraphOutlookFunctions::ContactsBind(
 {
     auto bind_data = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
-    bind_data->user_id     = GetNamedStr(input, "user_id");
+    bind_data->user        = GetNamedStr(input, "user");
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetContacts(bind_data->user_id);
+    bind_data->json_response = client.GetContacts(bind_data->user);
 
     names        = {"id", "display_name", "given_name", "surname", "email",
                     "mobile_phone", "business_phone", "company_name", "job_title"};
@@ -320,11 +320,11 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MailFoldersBind(
 {
     auto bind_data = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
-    bind_data->user_id     = GetNamedStr(input, "user_id");
+    bind_data->user        = GetNamedStr(input, "user");
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetMailFolders(bind_data->user_id);
+    bind_data->json_response = client.GetMailFolders(bind_data->user);
 
     names        = {"id", "display_name", "parent_folder_id", "total_item_count", "unread_item_count"};
     return_types = {
@@ -394,19 +394,19 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
 {
     auto bind_data = make_uniq<MessagesBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
-    bind_data->user_id     = GetNamedStr(input, "user_id");
+    bind_data->user        = GetNamedStr(input, "user");
     bind_data->folder      = GetNamedStr(input, "folder");
 
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphOutlookClient client(auth_info.auth_params);
 
     if (bind_data->folder.empty()) {
-        bind_data->json_response = client.GetMessages(bind_data->user_id);
+        bind_data->json_response = client.GetMessages(bind_data->user);
     } else if (IsWellKnownFolder(bind_data->folder)) {
-        bind_data->json_response = client.GetFolderMessages(bind_data->user_id, bind_data->folder);
+        bind_data->json_response = client.GetFolderMessages(bind_data->user, bind_data->folder);
     } else {
         // Resolve display name → folder id
-        const std::string folders_json = client.GetMailFolders(bind_data->user_id);
+        const std::string folders_json = client.GetMailFolders(bind_data->user);
         yyjson_doc *doc = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
         if (!doc) {
             throw IOException("graph_messages: failed to parse mail folders response");
@@ -434,7 +434,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
             throw InvalidInputException(
                 "graph_messages: no mail folder found with name '" + bind_data->folder + "'");
         }
-        bind_data->json_response = client.GetFolderMessages(bind_data->user_id, folder_id);
+        bind_data->json_response = client.GetFolderMessages(bind_data->user, folder_id);
     }
 
     names        = {"id", "subject", "body_preview", "from_name", "from_email",
@@ -501,13 +501,13 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
 
     {
         TableFunction fn("graph_calendars", {}, CalendarsScan, CalendarsBind);
-        fn.named_parameters["user_id"] = LogicalType::VARCHAR;
+        fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
         desc.description = "List Outlook calendars for a user via Microsoft Graph.";
         desc.examples    = {
-            "SELECT * FROM graph_calendars(user_id := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_calendars(user := 'user-id', secret := 'ms_graph')",
             "SELECT * FROM graph_calendars(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
@@ -516,7 +516,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_calendar_events", {}, CalendarEventsScan, CalendarEventsBind);
-        fn.named_parameters["user_id"]     = LogicalType::VARCHAR;
+        fn.named_parameters["user"]     = LogicalType::VARCHAR;
         fn.named_parameters["calendar_id"] = LogicalType::VARCHAR;
         fn.named_parameters["start_date"]  = LogicalType::VARCHAR;
         fn.named_parameters["end_date"]    = LogicalType::VARCHAR;
@@ -526,8 +526,8 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         desc.description = "List calendar events for a user via Microsoft Graph. "
                            "Provide start_date + end_date to use the calendarView endpoint for date-bounded queries.";
         desc.examples    = {
-            "SELECT * FROM graph_calendar_events(user_id := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_calendar_events(user_id := 'user-id', start_date := '2024-01-01', end_date := '2024-12-31', secret := 'ms_graph')",
+            "SELECT * FROM graph_calendar_events(user := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_calendar_events(user := 'user-id', start_date := '2024-01-01', end_date := '2024-12-31', secret := 'ms_graph')",
             "SELECT * FROM graph_calendar_events(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
@@ -536,13 +536,13 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_contacts", {}, ContactsScan, ContactsBind);
-        fn.named_parameters["user_id"] = LogicalType::VARCHAR;
+        fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
         desc.description = "List Outlook contacts for a user via Microsoft Graph.";
         desc.examples    = {
-            "SELECT * FROM graph_contacts(user_id := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_contacts(user := 'user-id', secret := 'ms_graph')",
             "SELECT * FROM graph_contacts(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
@@ -551,13 +551,13 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_mail_folders", {}, MailFoldersScan, MailFoldersBind);
-        fn.named_parameters["user_id"] = LogicalType::VARCHAR;
+        fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
         desc.description = "List Outlook mail folders for a user via Microsoft Graph.";
         desc.examples    = {
-            "SELECT * FROM graph_mail_folders(user_id := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_mail_folders(user := 'user-id', secret := 'ms_graph')",
             "SELECT * FROM graph_mail_folders(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
@@ -566,7 +566,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_messages", {}, MessagesScan, MessagesBind);
-        fn.named_parameters["user_id"] = LogicalType::VARCHAR;
+        fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["folder"]  = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
@@ -575,8 +575,8 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
                            "Pass folder := 'inbox' / 'sentitems' / 'drafts' / 'deleteditems' "
                            "or any display name from graph_mail_folders().";
         desc.examples    = {
-            "SELECT * FROM graph_messages(user_id := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_messages(user_id := 'user-id', folder := 'inbox', secret := 'ms_graph')",
+            "SELECT * FROM graph_messages(user := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_messages(user := 'user-id', folder := 'inbox', secret := 'ms_graph')",
             "SELECT * FROM graph_messages(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
