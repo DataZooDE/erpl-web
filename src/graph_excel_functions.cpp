@@ -3,6 +3,7 @@
 #include "graph_excel_client.hpp"
 #include "graph_sharepoint_client.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_json_scan.hpp"
 #include "graph_output_utils.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
@@ -20,52 +21,25 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-// Base for scan-over-JSON-array bind data: parses once, stores iterator across scan calls.
-// yyjson_arr_get(outer, idx) is O(idx) on non-flat arrays; storing an iterator gives O(1)/step.
-struct JsonArrayScanBindData : public TableFunctionData {
-    std::string json_response;     // cleared after first parse
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~JsonArrayScanBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    // Parse json_response, locate the "value" array, initialise item_iter.
-    // Returns false if the array is absent or empty (caller should mark done).
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr  = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
-};
-
-struct ListFilesBindData : public JsonArrayScanBindData {
+struct ListFilesBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string folder_path;
     std::string drive_id;
 };
 
-struct ExcelTablesBindData : public JsonArrayScanBindData {
+struct ExcelTablesBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelWorksheetsBindData : public JsonArrayScanBindData {
+struct ExcelWorksheetsBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelTableDataBindData : public JsonArrayScanBindData {
+struct ExcelTableDataBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string file_path;
     std::string table_name;

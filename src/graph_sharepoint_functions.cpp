@@ -3,6 +3,7 @@
 #include "graph_sharepoint_client.hpp"
 #include "graph_sharepoint_type_mapper.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_json_scan.hpp"
 #include "graph_output_utils.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
@@ -21,133 +22,33 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-struct ShowSitesBindData : public TableFunctionData {
+struct ShowSitesBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string search_query;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~ShowSitesBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
-struct ShowListsBindData : public TableFunctionData {
+struct ShowListsBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string site_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~ShowListsBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
-struct ShowDrivesBindData : public TableFunctionData {
+struct ShowDrivesBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string site_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~ShowDrivesBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
-struct DescribeListBindData : public TableFunctionData {
+struct DescribeListBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~DescribeListBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
-struct ListItemsBindData : public TableFunctionData {
+struct ListItemsBindData : public GraphJsonArrayScanBindData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
-    std::string json_response;
     std::vector<std::string> column_names;
     std::vector<LogicalType> column_types;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~ListItemsBindData() override {
-        if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) { return false; }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) { return false; }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
 // ============================================================================
