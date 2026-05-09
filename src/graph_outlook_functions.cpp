@@ -384,6 +384,7 @@ static bool IsWellKnownFolder(const std::string &name) {
 
 struct MessagesBindData : public OutlookBindData {
     std::string folder;
+    std::unordered_map<std::string, std::string> folder_name_by_id;
 };
 
 unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
@@ -437,9 +438,33 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
         bind_data->json_response = client.GetFolderMessages(bind_data->user, folder_id);
     }
 
+    // Build folder_id → display_name map for the folder_name output column.
+    // Re-uses the folders response already fetched in the custom-name branch when available;
+    // otherwise makes one extra call. The overhead is one API round-trip per query.
+    {
+        const std::string folders_json = client.GetMailFolders(bind_data->user);
+        yyjson_doc *fdoc = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
+        if (fdoc) {
+            yyjson_val *froot = yyjson_doc_get_root(fdoc);
+            yyjson_val *farr  = yyjson_obj_get(froot, "value");
+            if (farr && yyjson_is_arr(farr)) {
+                size_t fidx, fmax;
+                yyjson_val *fitem;
+                yyjson_arr_foreach(farr, fidx, fmax, fitem) {
+                    yyjson_val *id_v   = yyjson_obj_get(fitem, "id");
+                    yyjson_val *name_v = yyjson_obj_get(fitem, "displayName");
+                    if (id_v && yyjson_is_str(id_v) && name_v && yyjson_is_str(name_v)) {
+                        bind_data->folder_name_by_id[yyjson_get_str(id_v)] = yyjson_get_str(name_v);
+                    }
+                }
+            }
+            yyjson_doc_free(fdoc);
+        }
+    }
+
     names        = {"id", "subject", "body_preview", "from_name", "from_email",
                     "received_at", "has_attachments", "is_read", "importance", "web_link",
-                    "folder_id"};
+                    "folder_id", "folder_name"};
     return_types = {
         LogicalType::VARCHAR,   // id
         LogicalType::VARCHAR,   // subject
@@ -452,6 +477,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
         LogicalType::VARCHAR,   // importance
         LogicalType::VARCHAR,   // webLink
         LogicalType::VARCHAR,   // parentFolderId
+        LogicalType::VARCHAR,   // folder display name
     };
     return std::move(bind_data);
 }
@@ -486,6 +512,19 @@ void GraphOutlookFunctions::MessagesScan(
         SetStrCell(output.data[8], row, yyjson_obj_get(item, "importance"));
         SetStrCell(output.data[9], row, yyjson_obj_get(item, "webLink"));
         SetStrCell(output.data[10], row, yyjson_obj_get(item, "parentFolderId"));
+
+        yyjson_val *pid_val = yyjson_obj_get(item, "parentFolderId");
+        if (pid_val && yyjson_is_str(pid_val)) {
+            const std::string pid = yyjson_get_str(pid_val);
+            auto it = bd.folder_name_by_id.find(pid);
+            if (it != bd.folder_name_by_id.end()) {
+                output.data[11].SetValue(row, Value(it->second));
+            } else {
+                output.data[11].SetValue(row, Value(nullptr));
+            }
+        } else {
+            output.data[11].SetValue(row, Value(nullptr));
+        }
         row++;
     }
 
