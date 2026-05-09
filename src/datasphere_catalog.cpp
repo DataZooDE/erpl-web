@@ -68,6 +68,190 @@ std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Co
     return access_token;
 }
 
+namespace {
+
+class JsonDocHandle {
+public:
+    explicit JsonDocHandle(const std::string &json_content)
+        : doc(duckdb_yyjson::yyjson_read(json_content.c_str(), json_content.length(), 0)) {
+    }
+
+    ~JsonDocHandle() {
+        if (doc) {
+            duckdb_yyjson::yyjson_doc_free(doc);
+        }
+    }
+
+    JsonDocHandle(const JsonDocHandle &) = delete;
+    JsonDocHandle &operator=(const JsonDocHandle &) = delete;
+
+    explicit operator bool() const {
+        return doc != nullptr;
+    }
+
+    duckdb_yyjson::yyjson_val *Root() const {
+        return doc ? duckdb_yyjson::yyjson_doc_get_root(doc) : nullptr;
+    }
+
+private:
+    duckdb_yyjson::yyjson_doc *doc;
+};
+
+struct AnalyticalSchemaField {
+    std::string name;
+    std::string type;
+    std::string edm_type;
+};
+
+struct RelationalSchemaColumn {
+    std::string name;
+    std::string technical_name;
+    std::string type;
+    std::string length;
+};
+
+duckdb::LogicalType VarcharType() {
+    return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+}
+
+duckdb::LogicalType AnalyticalSchemaFieldType() {
+    return duckdb::LogicalType::STRUCT({
+        {"name", VarcharType()},
+        {"type", VarcharType()},
+        {"edm_type", VarcharType()}
+    });
+}
+
+duckdb::LogicalType RelationalSchemaColumnType() {
+    return duckdb::LogicalType::STRUCT({
+        {"name", VarcharType()},
+        {"technical_name", VarcharType()},
+        {"type", VarcharType()},
+        {"length", VarcharType()}
+    });
+}
+
+duckdb::LogicalType AnalyticalSchemaType() {
+    return duckdb::LogicalType::STRUCT({
+        {"measures", duckdb::LogicalType::LIST(AnalyticalSchemaFieldType())},
+        {"dimensions", duckdb::LogicalType::LIST(AnalyticalSchemaFieldType())},
+        {"variables", duckdb::LogicalType::LIST(AnalyticalSchemaFieldType())}
+    });
+}
+
+duckdb::Value MakeAnalyticalSchemaFieldValue(const AnalyticalSchemaField &field) {
+    duckdb::child_list_t<duckdb::Value> children;
+    children.emplace_back("name", duckdb::Value(field.name));
+    children.emplace_back("type", duckdb::Value(field.type));
+    children.emplace_back("edm_type", duckdb::Value(field.edm_type));
+    return duckdb::Value::STRUCT(children);
+}
+
+duckdb::Value MakeRelationalSchemaColumnValue(const RelationalSchemaColumn &column) {
+    duckdb::child_list_t<duckdb::Value> children;
+    children.emplace_back("name", duckdb::Value(column.name));
+    children.emplace_back("technical_name", duckdb::Value(column.technical_name));
+    children.emplace_back("type", duckdb::Value(column.type));
+    children.emplace_back("length", duckdb::Value(column.length));
+    return duckdb::Value::STRUCT(children);
+}
+
+duckdb::Value MakeAnalyticalSchemaValue(const duckdb::vector<duckdb::Value> &measures,
+                                        const duckdb::vector<duckdb::Value> &dimensions,
+                                        const duckdb::vector<duckdb::Value> &variables) {
+    duckdb::child_list_t<duckdb::Value> children;
+    children.emplace_back("measures", duckdb::Value::LIST(AnalyticalSchemaFieldType(), measures));
+    children.emplace_back("dimensions", duckdb::Value::LIST(AnalyticalSchemaFieldType(), dimensions));
+    children.emplace_back("variables", duckdb::Value::LIST(AnalyticalSchemaFieldType(), variables));
+    return duckdb::Value::STRUCT(children);
+}
+
+duckdb::Value MakeAnalyticalSchemaValue(const std::vector<AnalyticalSchemaField> &measures,
+                                        const std::vector<AnalyticalSchemaField> &dimensions,
+                                        const std::vector<AnalyticalSchemaField> &variables) {
+    duckdb::vector<duckdb::Value> measure_values;
+    duckdb::vector<duckdb::Value> dimension_values;
+    duckdb::vector<duckdb::Value> variable_values;
+    measure_values.reserve(measures.size());
+    dimension_values.reserve(dimensions.size());
+    variable_values.reserve(variables.size());
+
+    for (const auto &measure : measures) {
+        measure_values.push_back(MakeAnalyticalSchemaFieldValue(measure));
+    }
+    for (const auto &dimension : dimensions) {
+        dimension_values.push_back(MakeAnalyticalSchemaFieldValue(dimension));
+    }
+    for (const auto &variable : variables) {
+        variable_values.push_back(MakeAnalyticalSchemaFieldValue(variable));
+    }
+
+    return MakeAnalyticalSchemaValue(measure_values, dimension_values, variable_values);
+}
+
+duckdb::Value MakeEmptyAnalyticalSchemaValue() {
+    duckdb::vector<duckdb::Value> empty;
+    return MakeAnalyticalSchemaValue(empty, empty, empty);
+}
+
+duckdb::Value MakeRelationalSchemaValue(const duckdb::vector<duckdb::Value> &columns) {
+    duckdb::child_list_t<duckdb::Value> children;
+    children.emplace_back("columns", duckdb::Value::LIST(RelationalSchemaColumnType(), columns));
+    return duckdb::Value::STRUCT(children);
+}
+
+duckdb::Value MakeEmptyRelationalSchemaValue() {
+    return MakeRelationalSchemaValue(duckdb::vector<duckdb::Value> {});
+}
+
+std::string JsonStringOrDefault(duckdb_yyjson::yyjson_val *object, const char *key, const std::string &fallback) {
+    auto value = duckdb_yyjson::yyjson_obj_get(object, key);
+    if (value && duckdb_yyjson::yyjson_is_str(value)) {
+        return duckdb_yyjson::yyjson_get_str(value);
+    }
+    return fallback;
+}
+
+std::string JsonIntStringOrDefault(duckdb_yyjson::yyjson_val *object, const char *key, const std::string &fallback) {
+    auto value = duckdb_yyjson::yyjson_obj_get(object, key);
+    if (value && duckdb_yyjson::yyjson_is_int(value)) {
+        return std::to_string(duckdb_yyjson::yyjson_get_int(value));
+    }
+    return fallback;
+}
+
+duckdb_yyjson::yyjson_val *FirstObjectMemberValue(duckdb_yyjson::yyjson_val *object) {
+    if (!object || !duckdb_yyjson::yyjson_is_obj(object)) {
+        return nullptr;
+    }
+
+    duckdb_yyjson::yyjson_obj_iter iter;
+    duckdb_yyjson::yyjson_obj_iter_init(object, &iter);
+    auto *key = duckdb_yyjson::yyjson_obj_iter_next(&iter);
+    return key ? duckdb_yyjson::yyjson_obj_iter_get_val(key) : nullptr;
+}
+
+duckdb_yyjson::yyjson_val *FirstDefinitionElements(duckdb_yyjson::yyjson_val *root) {
+    auto *definitions = duckdb_yyjson::yyjson_obj_get(root, "definitions");
+    auto *definition = FirstObjectMemberValue(definitions);
+    if (!definition || !duckdb_yyjson::yyjson_is_obj(definition)) {
+        return nullptr;
+    }
+
+    auto *elements = duckdb_yyjson::yyjson_obj_get(definition, "elements");
+    return elements && duckdb_yyjson::yyjson_is_obj(elements) ? elements : nullptr;
+}
+
+bool LooksLikeDwaasMeasure(const std::string &field_name) {
+    return field_name.find("count") != std::string::npos ||
+           field_name.find("Count") != std::string::npos ||
+           field_name.find("revenue") != std::string::npos ||
+           field_name.find("amount") != std::string::npos ||
+           field_name.find("sum") != std::string::npos;
+}
+
+} // namespace
+
 // DatasphereShowBindData implementation - now using standard OData pipeline
 DatasphereShowBindData::DatasphereShowBindData(std::shared_ptr<ODataEntitySetClient> odata_client)
     : ODataReadBindData(odata_client)
@@ -329,9 +513,9 @@ duckdb::Value DatasphereDescribeBindData::ParseAnalyticalMetadata(const std::str
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Parsing analytical metadata XML content");
         
         // Parse XML to extract actual property names and types
-        std::vector<std::tuple<std::string, std::string, std::string>> measure_info;
-        std::vector<std::tuple<std::string, std::string, std::string>> dimension_info;
-        std::vector<std::tuple<std::string, std::string, std::string>> variable_info;
+        std::vector<AnalyticalSchemaField> measure_info;
+        std::vector<AnalyticalSchemaField> dimension_info;
+        std::vector<AnalyticalSchemaField> variable_info;
         
         // Extract measures - look for Property elements with various measure indicators
         size_t pos = 0;
@@ -421,63 +605,11 @@ duckdb::Value DatasphereDescribeBindData::ParseAnalyticalMetadata(const std::str
                         ", Dimensions: " + std::to_string(dimension_info.size()) + 
                         ", Variables: " + std::to_string(variable_info.size()));
         
-        // Create a DuckDB struct that can be unnested
-        // Structure: {measures: [list], dimensions: [list], variables: [list]}
-        std::map<std::string, duckdb::Value> schema_struct;
-        
-        // Convert to DuckDB list values with nested structs
-        duckdb::vector<duckdb::Value> measures_list;
-        for (const auto& measure : measure_info) {
-            // Create struct for each measure with name, type, and edm_type
-            duckdb::child_list_t<duckdb::Value> measure_struct;
-            measure_struct.emplace_back("name", duckdb::Value(std::get<0>(measure)));
-            measure_struct.emplace_back("type", duckdb::Value(std::get<1>(measure)));
-            measure_struct.emplace_back("edm_type", duckdb::Value(std::get<2>(measure)));
-            measures_list.push_back(duckdb::Value::STRUCT(measure_struct));
-        }
-        
-        duckdb::vector<duckdb::Value> dimensions_list;
-        for (const auto& dimension : dimension_info) {
-            // Create struct for each dimension with name, type, and edm_type
-            duckdb::child_list_t<duckdb::Value> dimension_struct;
-            dimension_struct.emplace_back("name", duckdb::Value(std::get<0>(dimension)));
-            dimension_struct.emplace_back("type", duckdb::Value(std::get<1>(dimension)));
-            dimension_struct.emplace_back("edm_type", duckdb::Value(std::get<2>(dimension)));
-            dimensions_list.push_back(duckdb::Value::STRUCT(dimension_struct));
-        }
-        
-        duckdb::vector<duckdb::Value> variables_list;
-        for (const auto& variable : variable_info) {
-            // Create struct for each variable with name, type, and edm_type
-            duckdb::child_list_t<duckdb::Value> variable_struct;
-            variable_struct.emplace_back("name", duckdb::Value(std::get<0>(variable)));
-            variable_struct.emplace_back("type", duckdb::Value(std::get<1>(variable)));
-            variable_struct.emplace_back("edm_type", duckdb::Value(std::get<2>(variable)));
-            variables_list.push_back(duckdb::Value::STRUCT(variable_struct));
-        }
-        
-        schema_struct["measures"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), measures_list);
-        schema_struct["dimensions"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), dimensions_list);
-        schema_struct["variables"] = duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), variables_list);
-        
-        // Convert map to child_list_t format for STRUCT
-        duckdb::child_list_t<duckdb::Value> struct_children;
-        for (const auto& pair : schema_struct) {
-            struct_children.emplace_back(pair.first, pair.second);
-        }
-        
-        return duckdb::Value::STRUCT(struct_children);
+        return MakeAnalyticalSchemaValue(measure_info, dimension_info, variable_info);
         
     } catch (const std::exception& e) {
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Failed to parse analytical metadata: " + std::string(e.what()));
-        
-        // Return empty struct on error
-        duckdb::child_list_t<duckdb::Value> error_children;
-        error_children.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-        error_children.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-        error_children.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-        
-        return duckdb::Value::STRUCT(error_children);
+        return MakeEmptyAnalyticalSchemaValue();
     }
 }
 
@@ -491,109 +623,50 @@ std::optional<duckdb::Value> DatasphereDescribeBindData::ParseDwaasAnalyticalSch
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Entering ParseDwaasAnalyticalSchema with content length: " + std::to_string(json_content.length()));
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Parsing DWAAS analytical schema from JSON content");
         
-        // Parse the JSON content using yyjson
-        auto doc = duckdb_yyjson::yyjson_read(json_content.c_str(), json_content.length(), 0);
+        JsonDocHandle doc(json_content);
         if (!doc) {
             ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to parse JSON content");
             return std::nullopt;
         }
         
-        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto *root = doc.Root();
         if (!root) {
-            duckdb_yyjson::yyjson_doc_free(doc);
             return std::nullopt;
         }
         
-        // Extract measures, dimensions, and variables from the JSON structure
-        std::vector<duckdb::Value> measures;
-        std::vector<duckdb::Value> dimensions;
-        std::vector<duckdb::Value> variables;
+        duckdb::vector<duckdb::Value> measures;
+        duckdb::vector<duckdb::Value> dimensions;
+        duckdb::vector<duckdb::Value> variables;
         
-        // Look for the schema information in the JSON structure
-        // The DWAAS API now returns a definition structure
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Looking for 'definitions' in JSON root");
-        auto definitions_obj = duckdb_yyjson::yyjson_obj_get(root, "definitions");
-        if (definitions_obj && duckdb_yyjson::yyjson_is_obj(definitions_obj)) {
-            ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'definitions' object, looking for model");
-            // Get the first (and usually only) model definition
-            duckdb_yyjson::yyjson_obj_iter iter;
-            duckdb_yyjson::yyjson_obj_iter_init(definitions_obj, &iter);
-            duckdb_yyjson::yyjson_val *model_key = duckdb_yyjson::yyjson_obj_iter_next(&iter);
-            if (model_key) {
-                auto model_obj = duckdb_yyjson::yyjson_obj_iter_get_val(model_key);
-                if (model_obj && duckdb_yyjson::yyjson_is_obj(model_obj)) {
-                    // Get the elements (fields) from the model
-                    ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found model object, looking for 'elements'");
-                    auto elements_obj = duckdb_yyjson::yyjson_obj_get(model_obj, "elements");
-                    if (elements_obj && duckdb_yyjson::yyjson_is_obj(elements_obj)) {
-                        ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'elements' object, starting to iterate through fields");
-                        // Iterate through all elements to categorize them as measures, dimensions, or variables
-                        duckdb_yyjson::yyjson_obj_iter elements_iter;
-                        duckdb_yyjson::yyjson_obj_iter_init(elements_obj, &elements_iter);
-                        duckdb_yyjson::yyjson_val *field_key, *field_val;
-                        
-                        while ((field_key = duckdb_yyjson::yyjson_obj_iter_next(&elements_iter))) {
-                            field_val = duckdb_yyjson::yyjson_obj_iter_get_val(field_key);
-                            if (duckdb_yyjson::yyjson_is_obj(field_val)) {
-                                std::string field_name = duckdb_yyjson::yyjson_get_str(field_key);
-                                std::string field_text = field_name; // Default to key name
-                                std::string field_type = "Unknown";
-                                std::string edm_type = "Edm.String"; // Default EDM type
-                                
-                                // Try to extract the text label
-                                auto text_val = duckdb_yyjson::yyjson_obj_get(field_val, "@EndUserText.label");
-                                if (text_val && duckdb_yyjson::yyjson_is_str(text_val)) {
-                                    field_text = duckdb_yyjson::yyjson_get_str(text_val);
-                                }
-                                
-                                // Try to determine if this is a measure or dimension based on properties
-                                // For now, we'll categorize based on field names and patterns
-                                // In a real implementation, you might look for specific properties
-                                
-                                // Check if it looks like a measure (numeric fields, count fields, etc.)
-                                bool is_measure = false;
-                                if (field_name.find("count") != std::string::npos || 
-                                    field_name.find("Count") != std::string::npos ||
-                                    field_name.find("revenue") != std::string::npos ||
-                                    field_name.find("amount") != std::string::npos ||
-                                    field_name.find("sum") != std::string::npos) {
-                                    is_measure = true;
-                                }
-                                
-                                if (is_measure) {
-                                    // Create measure struct
-                                    duckdb::child_list_t<duckdb::Value> measure_struct;
-                                    measure_struct.emplace_back("name", duckdb::Value(field_text));
-                                    measure_struct.emplace_back("type", duckdb::Value("FactSourceMeasure"));
-                                    measure_struct.emplace_back("edm_type", duckdb::Value(edm_type));
-                                    measures.push_back(duckdb::Value::STRUCT(measure_struct));
-                                } else {
-                                    // Create dimension struct
-                                    duckdb::child_list_t<duckdb::Value> dim_struct;
-                                    dim_struct.emplace_back("name", duckdb::Value(field_text));
-                                    dim_struct.emplace_back("type", duckdb::Value("FactSourceAttribute"));
-                                    dim_struct.emplace_back("edm_type", duckdb::Value(edm_type));
-                                    dimensions.push_back(duckdb::Value::STRUCT(dim_struct));
-                                }
-                            }
-                        }
-                    }
+        auto *elements_obj = FirstDefinitionElements(root);
+        if (elements_obj) {
+            ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'elements' object, starting to iterate through fields");
+            duckdb_yyjson::yyjson_obj_iter elements_iter;
+            duckdb_yyjson::yyjson_obj_iter_init(elements_obj, &elements_iter);
+            duckdb_yyjson::yyjson_val *field_key;
+
+            while ((field_key = duckdb_yyjson::yyjson_obj_iter_next(&elements_iter))) {
+                auto *field_val = duckdb_yyjson::yyjson_obj_iter_get_val(field_key);
+                if (!duckdb_yyjson::yyjson_is_obj(field_val)) {
+                    continue;
+                }
+
+                std::string field_name = duckdb_yyjson::yyjson_get_str(field_key);
+                std::string field_text = JsonStringOrDefault(field_val, "@EndUserText.label", field_name);
+                std::string edm_type = "Edm.String";
+
+                if (LooksLikeDwaasMeasure(field_name)) {
+                    measures.push_back(MakeAnalyticalSchemaFieldValue({field_text, "FactSourceMeasure", edm_type}));
+                } else {
+                    dimensions.push_back(MakeAnalyticalSchemaFieldValue({field_text, "FactSourceAttribute", edm_type}));
                 }
             }
         }
         
-        // Clean up
-        duckdb_yyjson::yyjson_doc_free(doc);
-        
-        // Create the final analytical schema STRUCT
-        duckdb::child_list_t<duckdb::Value> schema_struct;
-        schema_struct.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(measures.begin(), measures.end())));
-        schema_struct.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(dimensions.begin(), dimensions.end())));
-        schema_struct.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(variables.begin(), variables.end())));
-        
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Successfully parsed analytical schema: " + std::to_string(measures.size()) + " measures, " + std::to_string(dimensions.size()) + " dimensions, " + std::to_string(variables.size()) + " variables");
         
-        return duckdb::Value::STRUCT(schema_struct);
+        return MakeAnalyticalSchemaValue(measures, dimensions, variables);
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to parse DWAAS analytical schema: " + std::string(e.what()));
@@ -606,95 +679,47 @@ std::optional<duckdb::Value> DatasphereDescribeBindData::ParseDwaasRelationalSch
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Entering ParseDwaasRelationalSchema with content length: " + std::to_string(json_content.length()));
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Parsing DWAAS relational schema from JSON content");
         
-        // Parse the JSON content using yyjson
-        auto doc = duckdb_yyjson::yyjson_read(json_content.c_str(), json_content.length(), 0);
+        JsonDocHandle doc(json_content);
         if (!doc) {
             ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to parse JSON content");
             return std::nullopt;
         }
         
-        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto *root = doc.Root();
         if (!root) {
-            duckdb_yyjson::yyjson_doc_free(doc);
             return std::nullopt;
         }
         
-        // Extract columns from the JSON structure
-        std::vector<duckdb::Value> columns;
+        duckdb::vector<duckdb::Value> columns;
         
-        // Look for the schema information in the JSON structure
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Looking for 'definitions' in JSON root");
-        auto definitions_obj = duckdb_yyjson::yyjson_obj_get(root, "definitions");
-        if (definitions_obj && duckdb_yyjson::yyjson_is_obj(definitions_obj)) {
-            ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'definitions' object, looking for table");
-            // Get the first (and usually only) table definition
-            duckdb_yyjson::yyjson_obj_iter iter;
-            duckdb_yyjson::yyjson_obj_iter_init(definitions_obj, &iter);
-            duckdb_yyjson::yyjson_val *table_key = duckdb_yyjson::yyjson_obj_iter_next(&iter);
-            if (table_key) {
-                auto table_obj = duckdb_yyjson::yyjson_obj_iter_get_val(table_key);
-                if (table_obj && duckdb_yyjson::yyjson_is_obj(table_obj)) {
-                    // Get the elements (columns) from the table
-                    ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found table object, looking for 'elements'");
-                    auto elements_obj = duckdb_yyjson::yyjson_obj_get(table_obj, "elements");
-                    if (elements_obj && duckdb_yyjson::yyjson_is_obj(elements_obj)) {
-                        ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'elements' object, starting to iterate through columns");
-                        // Iterate through all elements to extract column information
-                        duckdb_yyjson::yyjson_obj_iter elements_iter;
-                        duckdb_yyjson::yyjson_obj_iter_init(elements_obj, &elements_iter);
-                        duckdb_yyjson::yyjson_val *column_key, *column_val;
-                        
-                        while ((column_key = duckdb_yyjson::yyjson_obj_iter_next(&elements_iter))) {
-                            column_val = duckdb_yyjson::yyjson_obj_iter_get_val(column_key);
-                            if (duckdb_yyjson::yyjson_is_obj(column_val)) {
-                                std::string column_name = duckdb_yyjson::yyjson_get_str(column_key);
-                                std::string column_label = column_name; // Default to key name
-                                std::string column_type = "Unknown";
-                                std::string column_length = "";
-                                
-                                // Try to extract the text label
-                                auto text_val = duckdb_yyjson::yyjson_obj_get(column_val, "@EndUserText.label");
-                                if (text_val && duckdb_yyjson::yyjson_is_str(text_val)) {
-                                    column_label = duckdb_yyjson::yyjson_get_str(text_val);
-                                }
-                                
-                                // Try to extract the column type
-                                auto type_val = duckdb_yyjson::yyjson_obj_get(column_val, "type");
-                                if (type_val && duckdb_yyjson::yyjson_is_str(type_val)) {
-                                    column_type = duckdb_yyjson::yyjson_get_str(type_val);
-                                }
-                                
-                                // Try to extract the column length if available
-                                auto length_val = duckdb_yyjson::yyjson_obj_get(column_val, "length");
-                                if (length_val && duckdb_yyjson::yyjson_is_int(length_val)) {
-                                    column_length = std::to_string(duckdb_yyjson::yyjson_get_int(length_val));
-                                }
-                                
-                                // Create column struct
-                                duckdb::child_list_t<duckdb::Value> column_struct;
-                                column_struct.emplace_back("name", duckdb::Value(column_label));
-                                column_struct.emplace_back("technical_name", duckdb::Value(column_name));
-                                column_struct.emplace_back("type", duckdb::Value(column_type));
-                                column_struct.emplace_back("length", duckdb::Value(column_length));
-                                
-                                columns.push_back(duckdb::Value::STRUCT(column_struct));
-                            }
-                        }
-                    }
+        auto *elements_obj = FirstDefinitionElements(root);
+        if (elements_obj) {
+            ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Found 'elements' object, starting to iterate through columns");
+            duckdb_yyjson::yyjson_obj_iter elements_iter;
+            duckdb_yyjson::yyjson_obj_iter_init(elements_obj, &elements_iter);
+            duckdb_yyjson::yyjson_val *column_key;
+
+            while ((column_key = duckdb_yyjson::yyjson_obj_iter_next(&elements_iter))) {
+                auto *column_val = duckdb_yyjson::yyjson_obj_iter_get_val(column_key);
+                if (!duckdb_yyjson::yyjson_is_obj(column_val)) {
+                    continue;
                 }
+
+                std::string column_name = duckdb_yyjson::yyjson_get_str(column_key);
+                RelationalSchemaColumn column {
+                    JsonStringOrDefault(column_val, "@EndUserText.label", column_name),
+                    column_name,
+                    JsonStringOrDefault(column_val, "type", "Unknown"),
+                    JsonIntStringOrDefault(column_val, "length", "")
+                };
+                columns.push_back(MakeRelationalSchemaColumnValue(column));
             }
         }
         
-        // Clean up
-        duckdb_yyjson::yyjson_doc_free(doc);
-        
-        // Create the final relational schema STRUCT
-        duckdb::child_list_t<duckdb::Value> schema_struct;
-        schema_struct.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"technical_name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"length", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>(columns.begin(), columns.end())));
-        
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Successfully parsed relational schema: " + std::to_string(columns.size()) + " columns");
         
-        return duckdb::Value::STRUCT(schema_struct);
+        return MakeRelationalSchemaValue(columns);
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to parse DWAAS relational schema: " + std::string(e.what()));
@@ -778,19 +803,8 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 // Extended fields (8-14) - initialize with proper types
                 asset_row.push_back(duckdb::Value("")); // odataContext (8)
                 
-                // Create empty schema structures for relational and analytical schemas
-                // Relational schema: columns with name, technical_name, type, length
-                duckdb::child_list_t<duckdb::Value> empty_relational_schema;
-                empty_relational_schema.emplace_back("columns", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"technical_name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"length", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                
-                // Analytical schema: measures, dimensions, variables
-                duckdb::child_list_t<duckdb::Value> empty_analytical_schema;
-                empty_analytical_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                empty_analytical_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                empty_analytical_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                
-                asset_row.push_back(duckdb::Value::STRUCT(empty_relational_schema)); // relationalSchema (9)
-                asset_row.push_back(duckdb::Value::STRUCT(empty_analytical_schema)); // analyticalSchema (10)
+                asset_row.push_back(MakeEmptyRelationalSchemaValue()); // relationalSchema (9)
+                asset_row.push_back(MakeEmptyAnalyticalSchemaValue()); // analyticalSchema (10)
                 
                 asset_row.push_back(duckdb::Value("false")); // has_relational_access (11)
                 asset_row.push_back(duckdb::Value("false")); // has_analytical_access (12)
@@ -900,12 +914,7 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                                 // Fill extended fields with fallback values
                                 for (size_t i = 8; i < 15; ++i) {
                                     if (i == 10) { // analyticalSchema field - needs to be a STRUCT
-                                        // Create empty analytical schema STRUCT
-                                        duckdb::child_list_t<duckdb::Value> empty_schema;
-                                        empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                                        empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                                        empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                                        catalog_data[0][i] = duckdb::Value::STRUCT(empty_schema);
+                                        catalog_data[0][i] = MakeEmptyAnalyticalSchemaValue();
                                     } else {
                                         catalog_data[0][i] = duckdb::Value("Not available");
                                     }
@@ -962,12 +971,7 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                     // Fill extended fields with fallback values
                     for (size_t i = 8; i < 15; ++i) {
                         if (i == 10) { // analyticalSchema field - needs to be a STRUCT
-                            // Create empty analytical schema STRUCT
-                            duckdb::child_list_t<duckdb::Value> empty_schema;
-                            empty_schema.emplace_back("measures", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                            empty_schema.emplace_back("dimensions", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                            empty_schema.emplace_back("variables", duckdb::Value::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}), duckdb::vector<duckdb::Value>{}));
-                            resource_data[0][i] = duckdb::Value::STRUCT(empty_schema);
+                            resource_data[0][i] = MakeEmptyAnalyticalSchemaValue();
                         } else {
                             resource_data[0][i] = duckdb::Value("Not available");
                         }
@@ -1010,9 +1014,7 @@ std::vector<duckdb::LogicalType> erpl_web::DatasphereDescribeBindData::GetColumn
                 duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
                 duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
                 duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
-                duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
-                                            {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
-                                            {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))}}),
+                AnalyticalSchemaType(),
                 duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
                 duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
     }
@@ -1088,9 +1090,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
                     duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
                     duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
                     duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
-                    duckdb::LogicalType::STRUCT({{"measures", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
-                                                {"dimensions", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))},
-                                                {"variables", duckdb::LogicalType::LIST(duckdb::LogicalType::STRUCT({{"name", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, {"edm_type", duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}}))}}),
+                    AnalyticalSchemaType(),
                     duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
                     duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "space_name", "label", "asset_relational_metadata_url", "asset_relational_data_url",

@@ -3,9 +3,33 @@
 #include "duckdb.hpp"
 #include "datasphere_catalog.hpp"
 #include "datasphere_read.hpp"
+#include <stdexcept>
 
 using namespace erpl_web;
 using namespace std;
+
+namespace {
+
+const duckdb::Value &StructField(const duckdb::Value &value, const std::string &field_name) {
+    const auto &children = duckdb::StructValue::GetChildren(value);
+    const auto &type = value.type();
+    for (duckdb::idx_t index = 0; index < children.size(); index++) {
+        if (duckdb::StructType::GetChildName(type, index) == field_name) {
+            return children[index];
+        }
+    }
+    throw std::runtime_error("Missing struct field: " + field_name);
+}
+
+const duckdb::Value &ListItem(const duckdb::Value &value, duckdb::idx_t index) {
+    const auto &children = duckdb::ListValue::GetChildren(value);
+    if (index >= children.size()) {
+        throw std::runtime_error("List index out of bounds");
+    }
+    return children[index];
+}
+
+} // namespace
 
 TEST_CASE("Test Datasphere Function Registration", "[datasphere]")
 {
@@ -91,3 +115,95 @@ TEST_CASE("Test Datasphere Auth Params", "[datasphere]")
     REQUIRE(auth_params.NeedsRefresh() == true);
 }
 
+TEST_CASE("Datasphere DWAAS analytical schema parser builds typed schema values", "[datasphere][parser]")
+{
+    DatasphereDescribeBindData bind_data(nullptr, "asset", "SALES_MODEL");
+    const std::string json = R"json(
+        {
+            "definitions": {
+                "SalesModel": {
+                    "elements": {
+                        "net_revenue": {
+                            "@EndUserText.label": "Net Revenue",
+                            "type": "cds.Decimal"
+                        },
+                        "ProductID": {
+                            "@EndUserText.label": "Product"
+                        },
+                        "row_count": {}
+                    }
+                }
+            }
+        }
+    )json";
+
+    auto schema = bind_data.ParseDwaasAnalyticalSchema(json);
+    REQUIRE(schema.has_value());
+
+    const auto &measures = duckdb::ListValue::GetChildren(StructField(*schema, "measures"));
+    const auto &dimensions = duckdb::ListValue::GetChildren(StructField(*schema, "dimensions"));
+    const auto &variables = duckdb::ListValue::GetChildren(StructField(*schema, "variables"));
+
+    REQUIRE(measures.size() == 2);
+    REQUIRE(dimensions.size() == 1);
+    REQUIRE(variables.empty());
+
+    REQUIRE(StructField(ListItem(StructField(*schema, "measures"), 0), "name").ToString() == "Net Revenue");
+    REQUIRE(StructField(ListItem(StructField(*schema, "measures"), 0), "type").ToString() == "FactSourceMeasure");
+    REQUIRE(StructField(ListItem(StructField(*schema, "measures"), 0), "edm_type").ToString() == "Edm.String");
+    REQUIRE(StructField(ListItem(StructField(*schema, "dimensions"), 0), "name").ToString() == "Product");
+    REQUIRE(StructField(ListItem(StructField(*schema, "dimensions"), 0), "type").ToString() == "FactSourceAttribute");
+}
+
+TEST_CASE("Datasphere DWAAS relational schema parser builds typed column values", "[datasphere][parser]")
+{
+    DatasphereDescribeBindData bind_data(nullptr, "asset", "SALES_TABLE");
+    const std::string json = R"json(
+        {
+            "definitions": {
+                "SalesTable": {
+                    "elements": {
+                        "CustomerID": {
+                            "@EndUserText.label": "Customer",
+                            "type": "cds.String",
+                            "length": 12
+                        },
+                        "Amount": {
+                            "type": "cds.Decimal",
+                            "length": 15
+                        },
+                        "ChangedAt": {}
+                    }
+                }
+            }
+        }
+    )json";
+
+    auto schema = bind_data.ParseDwaasRelationalSchema(json);
+    REQUIRE(schema.has_value());
+
+    const auto &columns = duckdb::ListValue::GetChildren(StructField(*schema, "columns"));
+    REQUIRE(columns.size() == 3);
+
+    REQUIRE(StructField(columns[0], "name").ToString() == "Customer");
+    REQUIRE(StructField(columns[0], "technical_name").ToString() == "CustomerID");
+    REQUIRE(StructField(columns[0], "type").ToString() == "cds.String");
+    REQUIRE(StructField(columns[0], "length").ToString() == "12");
+
+    REQUIRE(StructField(columns[1], "name").ToString() == "Amount");
+    REQUIRE(StructField(columns[1], "technical_name").ToString() == "Amount");
+    REQUIRE(StructField(columns[1], "type").ToString() == "cds.Decimal");
+    REQUIRE(StructField(columns[1], "length").ToString() == "15");
+
+    REQUIRE(StructField(columns[2], "name").ToString() == "ChangedAt");
+    REQUIRE(StructField(columns[2], "type").ToString() == "Unknown");
+    REQUIRE(StructField(columns[2], "length").ToString().empty());
+}
+
+TEST_CASE("Datasphere DWAAS schema parsers reject invalid JSON", "[datasphere][parser]")
+{
+    DatasphereDescribeBindData bind_data(nullptr, "asset", "BROKEN");
+
+    REQUIRE_FALSE(bind_data.ParseDwaasAnalyticalSchema("{").has_value());
+    REQUIRE_FALSE(bind_data.ParseDwaasRelationalSchema("{").has_value());
+}
