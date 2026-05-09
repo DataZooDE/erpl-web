@@ -188,11 +188,16 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
     }
 
     auto bind_data         = make_uniq<TeamChannelsBindData>();
-    bind_data->team_id     = input.inputs[0].GetValue<std::string>();
     bind_data->secret_name = GetNamedStr(input, "secret");
+    bind_data->user        = GetNamedStr(input, "user");
     auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
-    bind_data->first_url   = GraphTeamsUrlBuilder::BuildTeamChannelsUrl(bind_data->team_id);
+
+    // Accept team displayName or GUID
+    const std::string team_param = input.inputs[0].GetValue<std::string>();
+    GraphTeamsClient resolver(bind_data->auth_params);
+    bind_data->team_id   = resolver.ResolveTeamId(team_param, bind_data->user);
+    bind_data->first_url = GraphTeamsUrlBuilder::BuildTeamChannelsUrl(bind_data->team_id);
 
     names        = {"id", "display_name", "description", "membership_type", "created_datetime"};
     return_types = {
@@ -247,11 +252,16 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
     }
 
     auto bind_data         = make_uniq<TeamMembersBindData>();
-    bind_data->team_id     = input.inputs[0].GetValue<std::string>();
     bind_data->secret_name = GetNamedStr(input, "secret");
+    bind_data->user        = GetNamedStr(input, "user");
     auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
     bind_data->auth_params = auth_info.auth_params;
-    bind_data->first_url   = GraphTeamsUrlBuilder::BuildTeamMembersUrl(bind_data->team_id);
+
+    // Accept team displayName or GUID
+    const std::string team_param = input.inputs[0].GetValue<std::string>();
+    GraphTeamsClient resolver(bind_data->auth_params);
+    bind_data->team_id   = resolver.ResolveTeamId(team_param, bind_data->user);
+    bind_data->first_url = GraphTeamsUrlBuilder::BuildTeamMembersUrl(bind_data->team_id);
 
     names        = {"id", "user_id", "display_name", "email", "role"};
     return_types = {
@@ -313,13 +323,19 @@ unique_ptr<FunctionData> GraphTeamsFunctions::ChannelMessagesBind(
         throw BinderException("graph_channel_messages requires team_id and channel_id parameters");
     }
 
-    auto bind_data          = make_uniq<ChannelMessagesBindData>();
-    bind_data->team_id      = input.inputs[0].GetValue<std::string>();
-    bind_data->channel_id   = input.inputs[1].GetValue<std::string>();
-    bind_data->secret_name  = GetNamedStr(input, "secret");
-    auto auth_info          = ResolveGraphAuth(context, bind_data->secret_name);
-    bind_data->auth_params  = auth_info.auth_params;
-    bind_data->first_url    = GraphTeamsUrlBuilder::BuildChannelMessagesUrl(
+    auto bind_data         = make_uniq<ChannelMessagesBindData>();
+    bind_data->secret_name = GetNamedStr(input, "secret");
+    bind_data->user        = GetNamedStr(input, "user");
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
+
+    // Accept team displayName or GUID, then channel displayName or ID
+    const std::string team_param    = input.inputs[0].GetValue<std::string>();
+    const std::string channel_param = input.inputs[1].GetValue<std::string>();
+    GraphTeamsClient resolver(bind_data->auth_params);
+    bind_data->team_id    = resolver.ResolveTeamId(team_param, bind_data->user);
+    bind_data->channel_id = resolver.ResolveChannelId(bind_data->team_id, channel_param);
+    bind_data->first_url  = GraphTeamsUrlBuilder::BuildChannelMessagesUrl(
         bind_data->team_id, bind_data->channel_id);
 
     names        = {"id", "created_datetime", "from_name", "body_content", "importance", "message_type"};
@@ -394,12 +410,17 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
         team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        team_channels_func.named_parameters["user"]   = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(team_channels_func);
         FunctionDescription desc;
-        desc.description = "List all channels in a Microsoft Teams team.";
-        desc.parameter_names = {"team_id"};
+        desc.description = "List all channels in a Microsoft Teams team. "
+                           "The first argument accepts a team GUID or a displayName (resolved via /me/joinedTeams).";
+        desc.parameter_names = {"team_id_or_name"};
         desc.parameter_types = {LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_team_channels('team-id-here', secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_team_channels('Engineering', secret := 'ms_graph')",
+            "SELECT * FROM graph_team_channels('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -407,12 +428,17 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
         team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        team_members_func.named_parameters["user"]   = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(team_members_func);
         FunctionDescription desc;
-        desc.description = "List all members of a Microsoft Teams team.";
-        desc.parameter_names = {"team_id"};
+        desc.description = "List all members of a Microsoft Teams team. "
+                           "The first argument accepts a team GUID or a displayName (resolved via /me/joinedTeams).";
+        desc.parameter_names = {"team_id_or_name"};
         desc.parameter_types = {LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_team_members('team-id-here', secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_team_members('Engineering', secret := 'ms_graph')",
+            "SELECT * FROM graph_team_members('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -422,13 +448,18 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
             {LogicalType::VARCHAR, LogicalType::VARCHAR},
             ChannelMessagesScan, ChannelMessagesBind);
         channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        channel_messages_func.named_parameters["user"]   = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(channel_messages_func);
         FunctionDescription desc;
         desc.description = "List messages in a Microsoft Teams channel. Pages lazily through "
-                           "large message histories via @odata.nextLink.";
-        desc.parameter_names = {"team_id", "channel_id"};
+                           "large message histories via @odata.nextLink. "
+                           "Both arguments accept a GUID/channel-ID or a human-readable displayName.";
+        desc.parameter_names = {"team_id_or_name", "channel_id_or_name"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_channel_messages('team-id', 'channel-id', secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_channel_messages('Engineering', 'General', secret := 'ms_graph')",
+            "SELECT * FROM graph_channel_messages('team-guid', '19:xxx@thread.tacv2', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "duckdb.hpp"
 #include "http_client.hpp"
 
 #include <memory>
@@ -46,6 +45,20 @@ public:
 
     // Messages
     std::string GetChannelMessages(const std::string &team_id, const std::string &channel_id);
+
+    // ID resolution helpers
+    //
+    // Team IDs are M365 Group GUIDs (8-4-4-4-12 format).
+    // Channel IDs use the Teams thread-URL format: "19:xxx@thread.tacv2" or "19:xxx@thread.skype".
+    //
+    // ResolveTeamId / ResolveChannelId accept either format or a human-readable displayName
+    // and return the canonical technical ID. When the input is already a technical ID the
+    // function returns immediately without making an API call.
+    static bool LooksLikeTeamId(const std::string &s);
+    static bool LooksLikeChannelId(const std::string &s);
+
+    std::string ResolveTeamId(const std::string &name_or_id, const std::string &user = {});
+    std::string ResolveChannelId(const std::string &team_id, const std::string &name_or_id);
 
 private:
     std::string DoGraphGet(const std::string &url);
