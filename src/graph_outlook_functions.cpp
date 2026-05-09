@@ -1,5 +1,6 @@
 #include "graph_outlook_functions.hpp"
 #include "graph_outlook_client.hpp"
+#include "graph_client.hpp"
 #include "graph_excel_secret.hpp"
 #include "graph_output_utils.hpp"
 #include "tracing.hpp"
@@ -14,31 +15,47 @@ namespace erpl_web {
 using namespace duckdb;
 
 // ============================================================================
-// Shared bind-data base
+// Shared bind-data base — lazy page streaming
+//
+// Bind stores parameters and computes first_url; no HTTP calls happen there.
+// Scan fetches first_url on the first call, then follows @odata.nextLink pages
+// transparently across vector boundaries. Peak memory is one page at a time.
 // ============================================================================
 
 struct OutlookBindData : public TableFunctionData {
     std::string secret_name;
     std::string user;
-    std::string json_response;
-    yyjson_doc *parsed_doc  = nullptr;
+    std::shared_ptr<HttpAuthParams> auth_params;
+
+    // first_url: set in Bind, fetched on first Scan call.
+    // next_url: updated from @odata.nextLink after each page; "" = no more pages.
+    std::string first_url;
+    std::string next_url;
+
+    yyjson_doc *current_doc = nullptr;
     yyjson_arr_iter item_iter = {};
-    bool done               = false;
+    bool initialized = false;
+    bool done = false;
 
     ~OutlookBindData() override {
-        if (parsed_doc) {
-            yyjson_doc_free(parsed_doc);
+        if (current_doc) {
+            yyjson_doc_free(current_doc);
         }
     }
 
-    bool InitIterator(const char *array_key = "value") {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.size(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) {
+    // Parse one page body, extract @odata.nextLink into next_url, init item_iter.
+    bool LoadPage(const std::string &body, const char *array_key = "value") {
+        if (current_doc) {
+            yyjson_doc_free(current_doc);
+            current_doc = nullptr;
+        }
+        current_doc = yyjson_read(body.c_str(), body.size(), 0);
+        if (!current_doc) {
             return false;
         }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
+        yyjson_val *root = yyjson_doc_get_root(current_doc);
+        yyjson_val *nl   = yyjson_obj_get(root, "@odata.nextLink");
+        next_url = (nl && yyjson_is_str(nl)) ? yyjson_get_str(nl) : "";
         yyjson_val *arr  = yyjson_obj_get(root, array_key);
         if (!arr || !yyjson_is_arr(arr)) {
             return false;
@@ -48,7 +65,48 @@ struct OutlookBindData : public TableFunctionData {
     }
 };
 
-// Named-parameter helpers
+// Fetch a single page (no pagination loop) and load it into bd.
+static bool FetchPage(OutlookBindData &bd, const std::string &url,
+                      const char *array_key = "value") {
+    const auto body = GraphClient(bd.auth_params, "GRAPH_OUTLOOK").Get(url);
+    return bd.LoadPage(body, array_key);
+}
+
+// On the first Scan call, fetch first_url and init the iterator.
+// Returns false (and emits an empty chunk) if there is nothing to scan.
+static bool InitScan(OutlookBindData &bd, DataChunk &output,
+                     const char *array_key = "value") {
+    if (bd.done) {
+        output.SetCardinality(0);
+        return false;
+    }
+    if (!bd.initialized) {
+        if (!FetchPage(bd, bd.first_url, array_key)) {
+            bd.done = true;
+            output.SetCardinality(0);
+            return false;
+        }
+        bd.initialized = true;
+    }
+    return true;
+}
+
+// Return the next item, transparently crossing page boundaries.
+// Returns nullptr when all pages are exhausted.
+static yyjson_val *NextItem(OutlookBindData &bd,
+                             const char *array_key = "value") {
+    yyjson_val *item = yyjson_arr_iter_next(&bd.item_iter);
+    if (item) {
+        return item;
+    }
+    // Current page exhausted — try the next page.
+    if (bd.next_url.empty() || !FetchPage(bd, bd.next_url, array_key)) {
+        return nullptr;
+    }
+    return yyjson_arr_iter_next(&bd.item_iter);
+}
+
+// Named-parameter helper
 static std::string GetNamedStr(TableFunctionBindInput &input, const char *name) {
     auto it = input.named_parameters.find(name);
     if (it != input.named_parameters.end() && !it->second.IsNull()) {
@@ -76,21 +134,20 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarsBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names)
 {
-    auto bind_data = make_uniq<OutlookBindData>();
+    auto bind_data         = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
     bind_data->user        = GetNamedStr(input, "user");
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetCalendars(bind_data->user);
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphOutlookUrlBuilder::BuildCalendarsUrl(bind_data->user);
 
     names        = {"id", "name", "color", "is_default_calendar", "can_edit"};
     return_types = {
-        LogicalType::VARCHAR,   // id
-        LogicalType::VARCHAR,   // name
-        LogicalType::VARCHAR,   // color
-        LogicalType::BOOLEAN,   // isDefaultCalendar
-        LogicalType::BOOLEAN,   // canEdit
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::BOOLEAN,
+        LogicalType::BOOLEAN,
     };
     return std::move(bind_data);
 }
@@ -101,25 +158,23 @@ void GraphOutlookFunctions::CalendarsScan(
     DataChunk &output)
 {
     auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (bd.done) { output.SetCardinality(0); return; }
-
-    if (!bd.parsed_doc && !bd.InitIterator()) {
-        bd.done = true; output.SetCardinality(0); return;
+    if (!InitScan(bd, output)) {
+        return;
     }
 
     idx_t row = 0;
-    yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bd.item_iter)) != nullptr) {
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "color"));
         SetBoolCell(output.data[3], row, yyjson_obj_get(item, "isDefaultCalendar"));
         SetBoolCell(output.data[4], row, yyjson_obj_get(item, "canEdit"));
         row++;
-    }
-
-    if (row < STANDARD_VECTOR_SIZE) {
-        bd.done = true;
     }
     output.SetCardinality(row);
 }
@@ -140,12 +195,12 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarEventsBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names)
 {
-    auto bind_data = make_uniq<CalendarEventsBindData>();
-    bind_data->secret_name  = GetNamedStr(input, "secret");
-    bind_data->user      = GetNamedStr(input, "user");
-    bind_data->calendar_id  = GetNamedStr(input, "calendar_id");
-    bind_data->start_date   = GetNamedStr(input, "start_date");
-    bind_data->end_date     = GetNamedStr(input, "end_date");
+    auto bind_data        = make_uniq<CalendarEventsBindData>();
+    bind_data->secret_name = GetNamedStr(input, "secret");
+    bind_data->user        = GetNamedStr(input, "user");
+    bind_data->calendar_id = GetNamedStr(input, "calendar_id");
+    bind_data->start_date  = GetNamedStr(input, "start_date");
+    bind_data->end_date    = GetNamedStr(input, "end_date");
 
     const bool has_start = !bind_data->start_date.empty();
     const bool has_end   = !bind_data->end_date.empty();
@@ -154,36 +209,36 @@ unique_ptr<FunctionData> GraphOutlookFunctions::CalendarEventsBind(
             "graph_calendar_events: start_date and end_date must both be provided or both omitted");
     }
 
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    GraphOutlookClient client(auth_info.auth_params);
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
 
     if (has_start) {
-        bind_data->json_response = client.GetCalendarView(
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildCalendarViewUrl(
             bind_data->user,
             NormaliseCalendarViewDate(bind_data->start_date),
             NormaliseCalendarViewDate(bind_data->end_date));
     } else if (!bind_data->calendar_id.empty()) {
-        bind_data->json_response = client.GetCalendarEvents(
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildCalendarEventsUrl(
             bind_data->user, bind_data->calendar_id);
     } else {
-        bind_data->json_response = client.GetEvents(bind_data->user);
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildEventsUrl(bind_data->user);
     }
 
     names        = {"id", "subject", "body_preview", "start_time", "end_time",
                     "location", "organizer_name", "organizer_email",
                     "is_all_day", "is_cancelled", "web_link"};
     return_types = {
-        LogicalType::VARCHAR,   // id
-        LogicalType::VARCHAR,   // subject
-        LogicalType::VARCHAR,   // body_preview
-        LogicalType::VARCHAR,   // start_time
-        LogicalType::VARCHAR,   // end_time
-        LogicalType::VARCHAR,   // location
-        LogicalType::VARCHAR,   // organizer_name
-        LogicalType::VARCHAR,   // organizer_email
-        LogicalType::BOOLEAN,   // is_all_day
-        LogicalType::BOOLEAN,   // is_cancelled
-        LogicalType::VARCHAR,   // web_link
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::BOOLEAN,
+        LogicalType::BOOLEAN,
+        LogicalType::VARCHAR,
     };
     return std::move(bind_data);
 }
@@ -194,41 +249,37 @@ void GraphOutlookFunctions::CalendarEventsScan(
     DataChunk &output)
 {
     auto &bd = data.bind_data->CastNoConst<CalendarEventsBindData>();
-    if (bd.done) { output.SetCardinality(0); return; }
-
-    if (!bd.parsed_doc && !bd.InitIterator()) {
-        bd.done = true; output.SetCardinality(0); return;
+    if (!InitScan(bd, output)) {
+        return;
     }
 
     idx_t row = 0;
-    yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bd.item_iter)) != nullptr) {
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "subject"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "bodyPreview"));
 
-        yyjson_val *start_obj = yyjson_obj_get(item, "start");
-        SetStrCell(output.data[3], row, start_obj ? yyjson_obj_get(start_obj, "dateTime") : nullptr);
+        auto *start_obj = yyjson_obj_get(item, "start");
+        auto *end_obj   = yyjson_obj_get(item, "end");
+        auto *loc_obj   = yyjson_obj_get(item, "location");
+        SetStrCell(output.data[3], row, start_obj ? yyjson_obj_get(start_obj, "dateTime")    : nullptr);
+        SetStrCell(output.data[4], row, end_obj   ? yyjson_obj_get(end_obj,   "dateTime")    : nullptr);
+        SetStrCell(output.data[5], row, loc_obj   ? yyjson_obj_get(loc_obj,   "displayName") : nullptr);
 
-        yyjson_val *end_obj = yyjson_obj_get(item, "end");
-        SetStrCell(output.data[4], row, end_obj ? yyjson_obj_get(end_obj, "dateTime") : nullptr);
-
-        yyjson_val *loc_obj = yyjson_obj_get(item, "location");
-        SetStrCell(output.data[5], row, loc_obj ? yyjson_obj_get(loc_obj, "displayName") : nullptr);
-
-        yyjson_val *org_obj   = yyjson_obj_get(item, "organizer");
-        yyjson_val *org_email = org_obj ? yyjson_obj_get(org_obj, "emailAddress") : nullptr;
+        auto *organizer = yyjson_obj_get(item, "organizer");
+        auto *org_email = organizer ? yyjson_obj_get(organizer, "emailAddress") : nullptr;
         SetStrCell(output.data[6], row, org_email ? yyjson_obj_get(org_email, "name")    : nullptr);
         SetStrCell(output.data[7], row, org_email ? yyjson_obj_get(org_email, "address") : nullptr);
 
-        SetBoolCell(output.data[8], row, yyjson_obj_get(item, "isAllDay"));
-        SetBoolCell(output.data[9], row, yyjson_obj_get(item, "isCancelled"));
+        SetBoolCell(output.data[8],  row, yyjson_obj_get(item, "isAllDay"));
+        SetBoolCell(output.data[9],  row, yyjson_obj_get(item, "isCancelled"));
         SetStrCell(output.data[10], row, yyjson_obj_get(item, "webLink"));
         row++;
-    }
-
-    if (row < STANDARD_VECTOR_SIZE) {
-        bd.done = true;
     }
     output.SetCardinality(row);
 }
@@ -243,26 +294,25 @@ unique_ptr<FunctionData> GraphOutlookFunctions::ContactsBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names)
 {
-    auto bind_data = make_uniq<OutlookBindData>();
+    auto bind_data         = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
     bind_data->user        = GetNamedStr(input, "user");
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetContacts(bind_data->user);
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphOutlookUrlBuilder::BuildContactsUrl(bind_data->user);
 
     names        = {"id", "display_name", "given_name", "surname", "email",
                     "mobile_phone", "business_phone", "company_name", "job_title"};
     return_types = {
-        LogicalType::VARCHAR,   // id
-        LogicalType::VARCHAR,   // display_name
-        LogicalType::VARCHAR,   // given_name
-        LogicalType::VARCHAR,   // surname
-        LogicalType::VARCHAR,   // email (first address)
-        LogicalType::VARCHAR,   // mobile_phone
-        LogicalType::VARCHAR,   // business_phone (first)
-        LogicalType::VARCHAR,   // company_name
-        LogicalType::VARCHAR,   // job_title
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
     };
     return std::move(bind_data);
 }
@@ -273,37 +323,35 @@ void GraphOutlookFunctions::ContactsScan(
     DataChunk &output)
 {
     auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (bd.done) { output.SetCardinality(0); return; }
-
-    if (!bd.parsed_doc && !bd.InitIterator()) {
-        bd.done = true; output.SetCardinality(0); return;
+    if (!InitScan(bd, output)) {
+        return;
     }
 
     idx_t row = 0;
-    yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bd.item_iter)) != nullptr) {
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "displayName"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "givenName"));
         SetStrCell(output.data[3], row, yyjson_obj_get(item, "surname"));
 
-        yyjson_val *emails_arr = yyjson_obj_get(item, "emailAddresses");
-        yyjson_val *first_email = emails_arr ? yyjson_arr_get_first(emails_arr) : nullptr;
+        auto *emails_arr  = yyjson_obj_get(item, "emailAddresses");
+        auto *first_email = emails_arr ? yyjson_arr_get_first(emails_arr) : nullptr;
         SetStrCell(output.data[4], row, first_email ? yyjson_obj_get(first_email, "address") : nullptr);
 
         SetStrCell(output.data[5], row, yyjson_obj_get(item, "mobilePhone"));
 
-        yyjson_val *phones_arr = yyjson_obj_get(item, "businessPhones");
-        yyjson_val *first_phone = phones_arr ? yyjson_arr_get_first(phones_arr) : nullptr;
+        auto *phones_arr  = yyjson_obj_get(item, "businessPhones");
+        auto *first_phone = phones_arr ? yyjson_arr_get_first(phones_arr) : nullptr;
         SetStrCell(output.data[6], row, first_phone);
 
         SetStrCell(output.data[7], row, yyjson_obj_get(item, "companyName"));
         SetStrCell(output.data[8], row, yyjson_obj_get(item, "jobTitle"));
         row++;
-    }
-
-    if (row < STANDARD_VECTOR_SIZE) {
-        bd.done = true;
     }
     output.SetCardinality(row);
 }
@@ -318,21 +366,20 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MailFoldersBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names)
 {
-    auto bind_data = make_uniq<OutlookBindData>();
+    auto bind_data         = make_uniq<OutlookBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
     bind_data->user        = GetNamedStr(input, "user");
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    GraphOutlookClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetMailFolders(bind_data->user);
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
+    bind_data->first_url   = GraphOutlookUrlBuilder::BuildMailFoldersUrl(bind_data->user);
 
     names        = {"id", "display_name", "parent_folder_id", "total_item_count", "unread_item_count"};
     return_types = {
-        LogicalType::VARCHAR,   // id
-        LogicalType::VARCHAR,   // displayName
-        LogicalType::VARCHAR,   // parentFolderId
-        LogicalType::INTEGER,   // totalItemCount
-        LogicalType::INTEGER,   // unreadItemCount
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::INTEGER,
+        LogicalType::INTEGER,
     };
     return std::move(bind_data);
 }
@@ -343,25 +390,23 @@ void GraphOutlookFunctions::MailFoldersScan(
     DataChunk &output)
 {
     auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (bd.done) { output.SetCardinality(0); return; }
-
-    if (!bd.parsed_doc && !bd.InitIterator()) {
-        bd.done = true; output.SetCardinality(0); return;
+    if (!InitScan(bd, output)) {
+        return;
     }
 
     idx_t row = 0;
-    yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bd.item_iter)) != nullptr) {
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "displayName"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "parentFolderId"));
         SetInt32Cell(output.data[3], row, yyjson_obj_get(item, "totalItemCount"));
         SetInt32Cell(output.data[4], row, yyjson_obj_get(item, "unreadItemCount"));
         row++;
-    }
-
-    if (row < STANDARD_VECTOR_SIZE) {
-        bd.done = true;
     }
     output.SetCardinality(row);
 }
@@ -370,14 +415,15 @@ void GraphOutlookFunctions::MailFoldersScan(
 // graph_messages
 // ============================================================================
 
-// Well-known Graph folder names that can be used directly in the URL path.
 static bool IsWellKnownFolder(const std::string &name) {
     static const std::string known[] = {
         "inbox", "sentitems", "deleteditems", "drafts",
         "junkemail", "outbox", "archive", "clutter"
     };
     for (const auto &k : known) {
-        if (name == k) { return true; }
+        if (name == k) {
+            return true;
+        }
     }
     return false;
 }
@@ -393,22 +439,27 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
     vector<LogicalType> &return_types,
     vector<std::string> &names)
 {
-    auto bind_data = make_uniq<MessagesBindData>();
+    auto bind_data         = make_uniq<MessagesBindData>();
     bind_data->secret_name = GetNamedStr(input, "secret");
     bind_data->user        = GetNamedStr(input, "user");
     bind_data->folder      = GetNamedStr(input, "folder");
 
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
-    GraphOutlookClient client(auth_info.auth_params);
+    auto auth_info         = ResolveGraphAuth(context, bind_data->secret_name);
+    bind_data->auth_params = auth_info.auth_params;
 
+    // Compute first_url. Custom folder names require one API call to resolve
+    // display name → folder id; well-known names and the default (all messages)
+    // need no API call.
     if (bind_data->folder.empty()) {
-        bind_data->json_response = client.GetMessages(bind_data->user);
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildMessagesUrl(bind_data->user);
     } else if (IsWellKnownFolder(bind_data->folder)) {
-        bind_data->json_response = client.GetFolderMessages(bind_data->user, bind_data->folder);
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildFolderMessagesUrl(
+            bind_data->user, bind_data->folder);
     } else {
-        // Resolve display name → folder id
+        // Resolve display name → folder id (one bounded API call).
+        GraphOutlookClient client(auth_info.auth_params);
         const std::string folders_json = client.GetMailFolders(bind_data->user);
-        yyjson_doc *doc = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
+        yyjson_doc *doc  = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
         if (!doc) {
             throw IOException("graph_messages: failed to parse mail folders response");
         }
@@ -419,12 +470,15 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
             size_t idx, max;
             yyjson_val *folder;
             yyjson_arr_foreach(arr, idx, max, folder) {
-                yyjson_val *name_val = yyjson_obj_get(folder, "displayName");
-                yyjson_val *id_val   = yyjson_obj_get(folder, "id");
+                auto *name_val = yyjson_obj_get(folder, "displayName");
+                auto *id_val   = yyjson_obj_get(folder, "id");
                 if (name_val && yyjson_is_str(name_val) &&
                     id_val   && yyjson_is_str(id_val) &&
                     bind_data->folder == yyjson_get_str(name_val)) {
                     folder_id = yyjson_get_str(id_val);
+
+                    // While we have the response, also populate the name map.
+                    // Re-parse the whole array below to complete the map.
                     break;
                 }
             }
@@ -435,13 +489,14 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
             throw InvalidInputException(
                 "graph_messages: no mail folder found with name '" + bind_data->folder + "'");
         }
-        bind_data->json_response = client.GetFolderMessages(bind_data->user, folder_id);
+        bind_data->first_url = GraphOutlookUrlBuilder::BuildFolderMessagesUrl(
+            bind_data->user, folder_id);
     }
 
-    // Build folder_id → display_name map for the folder_name output column.
-    // Re-uses the folders response already fetched in the custom-name branch when available;
-    // otherwise makes one extra call. The overhead is one API round-trip per query.
+    // Build folder_id → display_name map (one bounded API call) for the
+    // folder_name output column. The folder list is small so this is fast.
     {
+        GraphOutlookClient client(auth_info.auth_params);
         const std::string folders_json = client.GetMailFolders(bind_data->user);
         yyjson_doc *fdoc = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
         if (fdoc) {
@@ -451,8 +506,8 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
                 size_t fidx, fmax;
                 yyjson_val *fitem;
                 yyjson_arr_foreach(farr, fidx, fmax, fitem) {
-                    yyjson_val *id_v   = yyjson_obj_get(fitem, "id");
-                    yyjson_val *name_v = yyjson_obj_get(fitem, "displayName");
+                    auto *id_v   = yyjson_obj_get(fitem, "id");
+                    auto *name_v = yyjson_obj_get(fitem, "displayName");
                     if (id_v && yyjson_is_str(id_v) && name_v && yyjson_is_str(name_v)) {
                         bind_data->folder_name_by_id[yyjson_get_str(id_v)] = yyjson_get_str(name_v);
                     }
@@ -466,18 +521,18 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
                     "received_at", "has_attachments", "is_read", "importance", "web_link",
                     "folder_id", "folder_name"};
     return_types = {
-        LogicalType::VARCHAR,   // id
-        LogicalType::VARCHAR,   // subject
-        LogicalType::VARCHAR,   // bodyPreview
-        LogicalType::VARCHAR,   // from name
-        LogicalType::VARCHAR,   // from address
-        LogicalType::VARCHAR,   // receivedDateTime
-        LogicalType::BOOLEAN,   // hasAttachments
-        LogicalType::BOOLEAN,   // isRead
-        LogicalType::VARCHAR,   // importance
-        LogicalType::VARCHAR,   // webLink
-        LogicalType::VARCHAR,   // parentFolderId
-        LogicalType::VARCHAR,   // folder display name
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::BOOLEAN,
+        LogicalType::BOOLEAN,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
+        LogicalType::VARCHAR,
     };
     return std::move(bind_data);
 }
@@ -488,21 +543,23 @@ void GraphOutlookFunctions::MessagesScan(
     DataChunk &output)
 {
     auto &bd = data.bind_data->CastNoConst<MessagesBindData>();
-    if (bd.done) { output.SetCardinality(0); return; }
-
-    if (!bd.parsed_doc && !bd.InitIterator()) {
-        bd.done = true; output.SetCardinality(0); return;
+    if (!InitScan(bd, output)) {
+        return;
     }
 
     idx_t row = 0;
-    yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bd.item_iter)) != nullptr) {
+    while (row < STANDARD_VECTOR_SIZE) {
+        auto *item = NextItem(bd);
+        if (!item) {
+            bd.done = true;
+            break;
+        }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "subject"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "bodyPreview"));
 
-        yyjson_val *from_obj   = yyjson_obj_get(item, "from");
-        yyjson_val *from_email = from_obj ? yyjson_obj_get(from_obj, "emailAddress") : nullptr;
+        auto *from_obj   = yyjson_obj_get(item, "from");
+        auto *from_email = from_obj ? yyjson_obj_get(from_obj, "emailAddress") : nullptr;
         SetStrCell(output.data[3], row, from_email ? yyjson_obj_get(from_email, "name")    : nullptr);
         SetStrCell(output.data[4], row, from_email ? yyjson_obj_get(from_email, "address") : nullptr);
 
@@ -513,23 +570,19 @@ void GraphOutlookFunctions::MessagesScan(
         SetStrCell(output.data[9], row, yyjson_obj_get(item, "webLink"));
         SetStrCell(output.data[10], row, yyjson_obj_get(item, "parentFolderId"));
 
-        yyjson_val *pid_val = yyjson_obj_get(item, "parentFolderId");
+        auto *pid_val = yyjson_obj_get(item, "parentFolderId");
         if (pid_val && yyjson_is_str(pid_val)) {
-            const std::string pid = yyjson_get_str(pid_val);
-            auto it = bd.folder_name_by_id.find(pid);
+            auto it = bd.folder_name_by_id.find(yyjson_get_str(pid_val));
             if (it != bd.folder_name_by_id.end()) {
-                output.data[11].SetValue(row, Value(it->second));
+                FlatVector::GetData<string_t>(output.data[11])[row] =
+                    StringVector::AddString(output.data[11], it->second);
             } else {
-                output.data[11].SetValue(row, Value(nullptr));
+                FlatVector::Validity(output.data[11]).SetInvalid(row);
             }
         } else {
-            output.data[11].SetValue(row, Value(nullptr));
+            FlatVector::Validity(output.data[11]).SetInvalid(row);
         }
         row++;
-    }
-
-    if (row < STANDARD_VECTOR_SIZE) {
-        bd.done = true;
     }
     output.SetCardinality(row);
 }
@@ -558,7 +611,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_calendar_events", {}, CalendarEventsScan, CalendarEventsBind);
-        fn.named_parameters["user"]     = LogicalType::VARCHAR;
+        fn.named_parameters["user"]        = LogicalType::VARCHAR;
         fn.named_parameters["calendar_id"] = LogicalType::VARCHAR;
         fn.named_parameters["start_date"]  = LogicalType::VARCHAR;
         fn.named_parameters["end_date"]    = LogicalType::VARCHAR;
