@@ -438,6 +438,11 @@ void ExcelTableEntry::BindUpdateConstraints(duckdb::Binder &, duckdb::LogicalGet
 	// External table — no-op.
 }
 
+duckdb::virtual_column_map_t ExcelTableEntry::GetVirtualColumns() const {
+	// Excel tables are remote-only; no rowid or other virtual columns are supported.
+	return {};
+}
+
 // -------------------------------------------------------------------------------------------------
 // ExcelCatalog Implementation
 // -------------------------------------------------------------------------------------------------

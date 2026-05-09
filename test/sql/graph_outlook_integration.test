@@ -117,7 +117,7 @@ SELECT COUNT(*) FROM (
 # Returns rows for a broad date range without error
 query I
 SELECT COUNT(*) >= 0 FROM graph_calendar_events(
-    user_id    := '${ERPL_MS_OUTLOOK_USER_ID}',
+    user       := '${ERPL_MS_OUTLOOK_USER_ID}',
     start_date := '2024-01-01',
     end_date   := '2026-12-31',
     secret     := 'ms_graph_outlook_app'
@@ -128,7 +128,7 @@ true
 # start_date without end_date is an error
 statement error
 SELECT * FROM graph_calendar_events(
-    user_id    := '${ERPL_MS_OUTLOOK_USER_ID}',
+    user       := '${ERPL_MS_OUTLOOK_USER_ID}',
     start_date := '2024-01-01',
     secret     := 'ms_graph_outlook_app'
 );

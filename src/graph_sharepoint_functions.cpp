@@ -8,6 +8,7 @@
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "yyjson.hpp"
 #include <algorithm>
 #include <unordered_set>
@@ -565,23 +566,6 @@ struct CreateItemBindData : public TableFunctionData {
     bool done = false;
 };
 
-struct UpdateItemBindData : public TableFunctionData {
-    std::string secret_name;
-    std::string site_id;
-    std::string list_id;
-    std::string item_id;
-    std::string fields_json;
-    bool done = false;
-};
-
-struct DeleteItemBindData : public TableFunctionData {
-    std::string secret_name;
-    std::string site_id;
-    std::string list_id;
-    std::string item_id;
-    bool done = false;
-};
-
 unique_ptr<FunctionData> GraphSharePointFunctions::CreateItemBind(
     ClientContext &context,
     TableFunctionBindInput &input,
@@ -628,97 +612,111 @@ void GraphSharePointFunctions::CreateItemScan(
     output.SetCardinality(1);
 }
 
-unique_ptr<FunctionData> GraphSharePointFunctions::UpdateItemBind(
-    ClientContext &context,
-    TableFunctionBindInput &input,
-    vector<LogicalType> &return_types,
-    vector<std::string> &names) {
+void GraphSharePointFunctions::UpdateItemExecute(
+    DataChunk &args,
+    ExpressionState &state,
+    Vector &result) {
 
-    if (input.inputs.size() < 4) {
-        throw BinderException("graph_sharepoint_update_item requires site, list, item_id, and fields_json parameters");
+    auto &context = state.GetContext();
+    idx_t count = args.size();
+
+    std::string secret_name;
+    if (args.ColumnCount() > 4 && count > 0) {
+        UnifiedVectorFormat secret_fmt;
+        args.data[4].ToUnifiedFormat(count, secret_fmt);
+        auto idx = secret_fmt.sel->get_index(0);
+        if (secret_fmt.validity.RowIsValid(idx)) {
+            secret_name = ((string_t *)secret_fmt.data)[idx].GetString(); // NOLINT
+        }
     }
 
-    auto bind_data = make_uniq<UpdateItemBindData>();
-    bind_data->site_id     = input.inputs[0].GetValue<std::string>();
-    bind_data->list_id     = input.inputs[1].GetValue<std::string>();
-    bind_data->item_id     = input.inputs[2].GetValue<std::string>();
-    bind_data->fields_json = input.inputs[3].GetValue<std::string>();
-
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    auto auth_info = ResolveGraphAuth(context, secret_name);
     GraphSharePointClient client(auth_info.auth_params);
-    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
-    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
-    client.UpdateListItem(bind_data->site_id, bind_data->list_id, bind_data->item_id, bind_data->fields_json);
 
-    names        = {"updated"};
-    return_types = {LogicalType::BOOLEAN};
+    UnifiedVectorFormat site_fmt, list_fmt, item_fmt, fields_fmt;
+    args.data[0].ToUnifiedFormat(count, site_fmt);
+    args.data[1].ToUnifiedFormat(count, list_fmt);
+    args.data[2].ToUnifiedFormat(count, item_fmt);
+    args.data[3].ToUnifiedFormat(count, fields_fmt);
 
-    return std::move(bind_data);
+    result.SetVectorType(VectorType::FLAT_VECTOR);
+    auto result_data = FlatVector::GetData<bool>(result);
+    auto &result_validity = FlatVector::Validity(result);
+
+    for (idx_t i = 0; i < count; i++) {
+        auto site_idx   = site_fmt.sel->get_index(i);
+        auto list_idx   = list_fmt.sel->get_index(i);
+        auto item_idx   = item_fmt.sel->get_index(i);
+        auto fields_idx = fields_fmt.sel->get_index(i);
+
+        if (!site_fmt.validity.RowIsValid(site_idx) || !list_fmt.validity.RowIsValid(list_idx) ||
+            !item_fmt.validity.RowIsValid(item_idx) || !fields_fmt.validity.RowIsValid(fields_idx)) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        std::string site_id    = ((string_t *)site_fmt.data)[site_idx].GetString(); // NOLINT
+        std::string list_id    = ((string_t *)list_fmt.data)[list_idx].GetString(); // NOLINT
+        std::string item_id    = ((string_t *)item_fmt.data)[item_idx].GetString(); // NOLINT
+        std::string fields_json = ((string_t *)fields_fmt.data)[fields_idx].GetString(); // NOLINT
+
+        auto resolved_site = client.ResolveSiteId(site_id);
+        auto resolved_list = client.ResolveListId(resolved_site, list_id);
+        client.UpdateListItem(resolved_site, resolved_list, item_id, fields_json);
+        result_data[i] = true;
+    }
 }
 
-void GraphSharePointFunctions::UpdateItemScan(
-    ClientContext &context,
-    TableFunctionInput &data,
-    DataChunk &output) {
+void GraphSharePointFunctions::DeleteItemExecute(
+    DataChunk &args,
+    ExpressionState &state,
+    Vector &result) {
 
-    auto &bind_data = data.bind_data->CastNoConst<UpdateItemBindData>();
-    if (bind_data.done) {
-        output.SetCardinality(0);
-        return;
-    }
-    bind_data.done = true;
-    output.SetValue(0, 0, Value::BOOLEAN(true));
-    output.SetCardinality(1);
-}
+    auto &context = state.GetContext();
+    idx_t count = args.size();
 
-unique_ptr<FunctionData> GraphSharePointFunctions::DeleteItemBind(
-    ClientContext &context,
-    TableFunctionBindInput &input,
-    vector<LogicalType> &return_types,
-    vector<std::string> &names) {
-
-    if (input.inputs.size() < 3) {
-        throw BinderException("graph_sharepoint_delete_item requires site, list, and item_id parameters");
+    std::string secret_name;
+    if (args.ColumnCount() > 3 && count > 0) {
+        UnifiedVectorFormat secret_fmt;
+        args.data[3].ToUnifiedFormat(count, secret_fmt);
+        auto idx = secret_fmt.sel->get_index(0);
+        if (secret_fmt.validity.RowIsValid(idx)) {
+            secret_name = ((string_t *)secret_fmt.data)[idx].GetString(); // NOLINT
+        }
     }
 
-    auto bind_data = make_uniq<DeleteItemBindData>();
-    bind_data->site_id = input.inputs[0].GetValue<std::string>();
-    bind_data->list_id = input.inputs[1].GetValue<std::string>();
-    bind_data->item_id = input.inputs[2].GetValue<std::string>();
-
-    if (input.named_parameters.find("secret") != input.named_parameters.end()) {
-        bind_data->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
-    }
-
-    auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+    auto auth_info = ResolveGraphAuth(context, secret_name);
     GraphSharePointClient client(auth_info.auth_params);
-    bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
-    bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
-    client.DeleteListItem(bind_data->site_id, bind_data->list_id, bind_data->item_id);
 
-    names        = {"deleted"};
-    return_types = {LogicalType::BOOLEAN};
+    UnifiedVectorFormat site_fmt, list_fmt, item_fmt;
+    args.data[0].ToUnifiedFormat(count, site_fmt);
+    args.data[1].ToUnifiedFormat(count, list_fmt);
+    args.data[2].ToUnifiedFormat(count, item_fmt);
 
-    return std::move(bind_data);
-}
+    result.SetVectorType(VectorType::FLAT_VECTOR);
+    auto result_data = FlatVector::GetData<bool>(result);
+    auto &result_validity = FlatVector::Validity(result);
 
-void GraphSharePointFunctions::DeleteItemScan(
-    ClientContext &context,
-    TableFunctionInput &data,
-    DataChunk &output) {
+    for (idx_t i = 0; i < count; i++) {
+        auto site_idx = site_fmt.sel->get_index(i);
+        auto list_idx = list_fmt.sel->get_index(i);
+        auto item_idx = item_fmt.sel->get_index(i);
 
-    auto &bind_data = data.bind_data->CastNoConst<DeleteItemBindData>();
-    if (bind_data.done) {
-        output.SetCardinality(0);
-        return;
+        if (!site_fmt.validity.RowIsValid(site_idx) || !list_fmt.validity.RowIsValid(list_idx) ||
+            !item_fmt.validity.RowIsValid(item_idx)) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        std::string site_id = ((string_t *)site_fmt.data)[site_idx].GetString(); // NOLINT
+        std::string list_id = ((string_t *)list_fmt.data)[list_idx].GetString(); // NOLINT
+        std::string item_id = ((string_t *)item_fmt.data)[item_idx].GetString(); // NOLINT
+
+        auto resolved_site = client.ResolveSiteId(site_id);
+        auto resolved_list = client.ResolveListId(resolved_site, list_id);
+        client.DeleteListItem(resolved_site, resolved_list, item_id);
+        result_data[i] = true;
     }
-    bind_data.done = true;
-    output.SetValue(0, 0, Value::BOOLEAN(true));
-    output.SetCardinality(1);
 }
 
 // ============================================================================
@@ -830,36 +828,57 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction update_item("graph_sharepoint_update_item",
-                                  {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                   LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                  UpdateItemScan, UpdateItemBind);
-        update_item.named_parameters["secret"] = LogicalType::VARCHAR;
-        CreateTableFunctionInfo info(update_item);
+        ScalarFunctionSet update_set("graph_sharepoint_update_item");
+        // Overload without secret (uses ambient Graph auth)
+        ScalarFunction update_no_secret(
+            {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+            LogicalType::BOOLEAN, UpdateItemExecute);
+        update_no_secret.stability = FunctionStability::VOLATILE;
+        update_set.AddFunction(update_no_secret);
+        // Overload with explicit secret name
+        ScalarFunction update_with_secret(
+            {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+             LogicalType::VARCHAR},
+            LogicalType::BOOLEAN, UpdateItemExecute);
+        update_with_secret.stability = FunctionStability::VOLATILE;
+        update_set.AddFunction(update_with_secret);
+
+        CreateScalarFunctionInfo info(std::move(update_set));
         FunctionDescription desc;
-        desc.description = "Update fields of an existing SharePoint list item. fields_json is a JSON object of field name/value pairs.";
+        desc.description = "Update fields of an existing SharePoint list item. Returns true on success. "
+                           "fields_json is a JSON object of field name/value pairs.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "fields_json", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                 LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_sharepoint_update_item('Finance', 'Budget', '42', '{\"Status\":\"Approved\"}', secret := 'ms_graph')"
-        };
+            "SELECT graph_sharepoint_update_item('Finance', 'Budget', '42', '{\"Status\":\"Approved\"}', 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction delete_item("graph_sharepoint_delete_item",
-                                  {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                  DeleteItemScan, DeleteItemBind);
-        delete_item.named_parameters["secret"] = LogicalType::VARCHAR;
-        CreateTableFunctionInfo info(delete_item);
+        ScalarFunctionSet delete_set("graph_sharepoint_delete_item");
+        // Overload without secret
+        ScalarFunction delete_no_secret(
+            {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+            LogicalType::BOOLEAN, DeleteItemExecute);
+        delete_no_secret.stability = FunctionStability::VOLATILE;
+        delete_set.AddFunction(delete_no_secret);
+        // Overload with explicit secret name
+        ScalarFunction delete_with_secret(
+            {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+            LogicalType::BOOLEAN, DeleteItemExecute);
+        delete_with_secret.stability = FunctionStability::VOLATILE;
+        delete_set.AddFunction(delete_with_secret);
+
+        CreateScalarFunctionInfo info(std::move(delete_set));
         FunctionDescription desc;
-        desc.description = "Delete an item from a SharePoint list by its item ID.";
+        desc.description = "Delete an item from a SharePoint list by its item ID. Returns true on success.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "secret"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                 LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_sharepoint_delete_item('Finance', 'Budget', '42', secret := 'ms_graph')"
-        };
+            "SELECT graph_sharepoint_delete_item('Finance', 'Budget', '42', 'ms_graph')"};
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));

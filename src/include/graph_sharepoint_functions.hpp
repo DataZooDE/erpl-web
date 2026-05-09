@@ -83,29 +83,17 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_sharepoint_update_item(site, list, item_id, fields_json, secret:=...) - Update an item
-    static duckdb::unique_ptr<duckdb::FunctionData> UpdateItemBind(
-        duckdb::ClientContext &context,
-        duckdb::TableFunctionBindInput &input,
-        duckdb::vector<duckdb::LogicalType> &return_types,
-        duckdb::vector<std::string> &names);
+    // graph_sharepoint_update_item(site, list, item_id, fields_json[, secret]) - Update an item (scalar)
+    static void UpdateItemExecute(
+        duckdb::DataChunk &args,
+        duckdb::ExpressionState &state,
+        duckdb::Vector &result);
 
-    static void UpdateItemScan(
-        duckdb::ClientContext &context,
-        duckdb::TableFunctionInput &data,
-        duckdb::DataChunk &output);
-
-    // graph_sharepoint_delete_item(site, list, item_id, secret:=...) - Delete an item
-    static duckdb::unique_ptr<duckdb::FunctionData> DeleteItemBind(
-        duckdb::ClientContext &context,
-        duckdb::TableFunctionBindInput &input,
-        duckdb::vector<duckdb::LogicalType> &return_types,
-        duckdb::vector<std::string> &names);
-
-    static void DeleteItemScan(
-        duckdb::ClientContext &context,
-        duckdb::TableFunctionInput &data,
-        duckdb::DataChunk &output);
+    // graph_sharepoint_delete_item(site, list, item_id[, secret]) - Delete an item (scalar)
+    static void DeleteItemExecute(
+        duckdb::DataChunk &args,
+        duckdb::ExpressionState &state,
+        duckdb::Vector &result);
 };
 
 } // namespace erpl_web

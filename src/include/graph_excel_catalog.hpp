@@ -89,6 +89,7 @@ public:
 	duckdb::TableFunction GetScanFunction(duckdb::ClientContext &context, duckdb::unique_ptr<duckdb::FunctionData> &bind_data) override;
 	duckdb::TableStorageInfo GetStorageInfo(duckdb::ClientContext &context) override;
 	void BindUpdateConstraints(duckdb::Binder &binder, duckdb::LogicalGet &get, duckdb::LogicalProjection &proj, duckdb::LogicalUpdate &update, duckdb::ClientContext &context) override;
+	duckdb::virtual_column_map_t GetVirtualColumns() const override;
 
 	const std::string &GetFilePath()  const { return file_path_; }
 	const std::string &GetTableName() const { return excel_table_name_; }

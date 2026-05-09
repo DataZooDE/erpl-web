@@ -74,12 +74,12 @@ true
 # ============================================================================
 
 query I
-SELECT updated FROM graph_sharepoint_update_item(
+SELECT graph_sharepoint_update_item(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     (SELECT item_id FROM _sp_created_item),
     '{"Title":"erpl_scalar_write_test_updated"}',
-    secret := 'ms_sp_scalar_write_test'
+    'ms_sp_scalar_write_test'
 );
 ----
 true
@@ -89,11 +89,11 @@ true
 # ============================================================================
 
 query I
-SELECT deleted FROM graph_sharepoint_delete_item(
+SELECT graph_sharepoint_delete_item(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     (SELECT item_id FROM _sp_created_item),
-    secret := 'ms_sp_scalar_write_test'
+    'ms_sp_scalar_write_test'
 );
 ----
 true
