@@ -438,7 +438,8 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
     }
 
     names        = {"id", "subject", "body_preview", "from_name", "from_email",
-                    "received_at", "has_attachments", "is_read", "importance", "web_link"};
+                    "received_at", "has_attachments", "is_read", "importance", "web_link",
+                    "folder_id"};
     return_types = {
         LogicalType::VARCHAR,   // id
         LogicalType::VARCHAR,   // subject
@@ -450,6 +451,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
         LogicalType::BOOLEAN,   // isRead
         LogicalType::VARCHAR,   // importance
         LogicalType::VARCHAR,   // webLink
+        LogicalType::VARCHAR,   // parentFolderId
     };
     return std::move(bind_data);
 }
@@ -483,6 +485,7 @@ void GraphOutlookFunctions::MessagesScan(
         SetBoolCell(output.data[7], row, yyjson_obj_get(item, "isRead"));
         SetStrCell(output.data[8], row, yyjson_obj_get(item, "importance"));
         SetStrCell(output.data[9], row, yyjson_obj_get(item, "webLink"));
+        SetStrCell(output.data[10], row, yyjson_obj_get(item, "parentFolderId"));
         row++;
     }
 

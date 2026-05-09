@@ -267,11 +267,12 @@ SELECT COUNT(*) FROM (
     )
     WHERE column_name IN (
         'id', 'subject', 'body_preview', 'from_name', 'from_email',
-        'received_at', 'has_attachments', 'is_read', 'importance', 'web_link'
+        'received_at', 'has_attachments', 'is_read', 'importance', 'web_link',
+        'folder_id'
     )
 );
 ----
-10
+11
 
 # ============================================================================
 # graph_messages — folder filter
