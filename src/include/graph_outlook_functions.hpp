@@ -43,7 +43,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_mail_folders([user_id], [secret])
+    // graph_outlook_mail_folders([user_id], [secret])
     static duckdb::unique_ptr<duckdb::FunctionData> MailFoldersBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,
@@ -54,7 +54,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_messages([user_id], [folder], [secret])
+    // graph_outlook_emails([user_id], [folder], [secret])
     static duckdb::unique_ptr<duckdb::FunctionData> MessagesBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,

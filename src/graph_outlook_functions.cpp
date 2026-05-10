@@ -357,7 +357,7 @@ void GraphOutlookFunctions::ContactsScan(
 }
 
 // ============================================================================
-// graph_mail_folders
+// graph_outlook_mail_folders
 // ============================================================================
 
 unique_ptr<FunctionData> GraphOutlookFunctions::MailFoldersBind(
@@ -412,7 +412,7 @@ void GraphOutlookFunctions::MailFoldersScan(
 }
 
 // ============================================================================
-// graph_messages
+// graph_outlook_emails
 // ============================================================================
 
 static bool IsWellKnownFolder(const std::string &name) {
@@ -461,7 +461,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
         const std::string folders_json = client.GetMailFolders(bind_data->user);
         yyjson_doc *doc  = yyjson_read(folders_json.c_str(), folders_json.size(), 0);
         if (!doc) {
-            throw IOException("graph_messages: failed to parse mail folders response");
+            throw IOException("graph_outlook_emails: failed to parse mail folders response");
         }
         std::string folder_id;
         yyjson_val *root = yyjson_doc_get_root(doc);
@@ -487,7 +487,7 @@ unique_ptr<FunctionData> GraphOutlookFunctions::MessagesBind(
 
         if (folder_id.empty()) {
             throw InvalidInputException(
-                "graph_messages: no mail folder found with name '" + bind_data->folder + "'");
+                "graph_outlook_emails: no mail folder found with name '" + bind_data->folder + "'");
         }
         bind_data->first_url = GraphOutlookUrlBuilder::BuildFolderMessagesUrl(
             bind_data->user, folder_id);
@@ -645,22 +645,22 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction fn("graph_mail_folders", {}, MailFoldersScan, MailFoldersBind);
+        TableFunction fn("graph_outlook_mail_folders", {}, MailFoldersScan, MailFoldersBind);
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
         desc.description = "List Outlook mail folders for a user via Microsoft Graph.";
         desc.examples    = {
-            "SELECT * FROM graph_mail_folders(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_mail_folders(secret := 'ms_graph')"
+            "SELECT * FROM graph_outlook_mail_folders(user := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_outlook_mail_folders(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction fn("graph_messages", {}, MessagesScan, MessagesBind);
+        TableFunction fn("graph_outlook_emails", {}, MessagesScan, MessagesBind);
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["folder"]  = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
@@ -668,11 +668,11 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         FunctionDescription desc;
         desc.description = "List email messages (metadata only) for a user via Microsoft Graph. "
                            "Pass folder := 'inbox' / 'sentitems' / 'drafts' / 'deleteditems' "
-                           "or any display name from graph_mail_folders().";
+                           "or any display name from graph_outlook_mail_folders().";
         desc.examples    = {
-            "SELECT * FROM graph_messages(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_messages(user := 'user-id', folder := 'inbox', secret := 'ms_graph')",
-            "SELECT * FROM graph_messages(secret := 'ms_graph')"
+            "SELECT * FROM graph_outlook_emails(user := 'user-id', secret := 'ms_graph')",
+            "SELECT * FROM graph_outlook_emails(user := 'user-id', folder := 'inbox', secret := 'ms_graph')",
+            "SELECT * FROM graph_outlook_emails(secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));

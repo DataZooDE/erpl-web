@@ -195,18 +195,18 @@ WHERE id IS NULL OR id = '';
 true
 
 # ============================================================================
-# graph_mail_folders — discovery
+# graph_outlook_mail_folders — discovery
 # ============================================================================
 
 # Function exists
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_mail_folders';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_outlook_mail_folders';
 ----
 1
 
 # Returns rows (inbox at minimum always exists)
 query I
-SELECT COUNT(*) > 0 FROM graph_mail_folders(
+SELECT COUNT(*) > 0 FROM graph_outlook_mail_folders(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     secret  := 'ms_graph_outlook_app'
 );
@@ -217,7 +217,7 @@ true
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (
-        DESCRIBE SELECT * FROM graph_mail_folders(
+        DESCRIBE SELECT * FROM graph_outlook_mail_folders(
             user := '${ERPL_MS_OUTLOOK_USER_ID}',
             secret  := 'ms_graph_outlook_app'
         )
@@ -229,7 +229,7 @@ SELECT COUNT(*) FROM (
 
 # Inbox folder is always present
 query I
-SELECT COUNT(*) > 0 FROM graph_mail_folders(
+SELECT COUNT(*) > 0 FROM graph_outlook_mail_folders(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     secret  := 'ms_graph_outlook_app'
 )
@@ -238,18 +238,18 @@ WHERE lower(display_name) = 'inbox';
 true
 
 # ============================================================================
-# graph_messages — basic read
+# graph_outlook_emails — basic read
 # ============================================================================
 
 # Function exists
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_messages';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_outlook_emails';
 ----
 1
 
 # Returns rows without error
 query I
-SELECT COUNT(*) >= 0 FROM graph_messages(
+SELECT COUNT(*) >= 0 FROM graph_outlook_emails(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     secret  := 'ms_graph_outlook_app'
 );
@@ -260,7 +260,7 @@ true
 query I
 SELECT COUNT(*) FROM (
     SELECT column_name FROM (
-        DESCRIBE SELECT * FROM graph_messages(
+        DESCRIBE SELECT * FROM graph_outlook_emails(
             user := '${ERPL_MS_OUTLOOK_USER_ID}',
             secret  := 'ms_graph_outlook_app'
         )
@@ -275,12 +275,12 @@ SELECT COUNT(*) FROM (
 12
 
 # ============================================================================
-# graph_messages — folder filter
+# graph_outlook_emails — folder filter
 # ============================================================================
 
 # Well-known folder 'inbox' works
 query I
-SELECT COUNT(*) >= 0 FROM graph_messages(
+SELECT COUNT(*) >= 0 FROM graph_outlook_emails(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     folder  := 'inbox',
     secret  := 'ms_graph_outlook_app'
@@ -290,7 +290,7 @@ true
 
 # Well-known folder 'sentitems' works
 query I
-SELECT COUNT(*) >= 0 FROM graph_messages(
+SELECT COUNT(*) >= 0 FROM graph_outlook_emails(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     folder  := 'sentitems',
     secret  := 'ms_graph_outlook_app'
@@ -300,7 +300,7 @@ true
 
 # Unknown folder name raises an error
 statement error
-SELECT * FROM graph_messages(
+SELECT * FROM graph_outlook_emails(
     user := '${ERPL_MS_OUTLOOK_USER_ID}',
     folder  := 'this-folder-does-not-exist-xyz',
     secret  := 'ms_graph_outlook_app'

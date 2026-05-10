@@ -131,12 +131,12 @@ TEST_CASE("Graph Outlook functions are registered in DuckDB", "[graph_outlook][d
         auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_contacts'");
         REQUIRE(result->RowCount() == 1);
     }
-    SECTION("graph_mail_folders") {
-        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_mail_folders'");
+    SECTION("graph_outlook_mail_folders") {
+        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_outlook_mail_folders'");
         REQUIRE(result->RowCount() == 1);
     }
-    SECTION("graph_messages") {
-        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_messages'");
+    SECTION("graph_outlook_emails") {
+        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_outlook_emails'");
         REQUIRE(result->RowCount() == 1);
     }
 }

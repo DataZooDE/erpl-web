@@ -12,6 +12,6 @@ SELECT * FROM duckdb_functions() WHERE function_name = 'graph_calendar_events';
 statement ok
 SELECT * FROM duckdb_functions() WHERE function_name = 'graph_contacts';
 
-# Test that graph_messages function exists
+# Test that graph_outlook_emails function exists
 statement ok
-SELECT * FROM duckdb_functions() WHERE function_name = 'graph_messages';
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_outlook_emails';
