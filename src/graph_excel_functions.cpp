@@ -930,7 +930,10 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         list_files.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(list_files);
         FunctionDescription desc;
-        desc.description = "List files in OneDrive/SharePoint. Pass a drive ID (b!...), web URL, or name + site.";
+        desc.description = "List files and folders in OneDrive or a SharePoint document library. "
+                           "Returns id, name, web_url, size, created_at, modified_at, mime_type, is_folder. "
+                           "Locate the drive with graph_show_drives() first. "
+                           "Pass drive as a drive ID (b!...), a web URL, or a display name combined with site.";
         desc.parameter_names = {};
         desc.parameter_types = {};
         desc.examples = {
@@ -950,7 +953,9 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_tables.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_tables);
         FunctionDescription desc;
-        desc.description = "List all named tables in a Microsoft Excel workbook.";
+        desc.description = "List all named tables in a Microsoft Excel workbook. "
+                           "Returns table_name, sheet_name, row_count, column_count. "
+                           "Use the returned table_name with graph_excel_read() to read table data.";
         desc.parameter_names = {"file_path", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -971,7 +976,9 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_worksheets.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_worksheets);
         FunctionDescription desc;
-        desc.description = "List all worksheets in a Microsoft Excel workbook.";
+        desc.description = "List all worksheets in a Microsoft Excel workbook. "
+                           "Returns sheet_name, position, visibility. "
+                           "Use the returned sheet_name with graph_excel_range() to read a cell range.";
         desc.parameter_names = {"file_path", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -994,7 +1001,11 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_range.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_range);
         FunctionDescription desc;
-        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook.";
+        desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook. "
+                           "Returns dynamic columns named by the first header row. "
+                           "sheet_name must match exactly (use graph_excel_worksheets() to discover names). "
+                           "Optionally pass a range address as a third positional argument (e.g. 'A1:D100'); "
+                           "omit it to read the sheet's used range.";
         desc.parameter_names = {"file_path", "sheet_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -1016,7 +1027,10 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_table_data.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(excel_table_data);
         FunctionDescription desc;
-        desc.description = "Read all rows from a named table in a Microsoft Excel workbook.";
+        desc.description = "Read all rows from a named table in a Microsoft Excel workbook. "
+                           "Returns dynamic columns matching the table's header row. "
+                           "table_name must match a name returned by graph_excel_tables(). "
+                           "Use graph_excel_tables() to discover available table names first.";
         desc.parameter_names = {"file_path", "table_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -1042,14 +1056,20 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
 
         CreateTableFunctionInfo info(add_rows);
         FunctionDescription desc;
-        desc.description = "Append rows to an Excel table via the Microsoft Graph API. "
-                           "data should be a JSON 2-D array: '[[v1,v2,...],[v1,v2,...],...]'";
+        desc.description = "Append rows to a named table in a Microsoft Excel workbook. "
+                           "Returns rows_added. "
+                           "data is a JSON 2-D array where each inner array is one row in column order: "
+                           "'[[v1,v2,...],[v1,v2,...],...]'. "
+                           "Column order must match the table's column order (use graph_excel_tables() to verify).";
         desc.parameter_names = {"file_path", "table_name"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
             "SELECT * FROM graph_excel_add_rows('report.xlsx', 'Sales', "
-            "data := '[[1,\"Alice\"],[2,\"Bob\"]]', "
-            "drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')"
+            "data := '[[1,\"Alice\",100.0],[2,\"Bob\",200.0]]', "
+            "drive := 'https://tenant.sharepoint.com/Shared%20Documents', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_add_rows('report.xlsx', 'Sales', "
+            "data := '[[1,\"Alice\"]]', "
+            "site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));
@@ -1068,14 +1088,18 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
 
         CreateTableFunctionInfo info(del_rows);
         FunctionDescription desc;
-        desc.description = "Delete all rows in an Excel table where the column at col_index equals col_value. "
-                           "Returns the number of rows deleted.";
+        desc.description = "Delete all rows in an Excel table where a column value matches. "
+                           "Returns rows_deleted. "
+                           "col_index is 0-based (0 = first column). "
+                           "col_value is always compared as a string; cast numeric IDs to VARCHAR if needed.";
         desc.parameter_names = {"file_path", "table_name", "col_index", "col_value"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
                                 LogicalType::BIGINT,  LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'test_row', "
-            "drive := 'drive-id', secret := 'ms_graph')"
+            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'obsolete_row', "
+            "drive := 'b!abc...', secret := 'ms_graph')",
+            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 2, '42', "
+            "site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};
         info.descriptions.push_back(std::move(desc));

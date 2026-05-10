@@ -732,10 +732,16 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         show_sites.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(show_sites);
         FunctionDescription desc;
-        desc.description = "Search and list SharePoint sites accessible via Microsoft Graph.";
+        desc.description = "Search and list SharePoint sites accessible via Microsoft Graph. "
+                           "Returns id, name, display_name, web_url, created_at, last_modified_at. "
+                           "Pass an optional search term as the first positional argument to filter by name; "
+                           "omit it to list all accessible sites.";
         desc.parameter_names = {};
         desc.parameter_types = {};
-        desc.examples = {"SELECT * FROM graph_show_sites(secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_show_sites(secret := 'ms_graph')",
+            "SELECT * FROM graph_show_sites('Finance', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -747,12 +753,15 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         show_drives.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(show_drives);
         FunctionDescription desc;
-        desc.description = "List document library drives in a SharePoint site. Accepts a composite site_id or a friendly site name.";
-        desc.parameter_names = {"site_id", "secret", "site"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.description = "List document library drives in a SharePoint site. "
+                           "Returns id, name, drive_type, web_url. "
+                           "Pass a composite site_id (guid,guid,guid), a site display name, or a site URL "
+                           "as the first positional argument, or use the site named parameter instead.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples = {
-            "SELECT * FROM graph_show_drives('site-id,guid,guid', secret := 'ms_graph')",
-            "SELECT * FROM graph_show_drives(site := 'Finance', secret := 'ms_graph')"
+            "SELECT * FROM graph_show_drives(site := 'Finance', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_drives('https://tenant.sharepoint.com/sites/Finance', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -765,12 +774,17 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         show_lists.named_parameters["site"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(show_lists);
         FunctionDescription desc;
-        desc.description = "List all lists in a SharePoint site. Accepts a composite site_id or a friendly site name.";
-        desc.parameter_names = {"site_id", "secret", "site"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        desc.description = "List all lists in a SharePoint site. "
+                           "Returns id, name, display_name, list_template, web_url. "
+                           "Pass a composite site_id (guid,guid,guid), a site display name, or a site URL "
+                           "as the first positional argument, or use the site named parameter instead. "
+                           "Use the returned id or display_name as the list argument of "
+                           "graph_sharepoint_list_read(), graph_describe_list(), etc.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples = {
-            "SELECT * FROM graph_show_lists('site-id-here', secret := 'ms_graph')",
-            "SELECT * FROM graph_show_lists(site := 'Finance', secret := 'ms_graph')"
+            "SELECT * FROM graph_show_lists(site := 'Finance', secret := 'ms_graph')",
+            "SELECT * FROM graph_show_lists('https://tenant.sharepoint.com/sites/Finance', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -783,10 +797,17 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         describe_list.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(describe_list);
         FunctionDescription desc;
-        desc.description = "Describe the column schema of a SharePoint list.";
-        desc.parameter_names = {"site_id", "list_id", "secret"};
+        desc.description = "Describe the column schema of a SharePoint list. "
+                           "Returns column_name, column_type, is_required, is_hidden. "
+                           "Both arguments accept a GUID, display name, or site URL. "
+                           "Use this to discover field names before calling "
+                           "graph_sharepoint_create_item() or graph_sharepoint_update_item().";
+        desc.parameter_names = {"site_id_or_url", "list_id_or_name", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {"SELECT * FROM graph_describe_list('site-id', 'list-id', secret := 'ms_graph')"};
+        desc.examples = {
+            "SELECT * FROM graph_describe_list('Finance', 'Budget', secret := 'ms_graph')",
+            "SELECT * FROM graph_describe_list('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -798,12 +819,15 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         list_items.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(list_items);
         FunctionDescription desc;
-        desc.description = "Read all items from a SharePoint list. Both site and list accept GUIDs, display names, or site URLs.";
+        desc.description = "Read all items from a SharePoint list. "
+                           "Returns dynamic columns matching the list schema (use graph_describe_list() to inspect them). "
+                           "Also returns item_id (SharePoint internal integer ID) on every row. "
+                           "Both arguments accept a GUID, display name, or site URL.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_sharepoint_list_read('site-guid', 'list-guid', secret := 'ms_graph')",
-            "SELECT * FROM graph_sharepoint_list_read('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')",
+            "SELECT * FROM graph_sharepoint_list_read('Finance', 'Budget', secret := 'ms_graph')",
+            "SELECT * FROM graph_sharepoint_list_read('https://tenant.sharepoint.com/sites/Finance', 'Budget', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -817,11 +841,16 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         create_item.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(create_item);
         FunctionDescription desc;
-        desc.description = "Create a new item in a SharePoint list. fields_json is a JSON object of field name/value pairs.";
+        desc.description = "Create a new item in a SharePoint list. "
+                           "Returns item_id (the newly created item's integer ID). "
+                           "fields_json is a JSON object of SharePoint internal field name/value pairs "
+                           "(use graph_describe_list() to find field names). "
+                           "Both site and list accept a GUID, display name, or URL.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "fields_json", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_sharepoint_create_item('Finance', 'Budget', '{\"Title\":\"Q1\"}', secret := 'ms_graph')"
+            "SELECT * FROM graph_sharepoint_create_item('Finance', 'Budget', '{\"Title\":\"Q1\",\"Status\":\"Active\"}', secret := 'ms_graph')",
+            "SELECT * FROM graph_sharepoint_create_item('https://tenant.sharepoint.com/sites/Finance', 'Budget', '{\"Title\":\"Q2\"}', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
@@ -846,12 +875,17 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         CreateScalarFunctionInfo info(std::move(update_set));
         FunctionDescription desc;
         desc.description = "Update fields of an existing SharePoint list item. Returns true on success. "
-                           "fields_json is a JSON object of field name/value pairs.";
+                           "item_id is the SharePoint integer ID (from the item_id column of "
+                           "graph_sharepoint_list_read()). "
+                           "fields_json is a JSON object of SharePoint internal field name/value pairs. "
+                           "secret is positional (last argument), not a named parameter.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "fields_json", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT graph_sharepoint_update_item('Finance', 'Budget', '42', '{\"Status\":\"Approved\"}', 'ms_graph')"};
+            "SELECT graph_sharepoint_update_item('Finance', 'Budget', '42', '{\"Status\":\"Approved\"}', 'ms_graph')",
+            "UPDATE items SET ok = graph_sharepoint_update_item('Finance', 'Budget', item_id::VARCHAR, json_object('Status', new_status), 'ms_graph') FROM items"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
@@ -873,12 +907,17 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
 
         CreateScalarFunctionInfo info(std::move(delete_set));
         FunctionDescription desc;
-        desc.description = "Delete an item from a SharePoint list by its item ID. Returns true on success.";
+        desc.description = "Delete an item from a SharePoint list by its item ID. Returns true on success. "
+                           "item_id is the SharePoint integer ID (from the item_id column of "
+                           "graph_sharepoint_list_read()). "
+                           "secret is positional (last argument), not a named parameter.";
         desc.parameter_names = {"site_id_or_url", "list_id_or_name", "item_id", "secret"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT graph_sharepoint_delete_item('Finance', 'Budget', '42', 'ms_graph')"};
+            "SELECT graph_sharepoint_delete_item('Finance', 'Budget', '42', 'ms_graph')",
+            "SELECT graph_sharepoint_delete_item('Finance', 'Budget', item_id::VARCHAR, 'ms_graph') FROM graph_sharepoint_list_read('Finance', 'Budget', secret := 'ms_graph') WHERE Title = 'OldEntry'"
+        };
         desc.categories = {"microsoft", "graph", "sharepoint"};
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
