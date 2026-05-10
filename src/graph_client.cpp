@@ -14,6 +14,15 @@ namespace erpl_web {
 namespace {
 static constexpr size_t MAX_GRAPH_PAGES = 10000;
 
+static std::shared_ptr<yyjson_doc> ParseJsonDocument(const std::string &json_body,
+                                                     const std::string &error_context) {
+    auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(json_body.c_str(), json_body.size(), 0), yyjson_doc_free);
+    if (!doc) {
+        throw duckdb::IOException("Failed to parse Microsoft Graph JSON response: " + error_context);
+    }
+    return doc;
+}
+
 static void AppendJsonValue(std::string &target, yyjson_val *value) {
     size_t json_len = 0;
     char *json_str = yyjson_val_write(value, 0, &json_len);
@@ -74,6 +83,11 @@ std::string GraphClient::EscapeODataStringLiteral(const std::string &value) {
         }
     }
     return result;
+}
+
+bool GraphClient::LooksLikeGuid(const std::string &value) {
+    return value.size() == 36 && value[8] == '-' && value[13] == '-' &&
+           value[18] == '-' && value[23] == '-';
 }
 
 static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
@@ -186,11 +200,7 @@ void GraphClient::DeleteWithHeaders(const std::string &url,
 }
 
 std::optional<std::string> GraphClient::ExtractNextLink(const std::string &json_body) {
-    auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(json_body.c_str(), json_body.size(), 0), yyjson_doc_free);
-    if (!doc) {
-        throw duckdb::IOException("Failed to parse Microsoft Graph response while checking pagination");
-    }
-
+    auto doc = ParseJsonDocument(json_body, "pagination nextLink");
     auto root = yyjson_doc_get_root(doc.get());
     auto next = root ? yyjson_obj_get(root, "@odata.nextLink") : nullptr;
     if (next && yyjson_is_str(next)) {
@@ -222,11 +232,7 @@ std::string GraphClient::GetAllPagesMerged(const std::string &url) {
     bool first_item = true;
 
     for (const auto &page : pages) {
-        auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(page.c_str(), page.size(), 0), yyjson_doc_free);
-        if (!doc) {
-            throw duckdb::IOException("Failed to parse Microsoft Graph paged response");
-        }
-
+        auto doc = ParseJsonDocument(page, "paged value merge");
         auto root = yyjson_doc_get_root(doc.get());
         auto value_arr = root ? yyjson_obj_get(root, "value") : nullptr;
         if (!value_arr || !yyjson_is_arr(value_arr)) {
@@ -253,8 +259,7 @@ std::string GraphClient::ResolveUserSegment(const std::string &user) {
         return "me";
     }
     // GUID (8-4-4-4-12, 36 chars): safe for URL paths, no encoding needed.
-    if (user.size() == 36 && user[8] == '-' && user[13] == '-' &&
-        user[18] == '-' && user[23] == '-') {
+    if (LooksLikeGuid(user)) {
         return "users/" + user;
     }
     // UPN (user@tenant.com) or email: percent-encode @ -> %40 so the segment
@@ -300,6 +305,64 @@ std::vector<std::string> GraphJsonStringArray(yyjson_val *arr) {
         }
     }
     return result;
+}
+
+std::optional<std::string> GraphJsonGetRootString(const std::string &json_body,
+                                                  const char *key,
+                                                  const std::string &error_context) {
+    auto doc = ParseJsonDocument(json_body, error_context);
+    auto root = yyjson_doc_get_root(doc.get());
+    auto val = root ? yyjson_obj_get(root, key) : nullptr;
+    if (val && yyjson_is_str(val)) {
+        return std::string(yyjson_get_str(val));
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphJsonFindStringInArray(const std::string &json_body,
+                                                       const char *array_key,
+                                                       const char *match_key,
+                                                       const std::string &match_value,
+                                                       const char *return_key,
+                                                       const std::string &error_context) {
+    auto doc = ParseJsonDocument(json_body, error_context);
+    auto root = yyjson_doc_get_root(doc.get());
+    auto arr = root ? yyjson_obj_get(root, array_key) : nullptr;
+    if (!arr || !yyjson_is_arr(arr)) {
+        return std::nullopt;
+    }
+
+    size_t idx, max;
+    yyjson_val *item;
+    yyjson_arr_foreach(arr, idx, max, item) {
+        auto match_val = yyjson_obj_get(item, match_key);
+        auto result_val = yyjson_obj_get(item, return_key);
+        if (match_val && yyjson_is_str(match_val) &&
+            result_val && yyjson_is_str(result_val) &&
+            match_value == yyjson_get_str(match_val)) {
+            return std::string(yyjson_get_str(result_val));
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphJsonFirstStringInArray(const std::string &json_body,
+                                                       const char *array_key,
+                                                       const char *return_key,
+                                                       const std::string &error_context) {
+    auto doc = ParseJsonDocument(json_body, error_context);
+    auto root = yyjson_doc_get_root(doc.get());
+    auto arr = root ? yyjson_obj_get(root, array_key) : nullptr;
+    if (!arr || !yyjson_is_arr(arr)) {
+        return std::nullopt;
+    }
+
+    auto first = yyjson_arr_get_first(arr);
+    auto result_val = first ? yyjson_obj_get(first, return_key) : nullptr;
+    if (result_val && yyjson_is_str(result_val)) {
+        return std::string(yyjson_get_str(result_val));
+    }
+    return std::nullopt;
 }
 
 } // namespace erpl_web

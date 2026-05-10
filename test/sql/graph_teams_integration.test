@@ -48,9 +48,9 @@ SELECT COUNT(*) FROM (
 ----
 6
 
-# Test: graph_team_channels function exists
+# Test: graph_teams_channels function exists
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_team_channels';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_teams_channels';
 ----
 1
 

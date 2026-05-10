@@ -1,7 +1,6 @@
 #include "graph_planner_client.hpp"
 #include "graph_client.hpp"
 #include "tracing.hpp"
-#include "yyjson.hpp"
 #include <map>
 #include <stdexcept>
 
@@ -116,8 +115,7 @@ std::string GraphPlannerClient::GetMyTasks() {
 }
 
 static bool LooksLikePlannerGuid(const std::string &s) {
-    // Planner GUIDs follow the standard 8-4-4-4-12 format (36 chars with hyphens)
-    return s.size() == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-';
+    return GraphClient::LooksLikeGuid(s);
 }
 
 std::string GraphPlannerClient::ResolveBucketId(const std::string &plan_id, const std::string &name_or_id) {
@@ -128,38 +126,15 @@ std::string GraphPlannerClient::ResolveBucketId(const std::string &plan_id, cons
     ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Resolving bucket name '" + name_or_id + "' in plan " + plan_id);
     const std::string buckets_json = GetPlanBuckets(plan_id);
 
-    duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(buckets_json.c_str(), buckets_json.size(), 0);
-    if (!doc) {
-        throw std::runtime_error("Failed to parse buckets response when resolving bucket: " + name_or_id);
-    }
-
-    std::string resolved;
-    duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-    duckdb_yyjson::yyjson_val *arr  = duckdb_yyjson::yyjson_obj_get(root, "value");
-    if (arr && duckdb_yyjson::yyjson_is_arr(arr)) {
-        size_t idx, max;
-        duckdb_yyjson::yyjson_val *bucket;
-        yyjson_arr_foreach(arr, idx, max, bucket) {
-            duckdb_yyjson::yyjson_val *name_val = duckdb_yyjson::yyjson_obj_get(bucket, "name");
-            duckdb_yyjson::yyjson_val *id_val   = duckdb_yyjson::yyjson_obj_get(bucket, "id");
-            if (name_val && duckdb_yyjson::yyjson_is_str(name_val) &&
-                id_val   && duckdb_yyjson::yyjson_is_str(id_val)) {
-                if (name_or_id == duckdb_yyjson::yyjson_get_str(name_val)) {
-                    resolved = duckdb_yyjson::yyjson_get_str(id_val);
-                    break;
-                }
-            }
-        }
-    }
-    duckdb_yyjson::yyjson_doc_free(doc);
-
-    if (resolved.empty()) {
+    auto resolved = GraphJsonFindStringInArray(buckets_json, "value", "name", name_or_id, "id",
+                                               "buckets response when resolving bucket '" + name_or_id + "'");
+    if (!resolved) {
         throw std::runtime_error(
             "No Planner bucket found with name '" + name_or_id + "' in plan '" + plan_id + "'");
     }
 
-    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Resolved bucket '" + name_or_id + "' → " + resolved);
-    return resolved;
+    ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Resolved bucket '" + name_or_id + "' → " + *resolved);
+    return *resolved;
 }
 
 // Normalise a user-supplied date string to the UTC datetime format Planner expects.
@@ -225,34 +200,22 @@ std::string GraphPlannerClient::CreateTask(const std::string &plan_id,
     const std::string task_json = graph_client.Post(GraphPlannerUrlBuilder::BuildTasksUrl(), body);
 
     // Extract task ID from response
-    std::string task_id;
-    {
-        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(task_json.c_str(), task_json.size(), 0);
-        if (!doc) {
-            throw std::runtime_error("Failed to parse Planner task creation response");
-        }
-        duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-        duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
-        if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
-            task_id = duckdb_yyjson::yyjson_get_str(id_val);
-        }
-        duckdb_yyjson::yyjson_doc_free(doc);
-    }
+    auto task_id = GraphJsonGetRootString(task_json, "id", "Planner task creation response");
 
-    if (task_id.empty()) {
+    if (!task_id) {
         throw std::runtime_error("Planner task creation succeeded but returned no task id");
     }
 
     // If a description was requested, PATCH /planner/tasks/{id}/details.
     // Planner requires If-Match for optimistic concurrency; "If-Match: *" forces the update.
     if (!params.description.empty()) {
-        const std::string details_url = GraphPlannerUrlBuilder::BuildTaskDetailsUrl(task_id);
+        const std::string details_url = GraphPlannerUrlBuilder::BuildTaskDetailsUrl(*task_id);
         const std::string details_body = "{\"description\":" + JsonString(params.description) + "}";
         graph_client.PatchWithHeaders(details_url, details_body, {{"If-Match", "*"}});
-        ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Patched description for task " + task_id);
+        ERPL_TRACE_DEBUG("GRAPH_PLANNER", "Patched description for task " + *task_id);
     }
 
-    return task_id;
+    return *task_id;
 }
 
 } // namespace erpl_web

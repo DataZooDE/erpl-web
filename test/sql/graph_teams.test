@@ -8,9 +8,9 @@ require erpl_web
 statement ok
 SELECT * FROM duckdb_functions() WHERE function_name = 'graph_my_teams';
 
-# Test that graph_team_channels function exists
+# Test that graph_teams_channels function exists
 statement ok
-SELECT * FROM duckdb_functions() WHERE function_name = 'graph_team_channels';
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_teams_channels';
 
 # Test that graph_team_members function exists
 statement ok

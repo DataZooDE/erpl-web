@@ -30,6 +30,7 @@ public:
     static std::string UrlEncode(const std::string &value, bool preserve_slashes = false);
     static std::string StripLeadingSlash(const std::string &value);
     static std::string EscapeODataStringLiteral(const std::string &value);
+    static bool LooksLikeGuid(const std::string &value);
     static std::optional<std::string> ExtractNextLink(const std::string &json_body);
 
     // Returns the URL path component for a user: "me" when user is empty,
@@ -46,5 +47,18 @@ private:
 std::string GraphJsonGetString(duckdb_yyjson::yyjson_val *obj, const char *key);
 bool GraphJsonGetBool(duckdb_yyjson::yyjson_val *obj, const char *key, bool default_value = false);
 std::vector<std::string> GraphJsonStringArray(duckdb_yyjson::yyjson_val *arr);
+std::optional<std::string> GraphJsonGetRootString(const std::string &json_body,
+                                                  const char *key,
+                                                  const std::string &error_context);
+std::optional<std::string> GraphJsonFindStringInArray(const std::string &json_body,
+                                                       const char *array_key,
+                                                       const char *match_key,
+                                                       const std::string &match_value,
+                                                       const char *return_key,
+                                                       const std::string &error_context);
+std::optional<std::string> GraphJsonFirstStringInArray(const std::string &json_body,
+                                                       const char *array_key,
+                                                       const char *return_key,
+                                                       const std::string &error_context);
 
 } // namespace erpl_web

@@ -19,6 +19,11 @@ TEST_CASE("GraphTeamsUrlBuilder builds team URLs", "[graph_teams][url]") {
         REQUIRE(url == "https://graph.microsoft.com/v1.0/me/joinedTeams");
     }
 
+    SECTION("My teams URL for explicit UPN") {
+        auto url = GraphTeamsUrlBuilder::BuildMyTeamsUrl("jr@data-zoo.de");
+        REQUIRE(url == "https://graph.microsoft.com/v1.0/users/jr%40data-zoo.de/joinedTeams");
+    }
+
     SECTION("Single team URL") {
         auto url = GraphTeamsUrlBuilder::BuildTeamUrl("team-123");
         REQUIRE(url == "https://graph.microsoft.com/v1.0/teams/team-123");
@@ -34,6 +39,11 @@ TEST_CASE("GraphTeamsUrlBuilder builds channel URLs", "[graph_teams][url]") {
     SECTION("Single channel URL") {
         auto url = GraphTeamsUrlBuilder::BuildChannelUrl("team-abc", "channel-xyz");
         REQUIRE(url == "https://graph.microsoft.com/v1.0/teams/team-abc/channels/channel-xyz");
+    }
+
+    SECTION("Single channel URL encodes Teams thread IDs") {
+        auto url = GraphTeamsUrlBuilder::BuildChannelUrl("team-abc", "19:abc@thread.tacv2");
+        REQUIRE(url == "https://graph.microsoft.com/v1.0/teams/team-abc/channels/19%3Aabc%40thread.tacv2");
     }
 }
 
@@ -65,8 +75,8 @@ TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckd
         REQUIRE(result->RowCount() == 1);
     }
 
-    SECTION("graph_team_channels function exists") {
-        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_team_channels'");
+    SECTION("graph_teams_channels function exists") {
+        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_teams_channels'");
         REQUIRE(result->RowCount() == 1);
     }
 
@@ -89,9 +99,9 @@ TEST_CASE("Graph Teams functions enforce required parameters", "[graph_teams][du
 
     con.Query("LOAD erpl_web");
 
-    SECTION("graph_team_channels requires team_id argument") {
+    SECTION("graph_teams_channels requires team_id argument") {
         // Call with no args → binder rejects missing required positional arg
-        auto result = con.Query("SELECT * FROM graph_team_channels()");
+        auto result = con.Query("SELECT * FROM graph_teams_channels()");
         REQUIRE(result->HasError());
     }
 

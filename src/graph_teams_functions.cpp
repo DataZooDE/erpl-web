@@ -174,7 +174,7 @@ void GraphTeamsFunctions::MyTeamsScan(
 }
 
 // =============================================================================
-// graph_team_channels Implementation
+// graph_teams_channels Implementation
 // =============================================================================
 
 unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
@@ -184,7 +184,7 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamChannelsBind(
     vector<std::string> &names) {
 
     if (input.inputs.empty()) {
-        throw BinderException("graph_team_channels requires a team_id parameter");
+        throw BinderException("graph_teams_channels requires a team_id parameter");
     }
 
     auto bind_data         = make_uniq<TeamChannelsBindData>();
@@ -408,7 +408,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction team_channels_func("graph_team_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
+        TableFunction team_channels_func("graph_teams_channels", {LogicalType::VARCHAR}, TeamChannelsScan, TeamChannelsBind);
         team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
         team_channels_func.named_parameters["user"]   = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(team_channels_func);
@@ -418,8 +418,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {"team_id_or_name"};
         desc.parameter_types = {LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_team_channels('Engineering', secret := 'ms_graph')",
-            "SELECT * FROM graph_team_channels('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
+            "SELECT * FROM graph_teams_channels('Engineering', secret := 'ms_graph')",
+            "SELECT * FROM graph_teams_channels('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));

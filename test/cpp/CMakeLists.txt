@@ -44,6 +44,7 @@ list(APPEND TEST_SOURCES
     test_microsoft_entra_auth.cpp
     test_business_central.cpp
     test_dataverse.cpp
+    test_graph_client.cpp
     test_graph_excel.cpp
     test_graph_sharepoint.cpp
     test_graph_planner.cpp

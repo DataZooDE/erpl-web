@@ -179,6 +179,26 @@ First safe changes:
 - Replace the string-based XML parser with `tinyxml2` behind the same returned
   `duckdb::Value` shape, with tests covering representative metadata.
 
+Progress applied:
+
+- Added local `yyjson_doc` RAII ownership for the DWAAS JSON schema parsers.
+- Centralized analytical/relational schema `STRUCT`/`LIST` type and value
+  builders so bind schemas and row values share the same construction path.
+- Simplified DWAAS analytical and relational JSON parsing around small helpers
+  for JSON field extraction, `definitions` traversal, and field classification.
+- Added focused C++ parser coverage for analytical schema JSON, relational
+  schema JSON, and invalid JSON.
+
+Remaining Datasphere cleanup:
+
+- Move the parser/value helpers into dedicated implementation files once the
+  XML parser tests are in place.
+- Replace the string-based `ParseAnalyticalMetadata` XML parser with
+  `tinyxml2`.
+- Review the double metadata fetch in `FetchDetailedAnalyticalSchema` before
+  changing request behavior.
+- Split `LoadResourceDetails` after parser behavior is pinned with tests.
+
 ### Second Priority: `src/include/odata_edm.hpp`
 
 This header is about 2.5k lines and contains model definitions, XML parsing,
@@ -233,8 +253,8 @@ path still has too many reasons to change. Good next steps are:
   that assert actual bind, URL, and conversion behavior.
 - Add focused `odata_describe` tests that assert the schema rows for entity
   sets, properties, navigation properties, and functions.
-- Start the next codebase-wide cleanup in `src/datasphere_catalog.cpp` using
-  the staged split above.
+- Continue the `src/datasphere_catalog.cpp` cleanup by replacing the XML
+  string parser with a tested `tinyxml2` implementation.
 - Move `src/include/odata_edm.hpp` implementation details into `.cpp` files
   after the Datasphere parser work has tests.
 - Continue extracting Graph helpers only where at least two function families

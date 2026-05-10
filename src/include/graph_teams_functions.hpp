@@ -23,7 +23,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_team_channels(secret_name, team_id) - List channels in a team
+    // graph_teams_channels(secret_name, team_id) - List channels in a team
     static duckdb::unique_ptr<duckdb::FunctionData> TeamChannelsBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,
