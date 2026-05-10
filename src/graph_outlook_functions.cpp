@@ -600,10 +600,15 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
-        desc.description = "List Outlook calendars for a user via Microsoft Graph.";
+        desc.description = "List Outlook calendars for a user via Microsoft Graph. "
+                           "Returns id, name, color, is_default_calendar, can_edit. "
+                           "Omit user to query the authenticated user's calendars (delegated); "
+                           "provide user (GUID, UPN, or email) for app-only auth.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples    = {
-            "SELECT * FROM graph_calendars(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_calendars(secret := 'ms_graph')"
+            "SELECT * FROM graph_calendars(secret := 'ms_graph')",
+            "SELECT * FROM graph_calendars(user := 'jr@contoso.com', secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
@@ -618,12 +623,18 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         fn.named_parameters["secret"]      = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
-        desc.description = "List calendar events for a user via Microsoft Graph. "
-                           "Provide start_date + end_date to use the calendarView endpoint for date-bounded queries.";
+        desc.description = "List Outlook calendar events for a user via Microsoft Graph. "
+                           "Returns id, subject, body_preview, start_time, end_time, location, "
+                           "organizer_name, organizer_email, is_all_day, is_cancelled, web_link. "
+                           "Use start_date + end_date (ISO 8601 date or datetime) for a date-bounded "
+                           "calendarView query; omit both for all upcoming events. "
+                           "Use calendar_id to target a specific calendar instead of the default.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples    = {
-            "SELECT * FROM graph_calendar_events(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_calendar_events(user := 'user-id', start_date := '2024-01-01', end_date := '2024-12-31', secret := 'ms_graph')",
-            "SELECT * FROM graph_calendar_events(secret := 'ms_graph')"
+            "SELECT * FROM graph_calendar_events(secret := 'ms_graph')",
+            "SELECT * FROM graph_calendar_events(start_date := '2024-01-01', end_date := '2024-12-31', secret := 'ms_graph')",
+            "SELECT * FROM graph_calendar_events(user := 'jr@contoso.com', calendar_id := 'calendar-guid', secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
@@ -635,10 +646,15 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
-        desc.description = "List Outlook contacts for a user via Microsoft Graph.";
+        desc.description = "List Outlook contacts for a user via Microsoft Graph. "
+                           "Returns id, display_name, email, phone, company, job_title. "
+                           "Omit user to query the authenticated user's contacts (delegated); "
+                           "provide user (GUID, UPN, or email) for app-only auth.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples    = {
-            "SELECT * FROM graph_contacts(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_contacts(secret := 'ms_graph')"
+            "SELECT * FROM graph_contacts(secret := 'ms_graph')",
+            "SELECT display_name, email FROM graph_contacts(user := 'jr@contoso.com', secret := 'ms_graph') WHERE company = 'Acme'"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
@@ -650,10 +666,15 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
-        desc.description = "List Outlook mail folders for a user via Microsoft Graph.";
+        desc.description = "List Outlook mail folders for a user via Microsoft Graph. "
+                           "Returns id, display_name, total_item_count, unread_item_count. "
+                           "Use the returned display_name or id as the folder parameter of "
+                           "graph_outlook_emails() to filter messages by folder.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples    = {
-            "SELECT * FROM graph_outlook_mail_folders(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_outlook_mail_folders(secret := 'ms_graph')"
+            "SELECT * FROM graph_outlook_mail_folders(secret := 'ms_graph')",
+            "SELECT display_name, unread_item_count FROM graph_outlook_mail_folders(user := 'jr@contoso.com', secret := 'ms_graph') ORDER BY unread_item_count DESC"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
@@ -666,13 +687,18 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
         FunctionDescription desc;
-        desc.description = "List email messages (metadata only) for a user via Microsoft Graph. "
-                           "Pass folder := 'inbox' / 'sentitems' / 'drafts' / 'deleteditems' "
-                           "or any display name from graph_outlook_mail_folders().";
+        desc.description = "List Outlook email messages for a user via Microsoft Graph. "
+                           "Returns id, subject, sender_name, sender_email, received_datetime, "
+                           "body_preview, is_read, has_attachments, web_link. "
+                           "Use folder to filter by a well-known name ('inbox', 'sentitems', "
+                           "'drafts', 'deleteditems') or any displayName from "
+                           "graph_outlook_mail_folders(). Pages lazily through large mailboxes.";
+        desc.parameter_names = {};
+        desc.parameter_types = {};
         desc.examples    = {
-            "SELECT * FROM graph_outlook_emails(user := 'user-id', secret := 'ms_graph')",
-            "SELECT * FROM graph_outlook_emails(user := 'user-id', folder := 'inbox', secret := 'ms_graph')",
-            "SELECT * FROM graph_outlook_emails(secret := 'ms_graph')"
+            "SELECT * FROM graph_outlook_emails(secret := 'ms_graph')",
+            "SELECT subject, sender_name, received_datetime FROM graph_outlook_emails(folder := 'inbox', secret := 'ms_graph') WHERE NOT is_read",
+            "SELECT * FROM graph_outlook_emails(user := 'jr@contoso.com', folder := 'sentitems', secret := 'ms_graph')"
         };
         desc.categories  = {"microsoft", "graph", "outlook"};
         info.descriptions.push_back(std::move(desc));
