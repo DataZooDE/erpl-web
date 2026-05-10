@@ -13,6 +13,21 @@ ifeq ($(OS),Windows_NT)
     SKIP_TESTS=1
 endif
 
+# Fast incremental build for local development.
+# Skips cmake reconfiguration (and the vcpkg compiler-hash check that comes with it)
+# when the build directory is already configured. Ninja detects CMakeLists.txt changes
+# on its own and re-runs cmake automatically when needed.
+# Use 'make debug' to force a full reconfigure (e.g. after adding a new dependency).
+.PHONY: dev
+dev:
+	@if [ ! -f build/debug/build.ninja ]; then \
+		echo "Build directory not configured yet — running full cmake configure..."; \
+		mkdir -p build/debug && \
+		cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_DEBUG_FLAGS) $(VCPKG_MANIFEST_FLAGS) \
+			-DCMAKE_BUILD_TYPE=Debug -S $(DUCKDB_SRCDIR) -B build/debug; \
+	fi
+	cmake --build build/debug --config Debug
+
 release_win: ${EXTENSION_CONFIG_STEP}
 	cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_RELEASE_FLAGS) $(VCPKG_MANIFEST_FLAGS) -DCMAKE_BUILD_TYPE=Release -S $(DUCKDB_SRCDIR) -B build/release
 	cmake --build build/release --config Release --parallel

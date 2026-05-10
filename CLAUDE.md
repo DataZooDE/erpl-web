@@ -28,32 +28,43 @@ This keeps institutional knowledge in the repo and prevents rediscovering the sa
 
 ## Build & Development Commands
 
-### Quick Build with Ninja (Recommended)
+### Fast Incremental Build for Local Development (Recommended)
 
-**Always use Ninja for builds to significantly speed up compilation:**
+**Use `make dev` for day-to-day iteration — it skips cmake reconfiguration:**
 ```bash
-# Build debug version with Ninja (parallel compilation)
-GEN=ninja make debug
+# Fast incremental build (skips cmake configure when already configured)
+make dev
 
-# Build release version with Ninja
-GEN=ninja make release
-
-# Run tests
+# Run tests after building
 make test_debug
 ```
 
-**Why Ninja?** Ninja is a build system designed for speed and parallelization:
-- Automatically uses all CPU cores
-- Incremental builds are much faster than make
-- Reduces build time by 50-70% compared to default make
-- Highly recommended for iterative development
+**Why `make dev` instead of `make debug`?**
+
+`make debug` (from `extension-ci-tools/makefiles/duckdb_extension.Makefile`) always runs
+`cmake -S duckdb/ -B build/debug` unconditionally, which triggers vcpkg's compiler-hash
+detection (`Detecting compiler hash for triplet x64-linux...`) even when nothing has changed.
+This adds 30–60 seconds to every build regardless of what was edited.
+
+`make dev` checks whether `build/debug/build.ninja` already exists and only runs cmake
+configure on the first build or after `make clean`. Ninja's own dependency scanner detects
+`CMakeLists.txt` changes and re-runs cmake configure automatically when needed, so you never
+miss a reconfiguration that matters.
+
+**When to use each target:**
+
+| Target | When to use |
+|--------|-------------|
+| `make dev` | Normal iterative development — fastest, skips unnecessary reconfigure |
+| `make debug` | First-time setup or after adding a new vcpkg dependency |
+| `GEN=ninja make debug` | Force full reconfigure with Ninja (e.g. CI-like clean build) |
 
 ### Standard Build Commands
 
 Without Ninja (slower, but works everywhere):
 ```bash
-make debug      # Debug build
-make release    # Release build
+make debug      # Full reconfigure + debug build
+make release    # Full reconfigure + release build
 ```
 
 **Note:** Use `make clean` seldomly, it leads to long build times and is often not necessary.
