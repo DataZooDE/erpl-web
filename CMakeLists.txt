@@ -131,6 +131,8 @@ set(EXTENSION_SOURCES
     src/business_central_secret.cpp
     src/business_central_client.cpp
     src/business_central_functions.cpp
+    src/business_central_catalog.cpp
+    src/business_central_storage.cpp
     src/dataverse_secret.cpp
     src/dataverse_client.cpp
     src/dataverse_functions.cpp

@@ -28,6 +28,7 @@
 #include "microsoft_entra_secret.hpp"
 #include "business_central_secret.hpp"
 #include "business_central_functions.hpp"
+#include "business_central_storage.hpp"
 #include "dataverse_secret.hpp"
 #include "dataverse_functions.hpp"
 #include "graph_excel_secret.hpp"
@@ -730,6 +731,15 @@ static void RegisterBusinessCentralFunctions(ExtensionLoader &loader)
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
+
+    // Register BC storage extension (enables ATTACH 'secret' AS bc (TYPE business_central, COMPANY '...'))
+#ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
+    auto &bc_callback_manager = ExtensionCallbackManager::Get(loader.GetDatabaseInstance());
+    bc_callback_manager.Register("business_central", shared_ptr<StorageExtension>(erpl_web::CreateBcStorageExtension().release()));
+#else
+    auto &bc_config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+    bc_config.storage_extensions["business_central"] = erpl_web::CreateBcStorageExtension();
+#endif
 }
 
 static void RegisterDataverseFunctions(ExtensionLoader &loader)
