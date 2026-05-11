@@ -22,8 +22,9 @@ test/fixtures/delta_share/*.json
 *.log.*
 debug.log
 
-# Microsoft test credentials - NEVER commit these
+# Service credential files - NEVER commit these
 .env.microsoft
+.env.business_central
 .env.local
 .env.test
 *credentials*.json

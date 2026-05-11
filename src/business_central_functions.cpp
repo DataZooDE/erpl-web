@@ -2,6 +2,7 @@
 #include "business_central_secret.hpp"
 #include "business_central_client.hpp"
 #include "odata_read_functions.hpp"
+#include "odata_url_helpers.hpp"
 #include "odata_edm.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
@@ -291,18 +292,28 @@ static unique_ptr<FunctionData> BcReadBind(
     // Resolve auth
     auto auth_info = ResolveBusinessCentralAuth(context, secret_name);
 
-    // Create OData client
-    auto client = BusinessCentralClientFactory::CreateEntitySetClient(
-        auth_info.tenant_id,
-        auth_info.environment,
-        company_id,
-        entity_name,
-        auth_info.auth_params
-    );
+    // Build URLs. The API base is the OData service root; BC serves $metadata
+    // there, NOT under companies({id}) — which is the default derived by
+    // stripping the last path segment from the entity set URL.
+    auto base_url = BusinessCentralUrlBuilder::BuildApiUrl(auth_info.tenant_id, auth_info.environment);
+    auto company_url = BusinessCentralUrlBuilder::BuildCompanyUrl(base_url, company_id);
+    auto entity_set_url = BusinessCentralUrlBuilder::BuildEntitySetUrl(company_url, entity_name);
+    auto metadata_url = base_url + "/$metadata";
 
-    // Create bind data using OData infrastructure
+    // Create the OData client directly so we can pin the metadata URL to the
+    // service root before GetResultNames() triggers DetectODataVersion().
+    // FromEntitySetRoot's "conventional V4 path" would compute the wrong URL
+    // (companies(id)/$metadata) at bind time when current_response is still null.
+    HttpParams http_params;
+    http_params.url_encode = false;
+    auto http_client = std::make_shared<HttpClient>(http_params);
+    HttpUrl es_url(entity_set_url);
+    ODataUrlCodec::ensureJsonFormat(es_url);
+    auto odata_client = std::make_shared<ODataEntitySetClient>(http_client, es_url, auth_info.auth_params);
+    odata_client->SetMetadataContextUrl(metadata_url);
+
     auto bind_data = make_uniq<BcReadBindData>();
-    bind_data->odata_bind_data = ODataReadBindData::FromEntitySetClient(client);
+    bind_data->odata_bind_data = ODataReadBindData::FromEntitySetClient(odata_client);
 
     // Handle expand parameter
     if (input.named_parameters.count("expand")) {

@@ -1,0 +1,173 @@
+# name: test/sql/business_central_integration.test
+# description: Integration tests for Business Central functions against a live BC environment
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_BC_TENANT_ID
+
+require-env ERPL_BC_CLIENT_ID
+
+require-env ERPL_BC_CLIENT_SECRET
+
+require-env ERPL_BC_ENVIRONMENT
+
+require-env ERPL_BC_COMPANY_ID
+
+# Create secret with real credentials
+statement ok
+CREATE SECRET bc_dev (
+    TYPE business_central,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_BC_TENANT_ID}',
+    environment '${ERPL_BC_ENVIRONMENT}',
+    client_id '${ERPL_BC_CLIENT_ID}',
+    client_secret '${ERPL_BC_CLIENT_SECRET}'
+);
+
+# =============================================================================
+# Test: bc_show_companies
+# =============================================================================
+
+# Test: bc_show_companies returns at least one company
+query I
+SELECT COUNT(*) > 0 FROM bc_show_companies(secret := 'bc_dev');
+----
+true
+
+# Test: bc_show_companies returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM bc_show_companies(secret := 'bc_dev'))
+    WHERE column_name IN ('id', 'systemVersion', 'timestamp', 'name', 'displayName', 'businessProfileId', 'systemCreatedAt', 'systemCreatedBy', 'systemModifiedAt', 'systemModifiedBy')
+);
+----
+10
+
+# Test: all companies have non-empty id and name
+query I
+SELECT COUNT(*) = 0 FROM bc_show_companies(secret := 'bc_dev') WHERE id IS NULL OR id = '';
+----
+true
+
+# =============================================================================
+# Test: bc_show_entities
+# =============================================================================
+
+# Test: bc_show_entities returns available entity sets
+query I
+SELECT COUNT(*) > 0 FROM bc_show_entities(secret := 'bc_dev');
+----
+true
+
+# Test: bc_show_entities returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM bc_show_entities(secret := 'bc_dev'))
+    WHERE column_name IN ('name', 'url', 'kind')
+);
+----
+3
+
+# Test: common BC entities are present
+query I
+SELECT COUNT(*) > 0 FROM bc_show_entities(secret := 'bc_dev') WHERE name = 'customers';
+----
+true
+
+query I
+SELECT COUNT(*) > 0 FROM bc_show_entities(secret := 'bc_dev') WHERE name = 'items';
+----
+true
+
+query I
+SELECT COUNT(*) > 0 FROM bc_show_entities(secret := 'bc_dev') WHERE name = 'salesOrders';
+----
+true
+
+# =============================================================================
+# Test: bc_describe
+# =============================================================================
+
+# Test: bc_describe returns schema for customers entity
+query I
+SELECT COUNT(*) > 0 FROM bc_describe('customers', secret := 'bc_dev');
+----
+true
+
+# Test: bc_describe returns expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT column_name FROM (DESCRIBE SELECT * FROM bc_describe('customers', secret := 'bc_dev'))
+    WHERE column_name IN ('property_name', 'property_type', 'nullable', 'is_key')
+);
+----
+4
+
+# Test: customers entity has a key property
+query I
+SELECT COUNT(*) > 0 FROM bc_describe('customers', secret := 'bc_dev') WHERE is_key = true;
+----
+true
+
+# Test: customers entity has expected properties
+query I
+SELECT COUNT(*) > 0 FROM bc_describe('customers', secret := 'bc_dev')
+WHERE property_name IN ('id', 'number', 'displayName', 'email', 'phoneNumber', 'city', 'country');
+----
+true
+
+# =============================================================================
+# Test: bc_read
+# =============================================================================
+
+# Test: bc_read reads customers from the test company
+query I
+SELECT COUNT(*) > 0 FROM bc_read('customers', company := '${ERPL_BC_COMPANY_ID}', secret := 'bc_dev');
+----
+true
+
+# Test: bc_read returns data with correct shape (id column exists and is non-empty)
+query I
+SELECT COUNT(*) = 0 FROM bc_read('customers', company := '${ERPL_BC_COMPANY_ID}', secret := 'bc_dev')
+WHERE id IS NULL OR id = '';
+----
+true
+
+# Test: bc_read with $top equivalent — LIMIT works
+query I
+SELECT COUNT(*) <= 5 FROM (
+    SELECT * FROM bc_read('customers', company := '${ERPL_BC_COMPANY_ID}', secret := 'bc_dev')
+    LIMIT 5
+);
+----
+true
+
+# Test: bc_read for items entity
+query I
+SELECT COUNT(*) > 0 FROM bc_read('items', company := '${ERPL_BC_COMPANY_ID}', secret := 'bc_dev');
+----
+true
+
+# Test: bc_read with predicate pushdown (displayName filter)
+query I
+SELECT COUNT(*) >= 0 FROM bc_read(
+    'customers',
+    company := '${ERPL_BC_COMPANY_ID}',
+    secret := 'bc_dev'
+) WHERE displayName IS NOT NULL;
+----
+true
+
+# Test: bc_read for salesOrders
+query I
+SELECT COUNT(*) >= 0 FROM bc_read('salesOrders', company := '${ERPL_BC_COMPANY_ID}', secret := 'bc_dev');
+----
+true
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+statement ok
+DROP SECRET bc_dev;

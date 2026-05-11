@@ -58,6 +58,19 @@ test_debug_ms: ${EXTENSION_CONFIG_STEP}
 	./build/debug/test/unittest "test/sql/graph_outlook_integration.test"
 	./build/debug/test/unittest "test/sql/graph_teams_integration.test"
 
+# Run Business Central integration tests against a live BC environment.
+# Requires environment variables sourced from an Azure App Registration registered in BC.
+# See .env.business_central for the required variables:
+#   ERPL_BC_TENANT_ID    - Azure Directory (tenant) ID
+#   ERPL_BC_CLIENT_ID    - Application (client) ID
+#   ERPL_BC_CLIENT_SECRET - Client secret value
+#   ERPL_BC_ENVIRONMENT  - BC environment name (e.g. 'Production')
+#   ERPL_BC_COMPANY_ID   - Company GUID to run entity-read tests against
+# Usage:
+#   source .env.business_central && make test_debug_bc
+test_debug_bc: ${EXTENSION_CONFIG_STEP}
+	./build/debug/test/unittest "test/sql/business_central_integration.test"
+
 # Run C++ unit tests. ASAN_OPTIONS=detect_odr_violation=0 suppresses a false-positive ODR
 # warning that arises from DuckDB being compiled into both the static test binary and
 # libduckdb.so. The duplicate symbol (LOOKUP_TABLE in nested_to_varchar_cast.cpp) is
