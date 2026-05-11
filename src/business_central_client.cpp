@@ -1,7 +1,17 @@
 #include "business_central_client.hpp"
 #include "tracing.hpp"
+#include "duckdb/common/exception.hpp"
+#include <utility>
 
 namespace erpl_web {
+
+namespace {
+
+static std::string ValueToString(const duckdb::Value &value) {
+    return value.IsNull() ? std::string() : value.ToString();
+}
+
+} // namespace
 
 // URL Builder implementation
 std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id, const std::string &environment) {
@@ -95,6 +105,88 @@ std::shared_ptr<ODataServiceClient> BusinessCentralClientFactory::CreateCatalogC
 
     ERPL_TRACE_INFO("BC_CLIENT", "Created catalog client with URL: " + base_url);
     return client;
+}
+
+std::vector<BusinessCentralCompany> BusinessCentralClientFactory::DiscoverCompanies(
+    const std::string &tenant_id,
+    const std::string &environment,
+    std::shared_ptr<HttpAuthParams> auth_params) {
+
+    ERPL_TRACE_DEBUG("BC_CLIENT", "Discovering Business Central companies");
+
+    auto client = CreateCompaniesClient(tenant_id, environment, std::move(auth_params));
+    std::vector<std::string> column_names = {"id", "name"};
+    std::vector<duckdb::LogicalType> column_types = {
+        duckdb::LogicalType::VARCHAR,
+        duckdb::LogicalType::VARCHAR
+    };
+
+    std::vector<BusinessCentralCompany> companies;
+    for (auto response = client->Get(); response; response = client->Get(true)) {
+        auto rows = response->ToRows(column_names, column_types);
+        for (const auto &row : rows) {
+            if (row.size() < 2) {
+                continue;
+            }
+            BusinessCentralCompany company;
+            company.id = ValueToString(row[0]);
+            company.name = ValueToString(row[1]);
+            if (!company.id.empty()) {
+                companies.push_back(std::move(company));
+            }
+        }
+
+        if (!response->NextUrl()) {
+            break;
+        }
+    }
+
+    ERPL_TRACE_INFO("BC_CLIENT", "Discovered " + std::to_string(companies.size()) + " Business Central companies");
+    return companies;
+}
+
+bool BusinessCentralClientFactory::LooksLikeCompanyId(const std::string &value) {
+    // BC company GUIDs follow the canonical 8-4-4-4-12 format (36 chars total)
+    if (value.size() != 36) {
+        return false;
+    }
+    for (size_t i = 0; i < 36; i++) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (value[i] != '-') {
+                return false;
+            }
+        } else {
+            char c = value[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+std::string BusinessCentralClientFactory::ResolveCompanyId(
+    const std::string &name_or_id,
+    const std::string &tenant_id,
+    const std::string &environment,
+    std::shared_ptr<HttpAuthParams> auth_params) {
+
+    if (LooksLikeCompanyId(name_or_id)) {
+        return name_or_id;
+    }
+
+    ERPL_TRACE_DEBUG("BC_CLIENT", "Resolving company name '" + name_or_id + "' to ID");
+
+    for (const auto &company : DiscoverCompanies(tenant_id, environment, std::move(auth_params))) {
+        if (company.name == name_or_id) {
+            ERPL_TRACE_DEBUG("BC_CLIENT", "Resolved company '" + name_or_id + "' -> " + company.id);
+            return company.id;
+        }
+    }
+
+    throw duckdb::InvalidInputException(
+        "No company found with name '%s'. Use bc_show_companies() to list available companies, "
+        "or pass the company GUID directly.", name_or_id.c_str());
 }
 
 } // namespace erpl_web

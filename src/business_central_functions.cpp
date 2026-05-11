@@ -168,11 +168,7 @@ static unique_ptr<FunctionData> BcDescribeBind(
     // Get secret parameter
     auto secret_name = input.named_parameters.at("secret").GetValue<string>();
 
-    // Optional company parameter
-    string company_id;
-    if (input.named_parameters.count("company")) {
-        company_id = input.named_parameters.at("company").GetValue<string>();
-    }
+    // Optional company parameter is accepted for API symmetry; metadata lookup stays at the service root.
 
     // Resolve auth
     auto auth_info = ResolveBusinessCentralAuth(context, secret_name);
@@ -283,14 +279,18 @@ static unique_ptr<FunctionData> BcReadBind(
     // Get secret parameter
     auto secret_name = input.named_parameters.at("secret").GetValue<string>();
 
-    // Get company parameter (required for most entity reads)
-    string company_id;
+    // Get company parameter (name or GUID, resolved below)
+    string company_param;
     if (input.named_parameters.count("company")) {
-        company_id = input.named_parameters.at("company").GetValue<string>();
+        company_param = input.named_parameters.at("company").GetValue<string>();
     }
 
     // Resolve auth
     auto auth_info = ResolveBusinessCentralAuth(context, secret_name);
+
+    // Resolve company name to GUID if a human-readable name was given
+    auto company_id = BusinessCentralClientFactory::ResolveCompanyId(
+        company_param, auth_info.tenant_id, auth_info.environment, auth_info.auth_params);
 
     // Build URLs. The API base is the OData service root; BC serves $metadata
     // there, NOT under companies({id}) — which is the default derived by

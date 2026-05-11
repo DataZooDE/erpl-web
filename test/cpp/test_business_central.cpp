@@ -83,6 +83,14 @@ TEST_CASE("Business Central URL Builder - Resource URL", "[business_central][url
     }
 }
 
+TEST_CASE("Business Central company ID detection", "[business_central][company]") {
+    REQUIRE(BusinessCentralClientFactory::LooksLikeCompanyId("12345678-abcd-1234-abcd-123456789012"));
+    REQUIRE(BusinessCentralClientFactory::LooksLikeCompanyId("12345678-ABCD-1234-ABCD-123456789012"));
+    REQUIRE_FALSE(BusinessCentralClientFactory::LooksLikeCompanyId("12345678abcd1234abcd123456789012"));
+    REQUIRE_FALSE(BusinessCentralClientFactory::LooksLikeCompanyId("12345678_abcd-1234-abcd-123456789012"));
+    REQUIRE_FALSE(BusinessCentralClientFactory::LooksLikeCompanyId("12345678-abcd-1234-abcd-12345678901z"));
+}
+
 // =============================================================================
 // Integration URL Flow Tests
 // =============================================================================

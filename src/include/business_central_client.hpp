@@ -4,8 +4,14 @@
 #include "http_client.hpp"
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace erpl_web {
+
+struct BusinessCentralCompany {
+    std::string id;
+    std::string name;
+};
 
 // URL builder for Business Central endpoints
 class BusinessCentralUrlBuilder {
@@ -49,6 +55,24 @@ public:
 
     // Create catalog client for $metadata
     static std::shared_ptr<ODataServiceClient> CreateCatalogClient(
+        const std::string &tenant_id,
+        const std::string &environment,
+        std::shared_ptr<HttpAuthParams> auth_params);
+
+    // Discover companies through the same OData endpoint used by bc_show_companies().
+    static std::vector<BusinessCentralCompany> DiscoverCompanies(
+        const std::string &tenant_id,
+        const std::string &environment,
+        std::shared_ptr<HttpAuthParams> auth_params);
+
+    // Returns true if the string looks like a BC company GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+    static bool LooksLikeCompanyId(const std::string &value);
+
+    // If value is already a GUID, return it as-is. Otherwise discover companies
+    // and resolve by name (case-sensitive match on the 'name' field).
+    // Throws InvalidInputException when no matching company is found.
+    static std::string ResolveCompanyId(
+        const std::string &name_or_id,
         const std::string &tenant_id,
         const std::string &environment,
         std::shared_ptr<HttpAuthParams> auth_params);
