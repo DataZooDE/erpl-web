@@ -8,11 +8,17 @@
 require erpl_web
 
 require-env ERPL_MS_TENANT_ID
+
 require-env ERPL_MS_CLIENT_ID
+
 require-env ERPL_MS_CLIENT_SECRET
+
 require-env ERPL_MS_EXCEL_FILE_PATH
+
 require-env ERPL_MS_EXCEL_DRIVE_ID
+
 require-env ERPL_MS_EXCEL_SITE_NAME
+
 require-env ERPL_MS_EXCEL_DRIVE_NAME
 
 statement ok

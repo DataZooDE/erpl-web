@@ -7,6 +7,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <condition_variable>
 
 #include "duckdb.hpp"
@@ -45,7 +46,76 @@ std::string ToHexDump(const std::string& data, size_t max_bytes = 500) {
     return hex.str();
 }
 
+// Headers whose values must never appear verbatim in trace logs
+static const std::unordered_set<std::string> kSensitiveHeaders = {
+    "authorization", "proxy-authorization", "set-cookie", "cookie",
+    "x-auth-token", "x-api-key", "x-access-token"
+};
 
+// Returns a safe-to-log header value. For Authorization/Proxy-Authorization the scheme
+// prefix ("Bearer ", "Basic ") is preserved so the auth type remains visible.
+static std::string RedactHeaderValue(const std::string &name, const std::string &value) {
+    auto lower = ToLower(name);
+    if (!kSensitiveHeaders.count(lower)) {
+        return value;
+    }
+    if (lower == "authorization" || lower == "proxy-authorization") {
+        auto pos = value.find(' ');
+        if (pos != std::string::npos) {
+            return value.substr(0, pos + 1) + "***";
+        }
+    }
+    return "***";
+}
+
+// Credential field names that must be redacted in request/response bodies
+static const std::vector<std::string> kSensitiveBodyFields = {
+    "client_secret", "password", "access_token", "refresh_token"
+};
+
+// Redacts credential values in form-encoded (field=VALUE&...) and JSON ("field":"VALUE") bodies.
+static std::string RedactBody(const std::string &body) {
+    std::string result = body;
+    for (const auto &field : kSensitiveBodyFields) {
+        // Form-encoded: field=VALUE until & or end-of-string
+        {
+            const std::string prefix = field + "=";
+            size_t pos = 0;
+            while ((pos = result.find(prefix, pos)) != std::string::npos) {
+                pos += prefix.size();
+                size_t end = result.find('&', pos);
+                if (end == std::string::npos) {
+                    end = result.size();
+                }
+                result.replace(pos, end - pos, "***");
+                pos += 3;
+            }
+        }
+        // JSON: "field" : "VALUE" (tolerates spaces around the colon)
+        {
+            const std::string prefix = "\"" + field + "\"";
+            size_t pos = 0;
+            while ((pos = result.find(prefix, pos)) != std::string::npos) {
+                pos += prefix.size();
+                while (pos < result.size() && (result[pos] == ' ' || result[pos] == ':')) {
+                    ++pos;
+                }
+                while (pos < result.size() && result[pos] == ' ') {
+                    ++pos;
+                }
+                if (pos < result.size() && result[pos] == '"') {
+                    ++pos;
+                    size_t end = result.find('"', pos);
+                    if (end != std::string::npos) {
+                        result.replace(pos, end - pos, "***");
+                        pos += 3;
+                    }
+                }
+            }
+        }
+    }
+    return result;
+}
 
 } // anonymous namespace
 
@@ -489,7 +559,7 @@ void HttpRequest::HeadersFromMapArg(duckdb::Value &header_map)
                         ERPL_TRACE_DEBUG("HTTP_HEADERS", "Updated content_type to: " + value + " (not adding to headers to avoid duplication)");
                     } else {
                         headers.emplace(key, value);
-                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + (value.empty() ? "(empty)" : value));
+                        ERPL_TRACE_DEBUG("HTTP_HEADERS", "Added header: " + key + " = " + RedactHeaderValue(key, value));
                     }
                 }
             }
@@ -594,7 +664,7 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
             headers_map += ", ";
         }
         first_hdr = false;
-        headers_map += "'" + escape_sql(h.first) + "': '" + escape_sql(h.second) + "'";
+        headers_map += "'" + escape_sql(h.first) + "': '" + escape_sql(RedactHeaderValue(h.first, h.second)) + "'";
     }
     headers_map += "}";
     // Choose function name and positional args
@@ -608,16 +678,16 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
         positional_args = "'" + escape_sql(absolute_url) + "'";
     } else if (method == HttpMethod::POST) {
         func_name = "http_post";
-        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(RedactBody(content)) + "', '" + escape_sql(content_type) + "'";
     } else if (method == HttpMethod::PUT) {
         func_name = "http_put";
-        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(RedactBody(content)) + "', '" + escape_sql(content_type) + "'";
     } else if (method == HttpMethod::PATCH) {
         func_name = "http_patch";
-        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(RedactBody(content)) + "', '" + escape_sql(content_type) + "'";
     } else if (method == HttpMethod::_DELETE) {
         func_name = "http_delete";
-        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(content) + "', '" + escape_sql(content_type) + "'";
+        positional_args = "'" + escape_sql(absolute_url) + "', '" + escape_sql(RedactBody(content)) + "', '" + escape_sql(content_type) + "'";
     } else {
         func_name = method.ToString();
         positional_args = "'" + escape_sql(absolute_url) + "'";
@@ -630,10 +700,11 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     ERPL_TRACE_INFO("HTTP_REQUEST", "Executing " + method.ToString() + " request to: " + path_str);
     ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request headers:");
     for (const auto& header : headers) {
-        ERPL_TRACE_DEBUG("HTTP_REQUEST", "  " + header.first + ": " + header.second);
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "  " + header.first + ": " + RedactHeaderValue(header.first, header.second));
     }
     if (!content.empty()) {
-        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request content (" + std::to_string(content.length()) + " bytes): " + content);
+        const std::string redacted_content = RedactBody(content);
+        ERPL_TRACE_DEBUG("HTTP_REQUEST", "Request content (" + std::to_string(content.length()) + " bytes): " + redacted_content);
         ERPL_TRACE_DEBUG("HTTP_REQUEST", "Content-Type: " + content_type);
     }
 
@@ -642,8 +713,11 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
     std::string request_line = method.ToString() + " " + path_str + " HTTP/1.1";
     ERPL_TRACE_DEBUG("HTTP_WIRE", "Request line: " + request_line);
     ERPL_TRACE_DEBUG("HTTP_WIRE", "Request line hex: " + ToHexDump(request_line + "\r\n"));
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "Body to send: " + (content.empty() ? "(empty)" : content.substr(0, 200)));
-    ERPL_TRACE_DEBUG("HTTP_WIRE", "Body hex: " + ToHexDump(content));
+    {
+        const std::string redacted_body = RedactBody(content);
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Body to send: " + (content.empty() ? "(empty)" : redacted_body.substr(0, 200)));
+        ERPL_TRACE_DEBUG("HTTP_WIRE", "Body hex: " + ToHexDump(redacted_body));
+    }
 
     duckdb_httplib_openssl::Result result;
     if (method == HttpMethod::GET)
@@ -680,17 +754,18 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
         ERPL_TRACE_INFO("HTTP_RESPONSE", "Response status: " + std::to_string(result->status));
         ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response headers:");
         for (const auto& header : result->headers) {
-            ERPL_TRACE_DEBUG("HTTP_RESPONSE", "  " + header.first + ": " + header.second);
+            ERPL_TRACE_DEBUG("HTTP_RESPONSE", "  " + header.first + ": " + RedactHeaderValue(header.first, header.second));
         }
         ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (" + std::to_string(result->body.length()) + " bytes)");
-        
+
         // Log the actual response body content for debugging
         if (!result->body.empty()) {
+            const std::string redacted_body = RedactBody(result->body);
             // Truncate very long responses to avoid overwhelming the logs
-            if (result->body.length() > 1000) {
-                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + result->body.substr(0, 1000) + "...");
+            if (redacted_body.length() > 1000) {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + redacted_body.substr(0, 1000) + "...");
             } else {
-                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body: " + result->body);
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body: " + redacted_body);
             }
         }
     } else {
