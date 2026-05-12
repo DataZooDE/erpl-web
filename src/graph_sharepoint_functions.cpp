@@ -267,6 +267,8 @@ void GraphSharePointFunctions::DescribeListScan(
     if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
+        bind_data.site_id = client.ResolveSiteId(bind_data.site_id);
+        bind_data.list_id = client.ResolveListId(bind_data.site_id, bind_data.list_id);
         bind_data.json_response = client.GetListColumns(bind_data.site_id, bind_data.list_id);
     }
 
