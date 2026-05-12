@@ -294,13 +294,20 @@ std::string GraphSharePointClient::ResolveListId(const std::string &site_id, con
         size_t idx, max;
         yyjson_val *list;
         yyjson_arr_foreach(value_arr, idx, max, list) {
+            yyjson_val *name_val    = yyjson_obj_get(list, "name");
             yyjson_val *display_name = yyjson_obj_get(list, "displayName");
-            yyjson_val *id_val = yyjson_obj_get(list, "id");
-            if (display_name && yyjson_is_str(display_name) && id_val && yyjson_is_str(id_val)) {
-                if (name_or_id == yyjson_get_str(display_name)) {
-                    resolved = yyjson_get_str(id_val);
-                    break;
-                }
+            yyjson_val *id_val      = yyjson_obj_get(list, "id");
+            if (!id_val || !yyjson_is_str(id_val)) {
+                continue;
+            }
+            // Match against either the internal 'name' or the 'displayName' so
+            // that both the value shown in the 'name' column by graph_show_lists
+            // and the localised display name work as input.
+            bool name_match    = name_val    && yyjson_is_str(name_val)    && name_or_id == yyjson_get_str(name_val);
+            bool display_match = display_name && yyjson_is_str(display_name) && name_or_id == yyjson_get_str(display_name);
+            if (name_match || display_match) {
+                resolved = yyjson_get_str(id_val);
+                break;
             }
         }
     }
