@@ -57,13 +57,13 @@ SELECT typeof(Title) FROM graph_sharepoint_list_read(
 ----
 VARCHAR
 
-# Rows with non-null values: Foo=1, Bar=2, Baz=3
+# Seed rows Foo=1, Bar=2, Baz=3 must be present (list may contain additional rows)
 query II
 SELECT Title, Number FROM graph_sharepoint_list_read(
     '${ERPL_MS_SHAREPOINT_TESTLIST_SITE_ID}',
     '${ERPL_MS_SHAREPOINT_TESTLIST_LIST_ID}',
     secret := 'ms_sptype_test'
-) WHERE Title IS NOT NULL ORDER BY Number;
+) WHERE Title IS NOT NULL AND Number <= 3 ORDER BY Number;
 ----
 Foo	1.0
 Bar	2.0
@@ -90,10 +90,10 @@ WHERE table_catalog = 'sptypetest' AND table_name = 'TestList' AND column_name =
 ----
 TIMESTAMP
 
-# SELECT from catalog returns typed row data
+# SELECT from catalog returns typed row data (seed rows only; list may have more)
 query II
 SELECT Title, Number FROM sptypetest.TestList
-WHERE Title IS NOT NULL ORDER BY Number;
+WHERE Title IS NOT NULL AND Number <= 3 ORDER BY Number;
 ----
 Foo	1.0
 Bar	2.0
