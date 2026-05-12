@@ -1,0 +1,79 @@
+# name: test/sql/graph_excel_workbook_attach_name_integration.test
+# description: Integration test for excel_workbook ATTACH using human-readable
+#              SITE and DRIVE names instead of raw GUIDs.
+#              Attaches the test workbook by site/drive name, inserts 1 row,
+#              verifies the count, then cleans up.
+# group: [erpl_web]
+
+require erpl_web
+
+require-env ERPL_MS_TENANT_ID
+require-env ERPL_MS_CLIENT_ID
+require-env ERPL_MS_CLIENT_SECRET
+require-env ERPL_MS_EXCEL_FILE_PATH
+require-env ERPL_MS_EXCEL_DRIVE_ID
+require-env ERPL_MS_EXCEL_SITE_NAME
+require-env ERPL_MS_EXCEL_DRIVE_NAME
+
+statement ok
+CREATE SECRET ms_graph_excel_attach_name_test (
+    TYPE microsoft_graph,
+    PROVIDER client_credentials,
+    tenant_id '${ERPL_MS_TENANT_ID}',
+    client_id '${ERPL_MS_CLIENT_ID}',
+    client_secret '${ERPL_MS_CLIENT_SECRET}'
+);
+
+# Pre-cleanup: remove any stale row from a previous interrupted run
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_name_test',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_name_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+# Regression: ATTACH must accept SITE + DRIVE by human-readable name
+# (previously "Unrecognized option for Excel workbook attach: site")
+statement ok
+ATTACH '${ERPL_MS_EXCEL_FILE_PATH}' AS wb_name (
+    TYPE   excel_workbook,
+    SECRET 'ms_graph_excel_attach_name_test',
+    SITE   '${ERPL_MS_EXCEL_SITE_NAME}',
+    DRIVE  '${ERPL_MS_EXCEL_DRIVE_NAME}'
+);
+
+statement ok
+CREATE TEMP TABLE _name_count_before AS
+SELECT COUNT(*) AS n FROM wb_name.SalesTable;
+
+statement ok
+INSERT INTO wb_name.SalesTable
+SELECT 'erpl_attach_name_test' AS col0, 'product_x' AS col1, '' AS col2, '2024-06-01' AS col3;
+
+statement ok
+SELECT sleep_ms(3000);
+
+query I
+SELECT (SELECT COUNT(*) FROM wb_name.SalesTable) - (SELECT n FROM _name_count_before) = 1;
+----
+true
+
+statement ok
+DETACH wb_name;
+
+# Post-cleanup
+statement ok
+SELECT * FROM graph_excel_delete_rows(
+    '${ERPL_MS_EXCEL_FILE_PATH}', 'SalesTable', 0, 'erpl_attach_name_test',
+    drive  := '${ERPL_MS_EXCEL_DRIVE_ID}',
+    secret := 'ms_graph_excel_attach_name_test'
+);
+
+statement ok
+SELECT sleep_ms(2000);
+
+statement ok
+DROP SECRET ms_graph_excel_attach_name_test;
