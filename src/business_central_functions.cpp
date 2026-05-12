@@ -315,13 +315,15 @@ static unique_ptr<FunctionData> BcReadBind(
     auto bind_data = make_uniq<BcReadBindData>();
     bind_data->odata_bind_data = ODataReadBindData::FromEntitySetClient(odata_client);
 
-    // Handle expand parameter
+    // Handle expand parameter — must call ProcessExpandClause (not just SetExpandClause)
+    // so that ConsumeExpand feeds $expand into the predicate pushdown helper URL builder
+    // and the expanded data schema paths are set up for column extraction.
     if (input.named_parameters.count("expand")) {
         auto expand_clause = input.named_parameters.at("expand").GetValue<string>();
-        bind_data->odata_bind_data->SetExpandClause(expand_clause);
+        ODataReadBindHelpers::ProcessExpandClause(bind_data->odata_bind_data.get(), expand_clause);
     }
 
-    // Get schema from OData
+    // Get schema from OData (includes expanded columns if expand was set)
     names = bind_data->odata_bind_data->GetResultNames();
     return_types = bind_data->odata_bind_data->GetResultTypes();
 

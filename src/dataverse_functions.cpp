@@ -243,13 +243,14 @@ static unique_ptr<FunctionData> CrmReadBind(
     auto bind_data = make_uniq<CrmReadBindData>();
     bind_data->odata_bind_data = ODataReadBindData::FromEntitySetClient(client);
 
-    // Handle expand parameter
+    // Handle expand parameter — must call ProcessExpandClause so ConsumeExpand
+    // feeds $expand into the predicate pushdown helper and sets up expanded schema.
     if (input.named_parameters.count("expand")) {
         auto expand_clause = input.named_parameters.at("expand").GetValue<string>();
-        bind_data->odata_bind_data->SetExpandClause(expand_clause);
+        ODataReadBindHelpers::ProcessExpandClause(bind_data->odata_bind_data.get(), expand_clause);
     }
 
-    // Get schema from OData
+    // Get schema from OData (includes expanded columns if expand was set)
     names = bind_data->odata_bind_data->GetResultNames();
     return_types = bind_data->odata_bind_data->GetResultTypes();
 
