@@ -1,6 +1,7 @@
 #include "graph_excel_storage.hpp"
 #include "graph_excel_catalog.hpp"
 #include "graph_excel_secret.hpp"
+#include "graph_sharepoint_client.hpp"
 #include "duckdb/common/string_util.hpp"
 
 namespace erpl_web {
@@ -77,7 +78,8 @@ static duckdb::unique_ptr<duckdb::Catalog> ExcelAttach(duckdb::optional_ptr<duck
                                                          duckdb::AttachOptions &options)
 {
 	std::string secret_name;
-	std::string drive_id;
+	std::string drive_param;
+	std::string site_param;
 
 	for (auto &entry : info.options) {
 		const auto lower_name = duckdb::StringUtil::Lower(entry.first);
@@ -86,13 +88,24 @@ static duckdb::unique_ptr<duckdb::Catalog> ExcelAttach(duckdb::optional_ptr<duck
 		} else if (lower_name == "secret") {
 			secret_name = entry.second.ToString();
 		} else if (lower_name == "drive") {
-			drive_id = entry.second.ToString();
+			drive_param = entry.second.ToString();
+		} else if (lower_name == "site") {
+			site_param = entry.second.ToString();
 		} else {
 			throw duckdb::BinderException("Unrecognized option for Excel workbook attach: %s", entry.first);
 		}
 	}
 
 	auto auth_info = ResolveGraphAuth(context, secret_name);
+
+	// Resolve drive name → GUID when a site is given alongside a non-GUID drive value
+	std::string drive_id = drive_param;
+	if (!drive_param.empty() && !site_param.empty()) {
+		GraphSharePointClient sp_client(auth_info.auth_params);
+		const auto site_id = sp_client.ResolveSiteId(site_param);
+		drive_id = sp_client.ResolveDriveId(site_id, drive_param);
+	}
+
 	return duckdb::make_uniq<ExcelCatalog>(db, info.path, drive_id, secret_name, auth_info.auth_params);
 }
 
