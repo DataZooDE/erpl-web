@@ -238,7 +238,7 @@ void GraphTeamsFunctions::TeamChannelsScan(
 }
 
 // =============================================================================
-// graph_team_members Implementation
+// graph_teams_members Implementation
 // =============================================================================
 
 unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
@@ -248,7 +248,7 @@ unique_ptr<FunctionData> GraphTeamsFunctions::TeamMembersBind(
     vector<std::string> &names) {
 
     if (input.inputs.empty()) {
-        throw BinderException("graph_team_members requires a team_id parameter");
+        throw BinderException("graph_teams_members requires a team_id parameter");
     }
 
     auto bind_data         = make_uniq<TeamMembersBindData>();
@@ -426,7 +426,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction team_members_func("graph_team_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
+        TableFunction team_members_func("graph_teams_members", {LogicalType::VARCHAR}, TeamMembersScan, TeamMembersBind);
         team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
         team_members_func.named_parameters["user"]   = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(team_members_func);
@@ -436,8 +436,8 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         desc.parameter_names = {"team_id_or_name"};
         desc.parameter_types = {LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_team_members('Engineering', secret := 'ms_graph')",
-            "SELECT * FROM graph_team_members('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
+            "SELECT * FROM graph_teams_members('Engineering', secret := 'ms_graph')",
+            "SELECT * FROM graph_teams_members('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "teams"};
         info.descriptions.push_back(std::move(desc));

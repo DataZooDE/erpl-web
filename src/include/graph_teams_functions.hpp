@@ -35,7 +35,7 @@ private:
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
 
-    // graph_team_members(secret_name, team_id) - List members of a team
+    // graph_teams_members(secret_name, team_id) - List members of a team
     static duckdb::unique_ptr<duckdb::FunctionData> TeamMembersBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,
