@@ -714,10 +714,10 @@ SELECT id, display_name, operating_system, os_version, trust_type
 FROM graph_devices();
 
 -- Sign-in audit log (Azure AD Premium required)
-SELECT user_display_name, app_display_name, ip_address, status, created_at
+SELECT user_display_name, app_display_name, ip_address, status, created_datetime
 FROM graph_signin_logs()
 WHERE status != 'Success'
-ORDER BY created_at DESC;
+ORDER BY created_datetime DESC;
 ```
 
 Functions: `graph_users([secret])`, `graph_groups([secret])`, `graph_devices([secret])`, `graph_signin_logs([secret])`
@@ -801,36 +801,36 @@ SELECT id, name, drive_type, web_url
 FROM graph_show_drives(site := 'Finance', secret := 'ms_graph');
 
 -- Lists in a site (by name or ID)
-SELECT id, name, display_name, item_count
+SELECT id, name, display_name, description
 FROM graph_show_lists(site := 'Finance', secret := 'ms_graph');
 
 -- Schema of a list (site and list accept names, URLs, or GUIDs)
-SELECT column_name, column_type, required
+SELECT name, column_type, required
 FROM graph_describe_list('Finance', 'Budget');
 
 -- Items in a list — filter pushdown reduces server-side payload
-SELECT * FROM graph_list_items('Finance', 'Budget', secret := 'ms_graph')
+SELECT * FROM graph_sharepoint_list_read('Finance', 'Budget', secret := 'ms_graph')
 WHERE status = 'Active';
 
 -- Works equally with site URLs and list display names
-SELECT * FROM graph_list_items(
+SELECT * FROM graph_sharepoint_list_read(
     'https://tenant.sharepoint.com/sites/Finance',
     'Project Tracker',
     secret := 'ms_graph'
 );
 ```
 
-Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id_or_name, list_id_or_name, [secret])`, `graph_list_items(site_id_or_name, list_id_or_name, [secret])`
+Functions: `graph_show_sites([secret])`, `graph_show_drives([site_id], [secret, site])`, `graph_show_lists([site_id], [secret, site])`, `graph_describe_list(site_id_or_name, list_id_or_name, [secret])`, `graph_sharepoint_list_read(site_id_or_name, list_id_or_name, [secret])`
 
 #### Writing list items
 
 Required permissions: `Sites.ReadWrite.All` (Application).
 
-`graph_sharepoint_create_item`, `graph_sharepoint_update_item`, and `graph_sharepoint_delete_item` are table functions — use them in `SELECT` or with a lateral join for per-row mutations.
+`graph_sharepoint_create_item` is a **table function** returning the new `item_id`; use it in `SELECT` or with a `LATERAL` join. `graph_sharepoint_update_item` and `graph_sharepoint_delete_item` are **scalar functions** returning `BOOLEAN` (true on success) — note their `secret` is the **last positional argument**, not a named parameter.
 
 ```sql
--- Create a new item (fields as JSON object)
-SELECT item_id, item_url
+-- Create a new item (fields as JSON object) — returns the new item_id
+SELECT item_id
 FROM graph_sharepoint_create_item(
     'Finance',
     'Budget',
@@ -838,19 +838,15 @@ FROM graph_sharepoint_create_item(
     secret := 'ms_graph'
 );
 
--- Update an existing item by ID
-SELECT item_id, item_url
-FROM graph_sharepoint_update_item(
-    'Finance',
-    'Budget',
-    'item-id-here',
+-- Update an existing item by ID — scalar, returns true on success (secret is positional)
+SELECT graph_sharepoint_update_item(
+    'Finance', 'Budget', 'item-id-here',
     '{"Status": "Approved"}',
-    secret := 'ms_graph'
-);
+    'ms_graph'
+) AS updated;
 
--- Delete an item by ID
-SELECT item_id
-FROM graph_sharepoint_delete_item('Finance', 'Budget', 'item-id-here', secret := 'ms_graph');
+-- Delete an item by ID — scalar, returns true on success (secret is positional)
+SELECT graph_sharepoint_delete_item('Finance', 'Budget', 'item-id-here', 'ms_graph') AS deleted;
 
 -- Bulk-create items from a query result
 SELECT src.title, p.item_id
@@ -895,11 +891,11 @@ File paths and drive locations accept either a **friendly name** (`site := 'Fina
 
 ```sql
 -- Files accessible in OneDrive/SharePoint (by name or raw drive_id)
-SELECT name, file_path, size, last_modified
-FROM graph_list_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph');
+SELECT id, name, web_url, size, created_at, modified_at, mime_type, is_folder
+FROM graph_show_files(site := 'Finance', drive := 'Documents', secret := 'ms_graph');
 
 -- Worksheets in a workbook
-SELECT id, name, position
+SELECT name, id, position, visibility
 FROM graph_excel_worksheets('Budget.xlsx',
   site   := 'Finance',
   drive  := 'Documents',
@@ -907,7 +903,7 @@ FROM graph_excel_worksheets('Budget.xlsx',
 );
 
 -- Named tables in a workbook
-SELECT id, name, row_count
+SELECT name, id, show_headers, show_totals
 FROM graph_excel_tables('Budget.xlsx',
   site   := 'Finance',
   drive  := 'Documents',
@@ -915,7 +911,7 @@ FROM graph_excel_tables('Budget.xlsx',
 );
 
 -- Read table data
-SELECT * FROM graph_excel_table_data('Budget.xlsx', 'SalesData',
+SELECT * FROM graph_excel_read('Budget.xlsx', 'SalesData',
   site   := 'Finance',
   drive  := 'Documents',
   secret := 'ms_graph'
@@ -929,7 +925,7 @@ SELECT * FROM graph_excel_range('Budget.xlsx', 'Sheet1',
 );
 ```
 
-Functions: `graph_list_files([secret, drive_id, site, drive])`, `graph_excel_worksheets(file_path, [secret, drive_id, site, drive])`, `graph_excel_tables(file_path, [secret, drive_id, site, drive])`, `graph_excel_table_data(file_path, table_name, [secret, drive_id, site, drive])`, `graph_excel_range(file_path, sheet_name, [secret, drive_id, site, drive])`
+Functions: `graph_show_files([folder_path], [secret, drive_id, site, drive])`, `graph_excel_worksheets(file_path, [secret, drive_id, site, drive])`, `graph_excel_tables(file_path, [secret, drive_id, site, drive])`, `graph_excel_read(file_path, table_name, [secret, drive_id, site, drive])`, `graph_excel_range(file_path, sheet_name, [secret, drive_id, site, drive])`
 
 #### Writing Excel data
 
@@ -958,17 +954,17 @@ The `drive` option scopes the path to a specific SharePoint drive: `(TYPE excel_
 **Delete rows by column value:**
 
 ```sql
--- Delete all rows where a named column equals a given value
+-- Delete all rows where a column equals a given value (column by name or 0-based index)
 SELECT rows_deleted
 FROM graph_excel_delete_rows(
     'Budget.xlsx', 'SalesData',
-    'Region', 'North',          -- column name and match value
+    'Region', 'North',          -- column name (or a 0-based index like 0) and match value
     site   := 'Finance',
     secret := 'ms_graph'
 );
 ```
 
-Functions: `graph_excel_delete_rows(file_path, table_name, col_name, col_value, [secret, drive_id, site, drive])`
+Functions: `graph_excel_delete_rows(file_path, table_name, column, col_value, [secret, drive, site])` — `column` is a column name (resolved against the table header) or a 0-based index; `col_value` is always compared as a string.
 
 Storage extension: `ATTACH '<file-path>' AS <catalog> (TYPE excel_workbook, SECRET '<secret>'[, drive '<drive-id>'])`
 
@@ -1015,18 +1011,18 @@ FROM graph_contacts(user := 'user-guid-or-upn', secret := 'ms_graph');
 
 -- Discover mail folders
 SELECT display_name, total_item_count, unread_item_count
-FROM graph_mail_folders(user := 'user-guid-or-upn', secret := 'ms_graph');
+FROM graph_outlook_mail_folders(user := 'user-guid-or-upn', secret := 'ms_graph');
 
 -- Email messages — metadata only, no body content
 SELECT subject, from_name, from_email, received_at, importance, is_read
-FROM graph_messages(user := 'user-guid-or-upn', folder := 'inbox', secret := 'ms_graph')
+FROM graph_outlook_emails(user := 'user-guid-or-upn', folder := 'inbox', secret := 'ms_graph')
 ORDER BY received_at DESC;
 
--- folder accepts well-known names or any display name from graph_mail_folders()
+-- folder accepts well-known names or any display name from graph_outlook_mail_folders()
 -- well-known: inbox, sentitems, drafts, deleteditems, junkemail, outbox, archive
 ```
 
-Functions: `graph_calendars([user, secret])`, `graph_calendar_events([user, calendar_id, start_date, end_date, secret])`, `graph_contacts([user, secret])`, `graph_mail_folders([user, secret])`, `graph_messages([user, folder, secret])`
+Functions: `graph_calendars([user, secret])`, `graph_calendar_events([user, calendar_id, start_date, end_date, secret])`, `graph_contacts([user, secret])`, `graph_outlook_mail_folders([user, secret])`, `graph_outlook_emails([user, folder, secret])`
 
 `start_date` and `end_date` must be provided together; bare ISO dates (`'2024-01-01'`) are accepted alongside full datetimes.
 
@@ -1043,19 +1039,19 @@ FROM graph_my_teams();
 
 -- Channels in a team
 SELECT id, display_name, membership_type
-FROM graph_team_channels('your-team-id');
+FROM graph_teams_channels('your-team-id');
 
 -- Members of a team
-SELECT id, display_name, roles
-FROM graph_team_members('your-team-id');
+SELECT id, display_name, role
+FROM graph_teams_members('your-team-id');
 
 -- Messages in a channel
-SELECT id, subject, body, created_at, from_user
+SELECT id, created_datetime, from_name, body_content, importance
 FROM graph_channel_messages('your-team-id', 'your-channel-id')
-ORDER BY created_at DESC;
+ORDER BY created_datetime DESC;
 ```
 
-Functions: `graph_my_teams([user, secret])`, `graph_team_channels(team_id, [secret])`, `graph_team_members(team_id, [secret])`, `graph_channel_messages(team_id, channel_id, [secret])`
+Functions: `graph_my_teams([user, secret])`, `graph_teams_channels(team_id, [secret])`, `graph_teams_members(team_id, [secret])`, `graph_channel_messages(team_id, channel_id, [secret])`
 
 `user` accepts a GUID, UPN, or email. Omit it for delegated (`/me/joinedTeams`); provide it for app-only auth (`/users/{id}/joinedTeams`).
 
