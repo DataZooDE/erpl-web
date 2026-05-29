@@ -7,6 +7,7 @@
 #include "graph_output_utils.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
@@ -870,6 +871,8 @@ struct DeleteRowsBindData : public TableFunctionData {
     std::string col_value;
     std::string drive_id;
     std::string secret_name;
+    bool by_name = false;   // when true, col_name is resolved to col_index at scan time
+    std::string col_name;
     bool done = false;
 };
 
@@ -898,6 +901,62 @@ unique_ptr<FunctionData> GraphExcelFunctions::DeleteRowsBind(
     return std::move(bind);
 }
 
+unique_ptr<FunctionData> GraphExcelFunctions::DeleteRowsByNameBind(
+    ClientContext &context,
+    TableFunctionBindInput &input,
+    vector<LogicalType> &return_types,
+    vector<std::string> &names) {
+
+    if (input.inputs.size() < 4) {
+        throw BinderException("graph_excel_delete_rows requires file_path, table_name, column, col_value");
+    }
+    auto bind = make_uniq<DeleteRowsBindData>();
+    bind->file_path  = input.inputs[0].GetValue<std::string>();
+    bind->table_name = input.inputs[1].GetValue<std::string>();
+    bind->by_name    = true;
+    bind->col_name   = input.inputs[2].GetValue<std::string>();
+    bind->col_value  = input.inputs[3].GetValue<std::string>();
+
+    if (input.named_parameters.count("secret")) {
+        bind->secret_name = input.named_parameters.at("secret").GetValue<std::string>();
+    }
+    bind->drive_id = ResolveGraphDriveId(context, bind->secret_name, input);
+
+    return_types = {LogicalType::BIGINT};
+    names        = {"rows_deleted"};
+    return std::move(bind);
+}
+
+idx_t GraphExcelFunctions::ResolveColumnIndex(const std::vector<std::string> &columns,
+                                              const std::string &column_ref) {
+    // Exact name match first.
+    for (idx_t i = 0; i < columns.size(); i++) {
+        if (columns[i] == column_ref) {
+            return i;
+        }
+    }
+    // Case-insensitive name match.
+    const std::string lowered_ref = StringUtil::Lower(column_ref);
+    for (idx_t i = 0; i < columns.size(); i++) {
+        if (StringUtil::Lower(columns[i]) == lowered_ref) {
+            return i;
+        }
+    }
+    // Fallback: a purely numeric reference is treated as a 0-based index.
+    if (!column_ref.empty() &&
+        column_ref.find_first_not_of("0123456789") == std::string::npos) {
+        return static_cast<idx_t>(std::stoull(column_ref));
+    }
+    std::string available;
+    for (idx_t i = 0; i < columns.size(); i++) {
+        if (i > 0) { available += ", "; }
+        available += columns[i];
+    }
+    throw InvalidInputException(
+        "graph_excel_delete_rows: column '%s' not found. Available columns: %s",
+        column_ref, available);
+}
+
 void GraphExcelFunctions::DeleteRowsScan(
     ClientContext &context,
     TableFunctionInput &data_p,
@@ -909,8 +968,17 @@ void GraphExcelFunctions::DeleteRowsScan(
 
     auto auth_info = ResolveGraphAuth(context, bind.secret_name);
     GraphExcelClient client(auth_info.auth_params);
+
+    idx_t col_index = bind.col_index;
+    if (bind.by_name) {
+        const auto columns = client.GetTableColumnsByPath(bind.file_path, bind.table_name, bind.drive_id);
+        col_index = ResolveColumnIndex(columns, bind.col_name);
+        ERPL_TRACE_DEBUG("GRAPH_EXCEL",
+                         "Resolved delete column '" + bind.col_name + "' to index " + std::to_string(col_index));
+    }
+
     const idx_t n = client.DeleteTableRowsMatchingColumn(
-        bind.file_path, bind.table_name, bind.col_index, bind.col_value, bind.drive_id);
+        bind.file_path, bind.table_name, col_index, bind.col_value, bind.drive_id);
     output.SetCardinality(1);
     output.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(n)));
 }
@@ -1076,29 +1144,48 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
 
-    // graph_excel_delete_rows: delete rows matching a column value
+    // graph_excel_delete_rows: delete rows matching a column value. Two overloads share the same
+    // name: the column may be given as a 0-based index (BIGINT) or as a column name (VARCHAR),
+    // which is resolved against the table header at scan time.
     {
-        TableFunction del_rows("graph_excel_delete_rows",
-                               {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                LogicalType::BIGINT,  LogicalType::VARCHAR},
-                               GraphExcelFunctions::DeleteRowsScan,
-                               GraphExcelFunctions::DeleteRowsBind);
-        del_rows.named_parameters["drive"]  = LogicalType::VARCHAR;
-        del_rows.named_parameters["secret"] = LogicalType::VARCHAR;
+        const auto add_named_params = [](TableFunction &fn) {
+            fn.named_parameters["drive"]  = LogicalType::VARCHAR;
+            fn.named_parameters["secret"] = LogicalType::VARCHAR;
+            fn.named_parameters["site"]   = LogicalType::VARCHAR;
+        };
 
-        CreateTableFunctionInfo info(del_rows);
+        TableFunctionSet del_rows_set("graph_excel_delete_rows");
+
+        TableFunction del_by_index("graph_excel_delete_rows",
+                                   {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                    LogicalType::BIGINT,  LogicalType::VARCHAR},
+                                   GraphExcelFunctions::DeleteRowsScan,
+                                   GraphExcelFunctions::DeleteRowsBind);
+        add_named_params(del_by_index);
+        del_rows_set.AddFunction(del_by_index);
+
+        TableFunction del_by_name("graph_excel_delete_rows",
+                                  {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                   LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                  GraphExcelFunctions::DeleteRowsScan,
+                                  GraphExcelFunctions::DeleteRowsByNameBind);
+        add_named_params(del_by_name);
+        del_rows_set.AddFunction(del_by_name);
+
+        CreateTableFunctionInfo info(del_rows_set);
         FunctionDescription desc;
         desc.description = "Delete all rows in an Excel table where a column value matches. "
                            "Returns rows_deleted. "
-                           "col_index is 0-based (0 = first column). "
+                           "The column may be given as a name (resolved against the table header) "
+                           "or as a 0-based integer index. "
                            "col_value is always compared as a string; cast numeric IDs to VARCHAR if needed.";
-        desc.parameter_names = {"file_path", "table_name", "col_index", "col_value"};
+        desc.parameter_names = {"file_path", "table_name", "column", "col_value"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                LogicalType::BIGINT,  LogicalType::VARCHAR};
+                                LogicalType::VARCHAR, LogicalType::VARCHAR};
         desc.examples = {
-            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'obsolete_row', "
+            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 'Region', 'North', "
             "drive := 'b!abc...', secret := 'ms_graph')",
-            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 2, '42', "
+            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'obsolete_row', "
             "site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
         };
         desc.categories = {"microsoft", "graph", "excel"};

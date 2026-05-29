@@ -1,6 +1,7 @@
 #include "catch.hpp"
 #include "duckdb.hpp"
 #include "graph_excel_client.hpp"
+#include "graph_excel_functions.hpp"
 
 using namespace erpl_web;
 
@@ -225,4 +226,61 @@ TEST_CASE("Microsoft Graph Excel Functions Exist", "[graph_excel][functions]") {
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
     }
+
+    SECTION("graph_excel_delete_rows function exists with both overloads") {
+        result = con.Query("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'graph_excel_delete_rows'");
+        REQUIRE_FALSE(result->HasError());
+        // Registered as a set with an index-based and a name-based overload.
+        REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() >= 1);
+    }
+}
+
+// =============================================================================
+// ResolveColumnIndex Tests (pure column-reference resolution)
+// =============================================================================
+
+TEST_CASE("GraphExcelFunctions - ResolveColumnIndex by name", "[graph_excel][delete_rows]") {
+    const std::vector<std::string> columns = {"Region", "Amount", "Status"};
+
+    SECTION("exact name match") {
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "Region") == 0);
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "Amount") == 1);
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "Status") == 2);
+    }
+
+    SECTION("case-insensitive name match") {
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "region") == 0);
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "AMOUNT") == 1);
+    }
+
+    SECTION("exact match wins over case-insensitive match") {
+        const std::vector<std::string> dup = {"id", "ID"};
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(dup, "ID") == 1);
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(dup, "id") == 0);
+    }
+}
+
+TEST_CASE("GraphExcelFunctions - ResolveColumnIndex numeric fallback", "[graph_excel][delete_rows]") {
+    const std::vector<std::string> columns = {"Region", "Amount", "Status"};
+
+    SECTION("numeric reference is treated as a 0-based index") {
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "0") == 0);
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "2") == 2);
+    }
+
+    SECTION("numeric fallback works even past the known column count") {
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(columns, "9") == 9);
+    }
+
+    SECTION("a column literally named like a number matches by name first") {
+        const std::vector<std::string> numeric_names = {"2024", "2025"};
+        // "2024" matches the column name at index 0, not index 2024.
+        REQUIRE(GraphExcelFunctions::ResolveColumnIndex(numeric_names, "2024") == 0);
+    }
+}
+
+TEST_CASE("GraphExcelFunctions - ResolveColumnIndex unknown column throws", "[graph_excel][delete_rows]") {
+    const std::vector<std::string> columns = {"Region", "Amount"};
+    REQUIRE_THROWS_AS(GraphExcelFunctions::ResolveColumnIndex(columns, "Nope"),
+                      duckdb::InvalidInputException);
 }

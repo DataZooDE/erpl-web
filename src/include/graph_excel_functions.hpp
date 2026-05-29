@@ -85,8 +85,17 @@ private:
         duckdb::DataChunk &output);
 
     // graph_excel_delete_rows(file_path, table_name, col_index, col_value, drive := '...', secret := '...')
-    // Delete all rows where the column at col_index equals col_value.
+    // Delete all rows where the column at col_index (0-based) equals col_value.
     static duckdb::unique_ptr<duckdb::FunctionData> DeleteRowsBind(
+        duckdb::ClientContext &context,
+        duckdb::TableFunctionBindInput &input,
+        duckdb::vector<duckdb::LogicalType> &return_types,
+        duckdb::vector<std::string> &names);
+
+    // graph_excel_delete_rows(file_path, table_name, column, col_value, ...) where column is a
+    // column name. The name is resolved to a 0-based index against the table's header at scan time;
+    // a purely numeric name falls back to being treated as the index itself.
+    static duckdb::unique_ptr<duckdb::FunctionData> DeleteRowsByNameBind(
         duckdb::ClientContext &context,
         duckdb::TableFunctionBindInput &input,
         duckdb::vector<duckdb::LogicalType> &return_types,
@@ -96,6 +105,14 @@ private:
         duckdb::ClientContext &context,
         duckdb::TableFunctionInput &data,
         duckdb::DataChunk &output);
+
+public:
+    // Resolve a column reference to a 0-based index against an ordered list of column names.
+    // Matches by exact name first, then case-insensitively; if no name matches and the reference
+    // is a non-negative integer literal, it is used directly as the index. Throws otherwise.
+    // Public so it can be unit-tested independently of any network I/O.
+    static duckdb::idx_t ResolveColumnIndex(const std::vector<std::string> &columns,
+                                            const std::string &column_ref);
 };
 
 } // namespace erpl_web
