@@ -54,9 +54,9 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_teams_chann
 ----
 1
 
-# Test: graph_team_members function exists
+# Test: graph_teams_members function exists
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_team_members';
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'graph_teams_members';
 ----
 1
 

@@ -12,9 +12,9 @@ SELECT * FROM duckdb_functions() WHERE function_name = 'graph_my_teams';
 statement ok
 SELECT * FROM duckdb_functions() WHERE function_name = 'graph_teams_channels';
 
-# Test that graph_team_members function exists
+# Test that graph_teams_members function exists
 statement ok
-SELECT * FROM duckdb_functions() WHERE function_name = 'graph_team_members';
+SELECT * FROM duckdb_functions() WHERE function_name = 'graph_teams_members';
 
 # Test that graph_channel_messages function exists
 statement ok

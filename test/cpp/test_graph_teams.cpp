@@ -80,8 +80,8 @@ TEST_CASE("Graph Teams functions are registered in DuckDB", "[graph_teams][duckd
         REQUIRE(result->RowCount() == 1);
     }
 
-    SECTION("graph_team_members function exists") {
-        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_team_members'");
+    SECTION("graph_teams_members function exists") {
+        auto result = con.Query("SELECT function_name FROM duckdb_functions() WHERE function_name = 'graph_teams_members'");
         REQUIRE(result->RowCount() == 1);
     }
 
@@ -105,8 +105,8 @@ TEST_CASE("Graph Teams functions enforce required parameters", "[graph_teams][du
         REQUIRE(result->HasError());
     }
 
-    SECTION("graph_team_members requires team_id argument") {
-        auto result = con.Query("SELECT * FROM graph_team_members()");
+    SECTION("graph_teams_members requires team_id argument") {
+        auto result = con.Query("SELECT * FROM graph_teams_members()");
         REQUIRE(result->HasError());
     }
 
