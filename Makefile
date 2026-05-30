@@ -71,6 +71,14 @@ test_debug_ms: ${EXTENSION_CONFIG_STEP}
 test_debug_bc: ${EXTENSION_CONFIG_STEP}
 	./build/debug/test/unittest "test/sql/business_central_integration.test"
 
+# Regression test for GitHub #45: when erpl_web is consumed as a dependency (the duckdb
+# submodule is absent from the fetched source), its dev-only C++ test target must NOT be
+# built — otherwise test/cpp fails with "catch.hpp file not found". Pure CMake script,
+# no toolchain/DuckDB configure required, so it runs identically on every platform.
+.PHONY: test_build_guard
+test_build_guard:
+	cmake -DREPO_DIR='${PROJ_DIR}' -P test/cmake/test_cpp_tests_guard.cmake
+
 # Run C++ unit tests. ASAN_OPTIONS=detect_odr_violation=0 suppresses a false-positive ODR
 # warning that arises from DuckDB being compiled into both the static test binary and
 # libduckdb.so. The duplicate symbol (LOOKUP_TABLE in nested_to_varchar_cast.cpp) is

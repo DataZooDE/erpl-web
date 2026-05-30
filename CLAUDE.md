@@ -76,6 +76,7 @@ make release    # Full reconfigure + release build
 - `make test` - Run all tests (release mode)
 - `make test_cpp` - Run C++ unit tests (**always use this**, not the binary directly — see note below)
 - `make test_debug_sap` - Run SAP-specific tests with local SAP environment
+- `make test_build_guard` - Regression test for GitHub #45 (pure CMake, no build needed). Verifies the dev-only C++ test target stays gated on the in-tree `duckdb` submodule so consumers who statically link erpl_web (via `duckdb_extension_load`/FetchContent, where the submodule is absent) don't try to compile `test/cpp` and hit `catch.hpp file not found`. Run after touching the `add_subdirectory(test)` guard in `CMakeLists.txt`.
 - `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`)
 
 **Running individual C++ tests:**
