@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 
-option(BUILD_UNITTESTS "Build ERPL C++ Unit Tests." ON)
+# NOTE: do NOT redeclare BUILD_UNITTESTS here. DuckDB core owns this flag
+# (duckdb/CMakeLists.txt) and deliberately sets it FALSE for library / extension-config
+# builds. Redeclaring it forced our dev-only C++ test target onto consumers who statically
+# link erpl_web (GitHub #45), where the duckdb submodule the tests include from is absent.
+# We honor DuckDB's value at the bottom of this file instead.
 
 # Set extension name here
 set(TARGET_NAME erpl_web)
@@ -188,8 +192,21 @@ if(APPLE)
    target_link_libraries(${LOADABLE_EXTENSION_NAME} ${COREFOUNDATION_FRAMEWORK} ${APPLICATIONSERVICES_FRAMEWORK})
 endif()
 
-if(${BUILD_UNITTESTS})
+# C++ unit tests are a developer-only artifact. They are only buildable from our own
+# source tree, where DuckDB is checked out as the `duckdb` git submodule: test/cpp
+# includes catch.hpp / core_functions_extension.hpp via paths relative to that submodule
+# (../../duckdb/...). When erpl_web is consumed as a dependency (e.g. via
+# duckdb_extension_load / FetchContent), only the extension source is fetched — the
+# duckdb submodule is absent — so those headers cannot be found and the test target
+# fails to compile (GitHub #45). BUILD_UNITTESTS does NOT distinguish the two cases: it
+# is TRUE in both our build and a consumer's main DuckDB build. Gate on the submodule's
+# presence (same if(EXISTS ...) idiom used for extension_callback_manager.hpp above),
+# while still honoring BUILD_UNITTESTS so developers can opt out.
+if(BUILD_UNITTESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/catch/catch.hpp")
     add_subdirectory(test)
+else()
+    message(STATUS "erpl_web: skipping C++ unit tests (BUILD_UNITTESTS off, or duckdb test "
+                   "sources not present in-tree — e.g. erpl_web is consumed as a dependency; GitHub #45)")
 endif()
 
 install(
