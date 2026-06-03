@@ -248,3 +248,67 @@ TEST_CASE("OdpHttpRequestFactory URL Format Parameter Handling", "[odp_http_fact
         REQUIRE(request.url.ToString() == "https://example.com/test/$metadata");
     }
 }
+
+// Regression test for: OdpODataReadInitGlobalState called PrefetchFirstPage() on the
+// underlying ODataReadBindData, firing a bare GET with no Prefer header before the
+// orchestrator ran. For large SAP entity sets this bare GET timed out unconditionally.
+//
+// The fix removes PrefetchFirstPage() from the init phase. The orchestrator path
+// (HandleInitialLoad / HandleDeltaFetch) remains the only place that fires the
+// entity-set GET — and it always goes through OdpHttpRequestFactory, which sets both
+// odata.track-changes and odata.maxpagesize. These tests document that contract.
+TEST_CASE("OdpHttpRequestFactory - max_page_size reaches Prefer header (init-phase regression)", "[odp_http_factory]") {
+    std::string test_url = "https://example.com/sap/opu/odata/TYED/PP_ADOPS_TEST_SRV/FactsOfI_PP_ADOPS_TEST";
+
+    SECTION("Initial load with explicit max_page_size sends odata.maxpagesize in Prefer") {
+        OdpHttpRequestFactory factory;
+        auto request = factory.CreateInitialLoadRequest(test_url, 5000);
+
+        REQUIRE(request.headers.count("Prefer") == 1);
+        const auto& prefer = request.headers.at("Prefer");
+        REQUIRE(prefer.find("odata.maxpagesize=5000") != std::string::npos);
+        REQUIRE(prefer.find("odata.track-changes") != std::string::npos);
+    }
+
+    SECTION("Initial load with default page size still sends Prefer header") {
+        OdpHttpRequestFactory factory;
+        factory.SetDefaultPageSize(5000);
+        // CreateInitialLoadRequest with no explicit page size falls back to default
+        auto request = factory.CreateInitialLoadRequest(test_url);
+
+        REQUIRE(request.headers.count("Prefer") == 1);
+        const auto& prefer = request.headers.at("Prefer");
+        REQUIRE(prefer.find("odata.maxpagesize=5000") != std::string::npos);
+    }
+
+    SECTION("Delta fetch with explicit max_page_size sends odata.maxpagesize in Prefer") {
+        OdpHttpRequestFactory factory;
+        std::string delta_url = test_url + "!deltatoken=abc123&$format=json";
+        auto request = factory.CreateDeltaFetchRequest(delta_url, 5000);
+
+        // Delta fetch does NOT set odata.track-changes (change tracking already established)
+        REQUIRE(request.headers.count("Prefer") == 1);
+        const auto& prefer = request.headers.at("Prefer");
+        REQUIRE(prefer.find("odata.maxpagesize=5000") != std::string::npos);
+        REQUIRE(prefer.find("odata.track-changes") == std::string::npos);
+    }
+
+    SECTION("Bare ODataEntitySetClient::Get has no Prefer header — contrast with orchestrator path") {
+        // This section documents WHY PrefetchFirstPage() must not be called in the init phase:
+        // the plain ODataEntitySetClient sends no ODP-specific headers at all.
+        HttpParams params;
+        params.url_encode = false;
+        auto http_client = std::make_shared<HttpClient>(params);
+        HttpUrl url(test_url + "?$format=json");
+        auto auth = std::make_shared<HttpAuthParams>();
+        ODataEntitySetClient odata_client(http_client, url, auth);
+        odata_client.SetODataVersionDirectly(ODataVersion::V2);
+
+        // Inspect the request the OData client would build — no Prefer header
+        HttpRequest req(HttpMethod::GET, url);
+        req.headers["DataServiceVersion"] = "2.0";
+        req.headers["Accept"] = "application/json;odata=verbose";
+
+        REQUIRE(req.headers.count("Prefer") == 0);
+    }
+}

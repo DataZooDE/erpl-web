@@ -114,17 +114,28 @@ duckdb::unique_ptr<duckdb::GlobalTableFunctionState> OdpODataReadInitGlobalState
                                                                                  duckdb::TableFunctionInitInput &input) {
     auto &bind_data = input.bind_data->CastNoConst<OdpODataReadBindData>();
     auto column_ids = input.column_ids;
-    
-    // Delegate to the underlying OData bind data for initialization
+
+    // ActivateColumns must go through the outer OdpODataReadBindData so that
+    // active_column_ids_ is populated. HandleInitialLoad() replaces the inner
+    // ODataReadBindData via UpdateODataClientWithResponse() and re-applies
+    // active_column_ids_ to the fresh instance; if only the inner bind data is
+    // updated here that re-application is a no-op and column projection is lost.
+    bind_data.ActivateColumns(column_ids);
+
+    // Filters and predicate pushdown act on the inner OData client URL. The
+    // orchestrator will use entity_set_url_ for its own request, but the inner
+    // client still needs the finalized URL for the FetchAdditionalPagesIfNeeded
+    // path (next-page fetches that bypass the orchestrator).
     auto& odata_bind_data = bind_data.GetODataBindData();
-    
-    odata_bind_data.ActivateColumns(column_ids);
     odata_bind_data.AddFilters(input.filters);
     odata_bind_data.UpdateUrlFromPredicatePushdown();
-    
-    // Prefetch first page after URL is finalized
-    odata_bind_data.PrefetchFirstPage();
-    
+
+    // Do NOT call odata_bind_data.PrefetchFirstPage() here.
+    // For ODP, the first page is fetched by the orchestrator (with the correct
+    // Prefer: odata.maxpagesize=N and odata.track-changes headers) during the
+    // scan phase via HandleInitialLoad(). Calling PrefetchFirstPage() here fires
+    // a bare GET with no ODP-specific headers, bypassing max_page_size entirely.
+
     return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
 }
 
