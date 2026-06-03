@@ -121,10 +121,14 @@ duckdb::unique_ptr<duckdb::GlobalTableFunctionState> OdpODataReadInitGlobalState
     odata_bind_data.ActivateColumns(column_ids);
     odata_bind_data.AddFilters(input.filters);
     odata_bind_data.UpdateUrlFromPredicatePushdown();
-    
-    // Prefetch first page after URL is finalized
-    odata_bind_data.PrefetchFirstPage();
-    
+
+    // Do NOT call PrefetchFirstPage() here. The ODP first fetch must be orchestrator-owned:
+    // it is the only path that applies the required Prefer: odata.track-changes /
+    // odata.maxpagesize=N headers and buffers the response (HandleInitialLoad ->
+    // ExecuteInitialLoad -> UpdateODataClientWithResponse, during the scan phase). A bare GET
+    // here carries none of those headers, so SAP ODP ignores max_page_size and returns the whole
+    // entity set in one response, exceeding the 30 s HTTP read timeout. See GitHub #47.
+
     return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
 }
 
