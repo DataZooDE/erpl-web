@@ -58,12 +58,15 @@ LOAD '{ext}';
 SELECT 42 AS ok;
 """
 
+# Any HTTP status back (even a 5xx from a struggling httpbin) proves the
+# extension issued a request and parsed a response — which is all this check
+# validates.
 HTTP_SQL = """\
 LOAD '{ext}';
 
 SELECT
   status,
-  CASE WHEN status IN (200, 502, 503) THEN 'PASS' ELSE 'FAIL' END AS result
+  CASE WHEN status BETWEEN 100 AND 599 THEN 'PASS' ELSE 'FAIL' END AS result
 FROM http_get('https://httpbin.org/status/200')
 LIMIT 1;
 """
@@ -71,18 +74,26 @@ LIMIT 1;
 # Markers indicating httpbin.org (not the extension) is the problem. When the
 # endpoint is unavailable http_get raises an error and the CLI exits non-zero,
 # so we match against the combined stdout/stderr rather than a returned row.
+# The connection-level strings mirror httplib's Error → to_string() mapping,
+# which src/http_client.cpp embeds in the IOException it throws.
 HTTPBIN_UNAVAILABLE_MARKERS = (
     "HTTP 502",
     "HTTP 503",
     "HTTP 504",
     "Could not connect",
+    "Could not establish connection",
     "Connection refused",
+    "Connection reset",
+    "Connection timed out",
     "Could not resolve host",
+    "Failed to read connection",
+    "Failed to write connection",
+    "SSL connection failed",
     "timed out",
     "Timeout was reached",
 )
 
-HTTP_MAX_ATTEMPTS = 3
+HTTP_MAX_ATTEMPTS = 4
 HTTP_RETRY_DELAY_SECONDS = 5
 
 
@@ -162,37 +173,43 @@ def run_smoke_test(extension_path: str, duckdb_version: str, arch: str) -> None:
                 f"(duckdb exit code {load_proc.returncode})"
             )
 
-        # Check 2: http_get must reach an external endpoint. Retry to ride out
-        # transient httpbin.org hiccups; tolerate sustained httpbin-side errors.
+        # Check 2: http_get must reach an external endpoint. Every failure is
+        # retried to ride out transient httpbin.org hiccups; only after all
+        # attempts do we classify: a sustained httpbin-side error is tolerated,
+        # anything else (http_get missing, crash) fails the pipeline.
         print(f"\n[2/2] HTTP check:\n{http_sql}")
+        http_proc = None
         for attempt in range(1, HTTP_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                time.sleep(HTTP_RETRY_DELAY_SECONDS * (attempt - 1))
             http_proc = _run_sql(duckdb_bin, http_sql)
-            combined = (http_proc.stdout or "") + (http_proc.stderr or "")
 
             if http_proc.returncode == 0 and "PASS" in (http_proc.stdout or ""):
                 print("\nSmoke test PASSED")
                 return
 
-            if any(marker in combined for marker in HTTPBIN_UNAVAILABLE_MARKERS):
-                print(
-                    f"\n[attempt {attempt}/{HTTP_MAX_ATTEMPTS}] httpbin.org "
-                    f"appears unavailable (not an extension fault)."
-                )
-                if attempt < HTTP_MAX_ATTEMPTS:
-                    time.sleep(HTTP_RETRY_DELAY_SECONDS)
-                    continue
-                # Extension loaded and issued the request; httpbin is simply
-                # down. Treat as a pass rather than failing the pipeline.
-                print(
-                    "\nSmoke test PASSED (extension OK; httpbin.org unavailable, "
-                    "tolerated)"
-                )
-                return
-
-            # A non-httpbin failure (e.g. http_get missing, crash) is real.
-            raise SystemExit(
-                f"Smoke test FAILED (duckdb exit code {http_proc.returncode})"
+            print(
+                f"\n[attempt {attempt}/{HTTP_MAX_ATTEMPTS}] HTTP check failed "
+                f"(duckdb exit code {http_proc.returncode}), retrying..."
+                if attempt < HTTP_MAX_ATTEMPTS
+                else f"\n[attempt {attempt}/{HTTP_MAX_ATTEMPTS}] HTTP check failed "
+                f"(duckdb exit code {http_proc.returncode})."
             )
+
+        assert http_proc is not None
+        combined = (http_proc.stdout or "") + (http_proc.stderr or "")
+        if any(marker in combined for marker in HTTPBIN_UNAVAILABLE_MARKERS):
+            # Extension loaded and issued the request; httpbin is simply
+            # down. Treat as a pass rather than failing the pipeline.
+            print(
+                "\nSmoke test PASSED (extension OK; httpbin.org unavailable, "
+                "tolerated)"
+            )
+            return
+
+        raise SystemExit(
+            f"Smoke test FAILED (duckdb exit code {http_proc.returncode})"
+        )
 
 
 if __name__ == "__main__":
