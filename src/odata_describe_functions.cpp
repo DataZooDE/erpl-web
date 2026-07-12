@@ -202,7 +202,7 @@ static unique_ptr<FunctionData> ODataDescribeBind(
     vector<LogicalType> &return_types,
     vector<string> &names
 ) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_describe");
+    PostHogTelemetry::Instance().RecordFunctionCall("odata_describe");
     ERPL_TRACE_INFO("ODATA_DESCRIBE_BIND", "Starting OData describe bind");
 
     // Reuse authentication handling from ODataReadBind

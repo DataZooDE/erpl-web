@@ -116,7 +116,7 @@ static void DeltaShareShowSharesScan(ClientContext &context, TableFunctionInput 
 static duckdb::unique_ptr<FunctionData>
 DeltaShareShowSharesBind(ClientContext &context, TableFunctionBindInput &input,
 						vector<LogicalType> &return_types, vector<string> &names) {
-	PostHogTelemetry::Instance().CaptureFunctionExecution("delta_share_show_shares");
+	PostHogTelemetry::Instance().RecordFunctionCall("delta_share_show_shares");
 	// Validate input
 	if (input.inputs.empty()) {
 		throw InvalidInputException("delta_share_list_shares requires profile_path parameter");
@@ -190,7 +190,7 @@ static void DeltaShareShowSchemasScan(ClientContext &context, TableFunctionInput
 static duckdb::unique_ptr<FunctionData>
 DeltaShareShowSchemasBind(ClientContext &context, TableFunctionBindInput &input,
 						vector<LogicalType> &return_types, vector<string> &names) {
-	PostHogTelemetry::Instance().CaptureFunctionExecution("delta_share_show_schemas");
+	PostHogTelemetry::Instance().RecordFunctionCall("delta_share_show_schemas");
 	// Validate input
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException(
@@ -275,7 +275,7 @@ static void DeltaShareShowTablesScan(ClientContext &context, TableFunctionInput 
 static duckdb::unique_ptr<FunctionData>
 DeltaShareShowTablesBind(ClientContext &context, TableFunctionBindInput &input,
 						vector<LogicalType> &return_types, vector<string> &names) {
-	PostHogTelemetry::Instance().CaptureFunctionExecution("delta_share_show_tables");
+	PostHogTelemetry::Instance().RecordFunctionCall("delta_share_show_tables");
 	// Validate input
 	if (input.inputs.size() < 3) {
 		throw InvalidInputException("delta_share_list_tables requires profile_path, share, and "

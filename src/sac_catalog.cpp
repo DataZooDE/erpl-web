@@ -295,7 +295,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacShowModelsBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_show_models");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_show_models");
 
     // Extract and resolve credentials
     auto secret_name = SacCatalogBindHelper::ExtractSecretName(input);
@@ -368,7 +368,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacShowStoriesBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_show_stories");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_show_stories");
 
     // Extract and resolve credentials
     auto secret_name = SacCatalogBindHelper::ExtractSecretName(input);
@@ -452,7 +452,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetModelInfoBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_describe_model");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_describe_model");
 
     // Extract and validate parameters
     auto model_id = SacCatalogBindHelper::ExtractPositionalString(input, 0, "model_id");
@@ -538,7 +538,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetStoryInfoBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_describe_story");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_describe_story");
 
     // Extract and validate parameters
     auto story_id = SacCatalogBindHelper::ExtractPositionalString(input, 0, "story_id");

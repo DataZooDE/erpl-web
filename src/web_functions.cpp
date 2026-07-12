@@ -250,7 +250,7 @@ static unique_ptr<FunctionData> HttpGetBind(ClientContext &context,
                                             vector<LogicalType> &return_types, 
                                             vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_get");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_get");
     auto auth_params = AuthParamsFromInput(context, input);
     HttpParams http_params;
     if (HasParam(input.named_parameters, "timeout")) {
@@ -272,7 +272,7 @@ static unique_ptr<FunctionData> HttpHeadBind(ClientContext &context,
                                             vector<LogicalType> &return_types, 
                                             vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_head");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_head");
     auto auth_params = AuthParamsFromInput(context, input);
     HttpParams http_params;
     if (HasParam(input.named_parameters, "timeout")) {
@@ -316,7 +316,7 @@ static unique_ptr<FunctionData> HttpPostBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_post");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_post");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::POST);
 }
 
@@ -325,7 +325,7 @@ static unique_ptr<FunctionData> HttpPutBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_put");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_put");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::PUT);
 }
 
@@ -334,7 +334,7 @@ static unique_ptr<FunctionData> HttpPatchBind(ClientContext &context,
                                              vector<LogicalType> &return_types, 
                                              vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_patch");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_patch");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::PATCH);
 }
 
@@ -343,7 +343,7 @@ static unique_ptr<FunctionData> HttpDeleteBind(ClientContext &context,
                                               vector<LogicalType> &return_types, 
                                               vector<string> &names) 
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("http_delete");
+    PostHogTelemetry::Instance().RecordFunctionCall("http_delete");
     return HttpMutatingBind(context, input, return_types, names, HttpMethod::_DELETE);
 }
 

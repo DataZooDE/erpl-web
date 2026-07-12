@@ -17,7 +17,7 @@ static unique_ptr<FunctionData> DeltaShareScanBind(ClientContext& context,
                                                    TableFunctionBindInput& input,
                                                    vector<LogicalType>& return_types,
                                                    vector<string>& names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("delta_share_scan");
+    PostHogTelemetry::Instance().RecordFunctionCall("delta_share_scan");
     ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Bind phase starting");
 
     auto bind_data = make_uniq<DeltaShareScanBindData>();
