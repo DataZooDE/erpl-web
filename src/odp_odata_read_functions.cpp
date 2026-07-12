@@ -17,7 +17,7 @@ duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext 
                                                           duckdb::TableFunctionBindInput &input,
                                                           duckdb::vector<duckdb::LogicalType> &return_types,
                                                           duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_odata_read");
+    PostHogTelemetry::Instance().RecordFunctionCall("odp_odata_read");
     ERPL_TRACE_DEBUG("ODP_ODATA_READ_BIND", "=== BINDING ODP_ODATA_READ FUNCTION ===");
     
     // Extract required parameter: entity_set_url

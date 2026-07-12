@@ -900,7 +900,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
     // Initialize telemetry with API key before capturing extension load
     PostHogTelemetry::Instance().SetAPIKey("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t");
-    PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web", "0.1.0");
+    PostHogTelemetry::Instance().SetProduct("erpl_web", "2026.06.17", "oss");
+    PostHogTelemetry::Instance().AssociateGroup("deployment", PostHogTelemetry::GetDistinctId());
+    PostHogTelemetry::Instance().CaptureExtensionLoad("erpl_web", "2026.06.17");
 
     RegisterConfiguration(instance);
     RegisterWebFunctions(loader);

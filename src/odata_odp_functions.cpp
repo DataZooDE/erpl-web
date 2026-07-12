@@ -122,7 +122,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SapODataShowBind(duckdb::ClientC
                                                                  duckdb::TableFunctionBindInput &input,
                                                                  duckdb::vector<duckdb::LogicalType> &return_types,
                                                                  duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_sap_show");
+    PostHogTelemetry::Instance().RecordFunctionCall("odata_sap_show");
     auto base_url = input.inputs[0].GetValue<std::string>();
 
     // Get HTTP client and auth params from DuckDB secrets
@@ -203,7 +203,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> OdpODataShowBind(duckdb::ClientC
                                                                  duckdb::TableFunctionBindInput &input,
                                                                  duckdb::vector<duckdb::LogicalType> &return_types,
                                                                  duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odp_odata_show");
+    PostHogTelemetry::Instance().RecordFunctionCall("odp_odata_show");
     auto base_url = input.inputs[0].GetValue<std::string>();
 
     // Get HTTP client and auth params from DuckDB secrets

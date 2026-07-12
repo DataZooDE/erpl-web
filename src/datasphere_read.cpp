@@ -120,7 +120,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duc
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_read_relational");
+    PostHogTelemetry::Instance().RecordFunctionCall("datasphere_read_relational");
     ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "=== DATASPHERE_RELATIONAL_BIND CALLED ===");
     
     // Extract basic parameters
@@ -262,7 +262,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duc
                                                                              duckdb::TableFunctionBindInput &input,
                                                                              duckdb::vector<duckdb::LogicalType> &return_types,
                                                                              duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_read_analytical");
+    PostHogTelemetry::Instance().RecordFunctionCall("datasphere_read_analytical");
     ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_BIND", "=== DATASPHERE_ANALYTICAL_BIND CALLED ===");
 
     // Extract basic parameters

@@ -1027,7 +1027,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_describe_space");
+    PostHogTelemetry::Instance().RecordFunctionCall("datasphere_describe_space");
     // Extract space_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     
@@ -1073,7 +1073,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
                                                                            duckdb::TableFunctionBindInput &input,
                                                                            duckdb::vector<duckdb::LogicalType> &return_types,
                                                                            duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_describe_asset");
+    PostHogTelemetry::Instance().RecordFunctionCall("datasphere_describe_asset");
     // Extract space_id and asset_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     auto asset_id = input.inputs[1].GetValue<std::string>();
@@ -1267,7 +1267,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
-            PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_show_spaces");
+            PostHogTelemetry::Instance().RecordFunctionCall("datasphere_show_spaces");
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name"};
 
@@ -1337,7 +1337,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         },
         // bind
         [](duckdb::ClientContext &context, duckdb::TableFunctionBindInput &input, duckdb::vector<duckdb::LogicalType> &return_types, duckdb::vector<std::string> &names) -> duckdb::unique_ptr<duckdb::FunctionData> {
-            PostHogTelemetry::Instance().CaptureFunctionExecution("datasphere_show_assets");
+            PostHogTelemetry::Instance().RecordFunctionCall("datasphere_show_assets");
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name"};
 

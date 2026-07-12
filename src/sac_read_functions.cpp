@@ -23,7 +23,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadPlanningDataBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_read_planning_data");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_read_planning_data");
 
     if (input.inputs.empty()) {
         throw duckdb::InvalidInputException("sac_read_planning_data requires a model_id parameter");
@@ -101,7 +101,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadAnalyticalBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_read_analytical");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_read_analytical");
 
     if (input.inputs.empty()) {
         throw duckdb::InvalidInputException("sac_read_analytical requires a model_id parameter");
@@ -198,7 +198,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadStoryDataBind(
     duckdb::TableFunctionBindInput &input,
     duckdb::vector<duckdb::LogicalType> &return_types,
     duckdb::vector<std::string> &names) {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("sac_read_story_data");
+    PostHogTelemetry::Instance().RecordFunctionCall("sac_read_story_data");
 
     if (input.inputs.empty()) {
         throw duckdb::InvalidInputException("sac_read_story_data requires a story_id parameter");

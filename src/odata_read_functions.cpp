@@ -2011,7 +2011,7 @@ duckdb::InvalidInputException ConvertHttpErrorToUserFriendly(const std::runtime_
 duckdb::unique_ptr<FunctionData>
 ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
               vector<LogicalType> &return_types, vector<string> &names) {
-  PostHogTelemetry::Instance().CaptureFunctionExecution("odata_read");
+  PostHogTelemetry::Instance().RecordFunctionCall("odata_read");
   auto auth_params = AuthParamsFromInput(context, input);
   auto url = input.inputs[0].GetValue<std::string>();
 

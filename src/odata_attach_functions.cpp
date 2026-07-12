@@ -135,7 +135,7 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
                                                vector<LogicalType> &return_types,
                                                vector<string> &names)
 {
-    PostHogTelemetry::Instance().CaptureFunctionExecution("odata_attach");
+    PostHogTelemetry::Instance().RecordFunctionCall("odata_attach");
     auto auth_params = AuthParamsFromInput(context, input);
     auto url = input.inputs[0].GetValue<std::string>();
     auto bind_data = ODataAttachBindData::FromUrl(url, auth_params);
