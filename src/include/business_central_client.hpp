@@ -1,7 +1,7 @@
 #pragma once
 
 #include "odata_client.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include <string>
 #include <memory>
 #include <vector>

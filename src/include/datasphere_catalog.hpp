@@ -5,7 +5,7 @@
 #include "duckdb/function/function_set.hpp"
 #include "datasphere_client.hpp"
 #include "odata_read_functions.hpp"
-#include "oauth2_types.hpp"
+#include "datazoo/oauth2/oauth2_types.hpp"
 #include <memory>
 #include <string>
 #include <vector>

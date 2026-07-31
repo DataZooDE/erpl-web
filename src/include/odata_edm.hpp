@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "tracing.hpp"
 #include "tinyxml2.h"
+#include "datazoo/oauth2/odata_version.hpp"
 #include <string>
 #include <vector>
 #include <map>
@@ -23,11 +24,21 @@ namespace erpl_web
 {
 
 // OData Version enum ---------------------------------------------------
-enum class ODataVersion {
-    UNKNOWN,
-    V2,
-    V4
-};
+//
+// Defined by datazoo-oauth2's http_client.hpp, not here. The extraction took
+// HttpRequest -- which carries SetODataVersion()/AddODataVersionHeaders() --
+// into the library, and pulling this 2500-line OData header (plus tinyxml2)
+// along with it was rejected as scope creep, so the library declares the enum
+// locally instead. Two definitions of erpl_web::ODataVersion would then break
+// every translation unit that sees both headers, and most of this repo does.
+//
+// Defining it in exactly one place and including that place is the whole fix;
+// the enumerators are identical (UNKNOWN, V2, V4), so nothing changes. The
+// include itself is at file scope near the top, and it is the tiny
+// odata_version.hpp rather than http_client.hpp: the latter does
+// `using namespace duckdb;` at global scope, and pulling that in EARLIER than
+// the old include order did made `EnumType` ambiguous between duckdb::EnumType
+// and erpl_web::EnumType in test_odata_edm.cpp.
 
 // PrimitiveType class ---------------------------------------------------
 class PrimitiveType 

@@ -1,8 +1,8 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
-#include "oauth2_types.hpp"
-#include "oauth2_browser.hpp"
+#include "datazoo/oauth2/oauth2_types.hpp"
+#include "datazoo/oauth2/oauth2_browser.hpp"
 #include "datasphere_local_server.hpp"
 #include <iostream>
 #include <memory>

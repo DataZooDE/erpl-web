@@ -5,8 +5,8 @@
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
 
-#include "charset_converter.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/charset_converter.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "duckdb_argument_helper.hpp"
 
 using namespace erpl_web;

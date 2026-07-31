@@ -1,8 +1,8 @@
 #pragma once
 
 #include "delta_share_types.hpp"
-#include "http_client.hpp"
-#include "timeout_http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
+#include "datazoo/oauth2/timeout_http_client.hpp"
 #include "yyjson.hpp"
 #include <memory>
 #include <vector>

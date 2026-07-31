@@ -1,5 +1,5 @@
 #include "catch.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_url_helpers.hpp"
 
 using namespace erpl_web;

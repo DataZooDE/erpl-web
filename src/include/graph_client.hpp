@@ -1,6 +1,6 @@
 #pragma once
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "yyjson.hpp"
 #include <map>
 #include <memory>

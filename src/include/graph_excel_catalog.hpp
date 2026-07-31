@@ -26,7 +26,7 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/storage/database_size.hpp"
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 #include <string>
 #include <vector>

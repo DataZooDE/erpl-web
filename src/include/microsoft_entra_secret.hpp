@@ -1,7 +1,7 @@
 #pragma once
 
 #include "duckdb/main/secret/secret_manager.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include <chrono>
 #include <optional>
 

@@ -1,6 +1,6 @@
 #include "datasphere_client.hpp"
 #include "odata_client.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/value.hpp"
 #include <sstream>

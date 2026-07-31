@@ -5,7 +5,7 @@
 #include "sac_url_builder.hpp"
 #include "sac_generic_bind_data.hpp"
 #include "graph_output_utils.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_content.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "telemetry.hpp"

@@ -79,11 +79,27 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/datazoo-banner/include)
 # Ensure posthog_telemetry has access to OpenSSL headers (required for httplib SSL support)
 target_link_libraries(posthog_telemetry PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
+# ---------------------------------------------------------------------------
+# datazoo-oauth2 -- the shared OAuth2 stack. Extracted FROM this repo, and now
+# consumed back from it (REQ-A-01/A-02; design in duckdb-gdrive's docs/hld.md
+# section 5.4). The copies that used to live in src/ are deleted; this is the
+# single implementation both erpl-web and duckdb-gdrive build against.
+#
+# Pinned by commit, not tracked by branch: each consumer pins its own, so
+# neither is forced to upgrade on the other's schedule (R-9).
+#
+# DATAZOO_OAUTH2_USE_HOST_TRACING: this repo has a real ErplTracer singleton
+# and its own ERPL_TRACE_* macros. Without this the library's shim defines
+# both again, and every translation unit that sees both headers fails with a
+# macro redefinition and a type conflict.
+# ---------------------------------------------------------------------------
+add_subdirectory(datazoo-oauth2)
+target_compile_definitions(datazoo_oauth2 PUBLIC DATAZOO_OAUTH2_USE_HOST_TRACING)
+target_include_directories(datazoo_oauth2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+
 set(EXTENSION_SOURCES
     src/tracing.cpp
     src/duckdb_argument_helper.cpp
-    src/charset_converter.cpp
-    src/http_client.cpp
     src/odata_attach_functions.cpp
     src/odata_catalog.cpp
     src/odata_client.cpp
@@ -104,15 +120,9 @@ set(EXTENSION_SOURCES
     src/datasphere_catalog.cpp
     src/datasphere_read.cpp
     src/datasphere_types.cpp
-    src/oauth2_types.cpp
-    src/oauth2_browser.cpp
     src/datasphere_local_server.cpp
     src/odata_odp_functions.cpp
     src/datasphere_secret.cpp
-    src/oauth2_callback_handler.cpp
-    src/oauth2_flow_v2.cpp
-    src/oauth2_server.cpp
-    src/timeout_http_client.cpp
     src/odata_url_helpers.cpp
     src/odata_query_builder.cpp
     src/parameter_validation.cpp
@@ -173,8 +183,8 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry)
+target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry datazoo_oauth2)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto tinyxml2::tinyxml2 cpptrace::cpptrace posthog_telemetry datazoo_oauth2)
 
 # Enable C++17
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)

@@ -3,7 +3,7 @@
 #include "yyjson.hpp"
 #include <type_traits>
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_edm.hpp"
 #include "odata_content.hpp"
 #include "tracing.hpp"

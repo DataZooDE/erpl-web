@@ -4,7 +4,7 @@
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "microsoft_entra_secret.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include <string>
 #include <memory>
 

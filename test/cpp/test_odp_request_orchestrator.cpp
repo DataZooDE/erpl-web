@@ -1,6 +1,6 @@
 #include "catch.hpp"
 #include "odp_request_orchestrator.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include <regex>
 
 using namespace erpl_web;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "odata_edm.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson;

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "duckdb/main/secret/secret_manager.hpp"
-#include "oauth2_flow_v2.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/oauth2_flow_v2.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 namespace erpl_web {
 
