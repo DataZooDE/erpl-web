@@ -47,6 +47,7 @@
 
 // Needed for OPENSSL_init_ssl / OPENSSL_INIT_NO_ATEXIT
 #include <openssl/ssl.h>
+#include "erpl_web_banner.hpp"
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <dlfcn.h>
@@ -82,6 +83,11 @@
     #undef BOTH
 #endif
 #endif
+
+// Deliberately outside namespace duckdb: the banner library is DuckDB-agnostic
+// and the guard macro refers to this object from every guarded source file.
+const datazoo::BannerInfo ERPL_WEB_BANNER {
+    "erpl_web", "2026.07.24", "https://github.com/DataZooDE/erpl-web"};
 
 namespace duckdb {
 
@@ -920,6 +926,11 @@ static void LoadInternal(ExtensionLoader &loader) {
     RegisterGraphEntraFunctions(loader);
     RegisterGraphTeamsFunctions(loader);
     RegisterTracingPragmas(loader);
+
+    datazoo::RegisterBannerOption(loader);
+    // Last, so a load that fails earlier never advertises itself. Silent unless
+    // stderr is a terminal and the ~/.duckdb stamp is over a day old.
+    datazoo::ShowBanner(ERPL_WEB_BANNER);
 }
     
 void ErplWebExtension::Load(ExtensionLoader &loader) {

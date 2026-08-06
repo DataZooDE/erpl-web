@@ -5,6 +5,7 @@
 #include "http_client.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -43,7 +44,7 @@ duckdb::TableFunction BcTableEntry::GetScanFunction(duckdb::ClientContext &conte
     odata_bind->GetResultTypes();
     bind_data = std::move(odata_bind);
 
-    duckdb::TableFunction table_function("odata_table_scan", {}, ODataReadScan, ODataReadBind, ODataReadTableInitGlobalState);
+    duckdb::TableFunction table_function("odata_table_scan", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadBind), ODataReadTableInitGlobalState);
     table_function.filter_pushdown = true;
     table_function.filter_prune = true;
     table_function.projection_pushdown = true;

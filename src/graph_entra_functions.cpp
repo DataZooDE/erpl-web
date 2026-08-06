@@ -7,6 +7,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "tracing.hpp"
 #include "yyjson.hpp"
+#include "erpl_web_banner.hpp"
 
 using namespace duckdb;
 using namespace duckdb_yyjson;
@@ -484,7 +485,7 @@ void GraphEntraFunctions::SignInLogsScan(
 
 void GraphEntraFunctions::Register(ExtensionLoader &loader) {
     {
-        TableFunction users_func("graph_users", {}, UsersScan, UsersBind);
+        TableFunction users_func("graph_users", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, UsersScan), DATAZOO_GUARD(ERPL_WEB_BANNER, UsersBind));
         users_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(users_func);
         FunctionDescription desc;
@@ -497,7 +498,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction groups_func("graph_groups", {}, GroupsScan, GroupsBind);
+        TableFunction groups_func("graph_groups", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, GroupsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, GroupsBind));
         groups_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(groups_func);
         FunctionDescription desc;
@@ -510,7 +511,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction devices_func("graph_devices", {}, DevicesScan, DevicesBind);
+        TableFunction devices_func("graph_devices", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, DevicesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DevicesBind));
         devices_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(devices_func);
         FunctionDescription desc;
@@ -523,7 +524,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
         loader.RegisterFunction(std::move(info));
     }
     {
-        TableFunction signin_logs_func("graph_signin_logs", {}, SignInLogsScan, SignInLogsBind);
+        TableFunction signin_logs_func("graph_signin_logs", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, SignInLogsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, SignInLogsBind));
         signin_logs_func.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(signin_logs_func);
         FunctionDescription desc;

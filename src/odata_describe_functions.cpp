@@ -8,6 +8,7 @@
 
 #include <optional>
 #include <set>
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -493,7 +494,7 @@ static void ODataDescribeScan(
 TableFunctionSet CreateODataDescribeFunction() {
     TableFunctionSet describe_func("odata_describe");
     
-    TableFunction describe_function({LogicalTypeId::VARCHAR}, ODataDescribeScan, ODataDescribeBind);
+    TableFunction describe_function({LogicalTypeId::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataDescribeBind));
     describe_function.named_parameters["secret"] = LogicalTypeId::VARCHAR;
     
     describe_func.AddFunction(describe_function);
