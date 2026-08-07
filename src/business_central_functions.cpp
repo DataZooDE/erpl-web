@@ -7,6 +7,7 @@
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include <variant>
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -70,7 +71,7 @@ static void BcShowCompaniesScan(ClientContext &context, TableFunctionInput &data
 TableFunctionSet CreateBcShowCompaniesFunction() {
     TableFunctionSet set("bc_show_companies");
 
-    TableFunction func({}, BcShowCompaniesScan, BcShowCompaniesBind);
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesBind));
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -135,7 +136,7 @@ static void BcShowEntitiesScan(ClientContext &context, TableFunctionInput &data,
 TableFunctionSet CreateBcShowEntitiesFunction() {
     TableFunctionSet set("bc_show_entities");
 
-    TableFunction func({}, BcShowEntitiesScan, BcShowEntitiesBind);
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesBind));
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -248,7 +249,7 @@ static void BcDescribeScan(ClientContext &context, TableFunctionInput &data, Dat
 TableFunctionSet CreateBcDescribeFunction() {
     TableFunctionSet set("bc_describe");
 
-    TableFunction func({LogicalType::VARCHAR}, BcDescribeScan, BcDescribeBind);
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeBind));
     func.named_parameters["secret"] = LogicalType::VARCHAR;
     func.named_parameters["company"] = LogicalType::VARCHAR;
 
@@ -373,7 +374,7 @@ static double BcReadProgress(ClientContext &context, const FunctionData *bind_da
 TableFunctionSet CreateBcReadFunction() {
     TableFunctionSet set("bc_read");
 
-    TableFunction func({LogicalType::VARCHAR}, BcReadScan, BcReadBind, BcReadInitGlobalState);
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcReadBind), BcReadInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
     func.named_parameters["company"] = LogicalType::VARCHAR;
     func.named_parameters["expand"] = LogicalType::VARCHAR;

@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include "erpl_web_banner.hpp"
 
 using duckdb::ClientContext;
 using duckdb::DataChunk;
@@ -334,7 +335,7 @@ DeltaShareShowTablesBind(ClientContext &context, TableFunctionBindInput &input,
 static TableFunctionSet CreateDeltaShareShowSharesFunctionInternal() {
 	TableFunctionSet function_set("delta_share_show_shares");
 
-	duckdb::TableFunction func({LogicalTypeId::VARCHAR}, DeltaShareShowSharesScan, DeltaShareShowSharesBind);
+	duckdb::TableFunction func({LogicalTypeId::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSharesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSharesBind));
 
 	function_set.AddFunction(func);
 	return function_set;
@@ -344,7 +345,7 @@ static TableFunctionSet CreateDeltaShareShowSchemasFunctionInternal() {
 	TableFunctionSet function_set("delta_share_show_schemas");
 
 	duckdb::TableFunction func({LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR},
-							   DeltaShareShowSchemasScan, DeltaShareShowSchemasBind);
+							   DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSchemasScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSchemasBind));
 
 	function_set.AddFunction(func);
 	return function_set;
@@ -354,7 +355,7 @@ static TableFunctionSet CreateDeltaShareShowTablesFunctionInternal() {
 	TableFunctionSet function_set("delta_share_show_tables");
 
 	duckdb::TableFunction func({LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR},
-							   DeltaShareShowTablesScan, DeltaShareShowTablesBind);
+							   DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowTablesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowTablesBind));
 
 	function_set.AddFunction(func);
 	return function_set;

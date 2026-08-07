@@ -7,6 +7,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
+#include "erpl_web_banner.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -455,7 +456,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
 
     {
         TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR},
-                                    PlansScan, PlansBind);
+                                    DATAZOO_GUARD(ERPL_WEB_BANNER, PlansScan), DATAZOO_GUARD(ERPL_WEB_BANNER, PlansBind));
         planner_plans.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(planner_plans);
         FunctionDescription desc;
@@ -469,7 +470,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR},
-                                      BucketsScan, BucketsBind);
+                                      DATAZOO_GUARD(ERPL_WEB_BANNER, BucketsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BucketsBind));
         planner_buckets.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(planner_buckets);
         FunctionDescription desc;
@@ -483,7 +484,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR},
-                                    TasksScan, TasksBind);
+                                    DATAZOO_GUARD(ERPL_WEB_BANNER, TasksScan), DATAZOO_GUARD(ERPL_WEB_BANNER, TasksBind));
         planner_tasks.named_parameters["secret"] = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(planner_tasks);
         FunctionDescription desc;
@@ -499,7 +500,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction create_task("graph_planner_create_task",
                                    {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                   CreateTaskScan, CreateTaskBind);
+                                   DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskBind));
         create_task.named_parameters["bucket_id"]        = LogicalType::VARCHAR;
         create_task.named_parameters["due_date"]         = LogicalType::VARCHAR;
         create_task.named_parameters["start_date"]       = LogicalType::VARCHAR;

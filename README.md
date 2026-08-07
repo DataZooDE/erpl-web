@@ -1135,3 +1135,18 @@ This project is licensed under the Business Source License (BSL) 1.1. See [LICEN
 ---
 
 Build API-powered analytics with DuckDB + ERPL Web. Query the web like it’s a table. 🚀
+
+## Feedback
+
+If `erpl_web` misbehaves — an OData service it will not read, a Datasphere or Business
+Central call that fails oddly — please
+[open an issue](https://github.com/DataZooDE/erpl-web/issues). Services differ by tenant,
+version and auth setup in ways we cannot reproduce here, so a report with your setup is
+the fastest path to a fix. Every error the extension raises ends with that link.
+
+If it saved you time, a star on the repo helps other people find it.
+
+The first time you load the extension in an interactive terminal each day, a small
+banner says the same thing. It never prints when output is piped, in notebooks, or in
+CI. Silence it with `SET datazoo_banner = false;` or `DATAZOO_NO_BANNER=1`.
+

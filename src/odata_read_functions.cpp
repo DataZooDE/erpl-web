@@ -9,6 +9,7 @@
 
 #include "tracing.hpp"
 #include "telemetry.hpp"
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -2134,7 +2135,7 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
 TableFunctionSet CreateODataReadFunction() {
     TableFunctionSet function_set("odata_read");
     
-    TableFunction read_entity_set({LogicalTypeId::VARCHAR}, ODataReadScan, ODataReadBind, ODataReadTableInitGlobalState);
+    TableFunction read_entity_set({LogicalTypeId::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadBind), ODataReadTableInitGlobalState);
     read_entity_set.filter_pushdown = true;
     read_entity_set.projection_pushdown = true;
     read_entity_set.table_scan_progress = ODataReadTableProgress;

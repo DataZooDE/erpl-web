@@ -68,6 +68,14 @@ include_directories(
 # Add PostHog telemetry library
 add_subdirectory(posthog-telemetry)
 
+# Feedback banner (header-only). Telemetry ON so a printed banner counts as a
+# banner_shown event through the instance configured above.
+set(DATAZOO_BANNER_TELEMETRY ON CACHE BOOL "" FORCE)
+set(DATAZOO_BANNER_TELEMETRY_INCLUDE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/posthog-telemetry/include CACHE PATH "" FORCE)
+add_subdirectory(datazoo-banner)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/datazoo-banner/include)
+
 # Ensure posthog_telemetry has access to OpenSSL headers (required for httplib SSL support)
 target_link_libraries(posthog_telemetry PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 

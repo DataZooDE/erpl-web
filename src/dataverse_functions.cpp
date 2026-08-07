@@ -6,6 +6,7 @@
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include <variant>
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -68,7 +69,7 @@ static void CrmShowEntitiesScan(ClientContext &context, TableFunctionInput &data
 TableFunctionSet CreateCrmShowEntitiesFunction() {
     TableFunctionSet set("crm_show_entities");
 
-    TableFunction func({}, CrmShowEntitiesScan, CrmShowEntitiesBind);
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesBind));
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -199,7 +200,7 @@ static void CrmDescribeScan(ClientContext &context, TableFunctionInput &data, Da
 TableFunctionSet CreateCrmDescribeFunction() {
     TableFunctionSet set("crm_describe");
 
-    TableFunction func({LogicalType::VARCHAR}, CrmDescribeScan, CrmDescribeBind);
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeBind));
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -300,7 +301,7 @@ static double CrmReadProgress(ClientContext &context, const FunctionData *bind_d
 TableFunctionSet CreateCrmReadFunction() {
     TableFunctionSet set("crm_read");
 
-    TableFunction func({LogicalType::VARCHAR}, CrmReadScan, CrmReadBind, CrmReadInitGlobalState);
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmReadBind), CrmReadInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
     func.named_parameters["expand"] = LogicalType::VARCHAR;
 

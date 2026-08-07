@@ -13,6 +13,7 @@
 #include "telemetry.hpp"
 #include <algorithm>
 #include <unordered_set>
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -1664,7 +1665,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_space");
     
-    duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DatasphereDescribeSpaceFunction, DatasphereDescribeSpaceBind);
+    duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceBind));
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1674,7 +1675,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_asset");
     
     duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
-                                        DatasphereDescribeAssetFunction, DatasphereDescribeAssetBind);
+                                        DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetBind));
     
     function_set.AddFunction(describe_asset);
     return function_set;

@@ -8,6 +8,7 @@
 #include "tracing.hpp"
 #include "telemetry.hpp"
 #include <sstream>
+#include "erpl_web_banner.hpp"
 
 namespace erpl_web {
 
@@ -216,7 +217,7 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
     duckdb::TableFunction relational_function_2_params(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
-        ODataReadScan, DatasphereReadRelationalBind, DatasphereReadRelationalTableInitGlobalState);
+        DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadRelationalBind), DatasphereReadRelationalTableInitGlobalState);
     relational_function_2_params.filter_pushdown = true;
     relational_function_2_params.projection_pushdown = true;
     relational_function_2_params.table_scan_progress = ODataReadTableProgress;
@@ -232,7 +233,7 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
-        ODataReadScan, DatasphereReadRelationalBind, DatasphereReadRelationalTableInitGlobalState);
+        DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadRelationalBind), DatasphereReadRelationalTableInitGlobalState);
     relational_function_3_params.filter_pushdown = true;
     relational_function_3_params.projection_pushdown = true;
     relational_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
@@ -378,7 +379,7 @@ duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction() {
     duckdb::TableFunction analytical_function_2_params(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
-        ODataReadScan, DatasphereReadAnalyticalBind, DatasphereReadAnalyticalTableInitGlobalState);
+        DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadAnalyticalBind), DatasphereReadAnalyticalTableInitGlobalState);
     analytical_function_2_params.filter_pushdown = true;
     analytical_function_2_params.projection_pushdown = true;
     analytical_function_2_params.table_scan_progress = ODataReadTableProgress;
@@ -396,7 +397,7 @@ duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction() {
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
          duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
-        ODataReadScan, DatasphereReadAnalyticalBind, DatasphereReadAnalyticalTableInitGlobalState);
+        DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadAnalyticalBind), DatasphereReadAnalyticalTableInitGlobalState);
     analytical_function_3_params.filter_pushdown = true;
     analytical_function_3_params.projection_pushdown = true;
     analytical_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
