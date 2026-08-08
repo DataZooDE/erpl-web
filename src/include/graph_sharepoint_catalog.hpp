@@ -26,7 +26,7 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 #include <unordered_map>
 #include <mutex>

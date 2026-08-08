@@ -2,7 +2,7 @@
 #include "test_helpers.hpp"
 #include "duckdb.hpp"
 #include "datasphere_catalog.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include <iostream>
 
 using namespace erpl_web;

@@ -8,7 +8,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_edm.hpp"
 #include <string>
 #include <vector>

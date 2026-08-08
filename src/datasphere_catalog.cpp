@@ -3,7 +3,7 @@
 #include "odata_client.hpp"
 #include "odata_content.hpp"
 #include "odata_edm.hpp"
-#include "oauth2_flow_v2.hpp"
+#include "datazoo/oauth2/oauth2_flow_v2.hpp"
 #include "datasphere_secret.hpp"
 #include "graph_output_utils.hpp"
 #include "duckdb/function/table_function.hpp"

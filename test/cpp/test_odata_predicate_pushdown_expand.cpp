@@ -1,6 +1,6 @@
 #include "catch.hpp"
 #include "odata_predicate_pushdown_helper.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 using namespace erpl_web;
 

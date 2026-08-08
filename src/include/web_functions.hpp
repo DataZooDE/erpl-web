@@ -7,7 +7,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/function/function_set.hpp"
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 using namespace duckdb;
 

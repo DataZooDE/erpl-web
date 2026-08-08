@@ -1,7 +1,7 @@
 #include "sac_attach_functions.hpp"
 #include "sac_url_builder.hpp"
 #include "sac_client.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_storage.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"

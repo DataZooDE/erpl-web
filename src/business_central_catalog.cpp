@@ -2,7 +2,7 @@
 #include "odata_edm.hpp"
 #include "odata_read_functions.hpp"
 #include "odata_url_helpers.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "erpl_web_banner.hpp"

@@ -3,7 +3,7 @@
 #include "odata_read_functions.hpp"
 #include "odp_subscription_state_manager.hpp"
 #include "odp_request_orchestrator.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
 #include <memory>
 #include <string>

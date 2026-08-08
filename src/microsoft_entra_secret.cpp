@@ -1,5 +1,5 @@
 #include "microsoft_entra_secret.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "yyjson.hpp"

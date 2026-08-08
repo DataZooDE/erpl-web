@@ -3,7 +3,7 @@
 #include "duckdb.hpp"
 
 #include "odp_http_request_factory.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 
 using namespace erpl_web;
 using namespace std;

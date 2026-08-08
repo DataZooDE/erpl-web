@@ -1,5 +1,5 @@
 #include "graph_excel_secret.hpp"
-#include "oauth2_flow_v2.hpp"
+#include "datazoo/oauth2/oauth2_flow_v2.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include <chrono>

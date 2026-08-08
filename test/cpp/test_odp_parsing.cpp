@@ -1,6 +1,6 @@
 #include "catch.hpp"
 #include "odata_odp_functions.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
 #include "yyjson.hpp"
 #include <memory>

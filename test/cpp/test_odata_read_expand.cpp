@@ -1,7 +1,7 @@
 #include "catch.hpp"
 #include "odata_read_functions.hpp"
 #include "odata_client.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "http_auth.hpp"
 
 using namespace erpl_web;

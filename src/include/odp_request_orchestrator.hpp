@@ -2,7 +2,7 @@
 
 #include "odp_http_request_factory.hpp"
 #include "odata_client.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
 #include <memory>
 #include <string>

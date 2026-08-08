@@ -1,6 +1,6 @@
 #include "duckdb/function/table_function.hpp"
 
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_edm.hpp"
 #include "odata_expand_parser.hpp"
 #include "odata_read_functions.hpp"

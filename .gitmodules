@@ -12,3 +12,6 @@
 [submodule "datazoo-banner"]
 	path = datazoo-banner
 	url = https://github.com/DataZooDE/duckdb-extension-banner.git
+[submodule "datazoo-oauth2"]
+	path = datazoo-oauth2
+	url = https://github.com/DataZooDE/datazoo-oauth2.git

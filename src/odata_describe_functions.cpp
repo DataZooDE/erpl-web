@@ -1,5 +1,5 @@
 #include "odata_read_functions.hpp"
-#include "http_client.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "odata_client.hpp"
 #include "odata_edm.hpp"
 
