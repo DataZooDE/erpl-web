@@ -1,4 +1,5 @@
 #include "odata_url_helpers.hpp"
+#include "odata_text_scanning.hpp"
 #include <sstream>
 
 namespace erpl_web {
@@ -270,6 +271,13 @@ std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
             std::string opt;
             while (i < expand_value.size() && depth > 0) {
                 char c = expand_value[i];
+                if (c == '\'') {
+                    // A parenthesis inside a string literal must not change the depth.
+                    const auto literal_end = odata_text::SkipQuotedLiteral(expand_value, i);
+                    opt.append(expand_value, i, literal_end - i);
+                    i = literal_end;
+                    continue;
+                }
                 if (c == '(') { depth++; opt += c; i++; continue; }
                 if (c == ')') {
                     depth--;
@@ -281,18 +289,14 @@ std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
 
             // Now normalize options list like "expand=Services();select=Id" (semicolon or comma separated)
             // Split on ';' and ',' but not inside nested parentheses
+            // Split on ';' and ',' at depth 0 only, and never inside a string literal:
+            // "$filter=Name eq 'Product;Name'" is one option, not two. See GitHub #122.
+            std::vector<std::string> raw_parts = odata_text::SplitTopLevel(opt, ";,");
             std::vector<std::string> parts;
-            {
-                size_t j = 0, start = 0; int d = 0;
-                while (j <= opt.size()) {
-                    if (j == opt.size() || ((opt[j] == ';' || opt[j] == ',') && d == 0)) {
-                        if (j > start) parts.emplace_back(opt.substr(start, j - start));
-                        if (j < opt.size()) parts.emplace_back(std::string(1, opt[j]));
-                        j++; start = j; continue;
-                    }
-                    if (opt[j] == '(') d++;
-                    else if (opt[j] == ')') d--;
-                    j++;
+            parts.reserve(raw_parts.size());
+            for (auto &raw_part : raw_parts) {
+                if (!raw_part.empty()) {
+                    parts.emplace_back(std::move(raw_part));
                 }
             }
 
@@ -357,7 +361,13 @@ std::string ODataUrlCodec::normalizeAndSanitizeExpand(const std::string &expand_
             while (i < normalized.size() && normalized[i] != ')') {
                 // Extract key
                 size_t key_start = i;
-                while (i < normalized.size() && normalized[i] != '=' && normalized[i] != ';' && normalized[i] != ')') i++;
+                while (i < normalized.size() && normalized[i] != '=' && normalized[i] != ';' && normalized[i] != ')') {
+                    if (normalized[i] == '\'') {
+                        i = odata_text::SkipQuotedLiteral(normalized, i);
+                        continue;
+                    }
+                    i++;
+                }
                 std::string key = normalized.substr(key_start, i - key_start);
                 // Trim spaces
                 while (!key.empty() && key.front() == ' ') key.erase(key.begin());
@@ -368,6 +378,13 @@ std::string ODataUrlCodec::normalizeAndSanitizeExpand(const std::string &expand_
                     size_t val_start = i;
                     int depth = 0;
                     while (i < normalized.size()) {
+                        if (normalized[i] == '\'') {
+                            // ';', ')' and '(' inside a string literal are data, not
+                            // structure - stepping over the literal keeps the option
+                            // boundaries correct. See GitHub #122.
+                            i = odata_text::SkipQuotedLiteral(normalized, i);
+                            continue;
+                        }
                         if (normalized[i] == '(') depth++;
                         if (normalized[i] == ')') { if (depth == 0) break; depth--; }
                         if (depth == 0 && normalized[i] == ';') break;
