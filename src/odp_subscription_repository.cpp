@@ -125,11 +125,19 @@ void OdpSubscriptionRepository::ResolveStateCatalog() {
         return;
     }
 
+    // Enumerating attached catalogs reads through the client's transaction context, so a
+    // transaction has to be active. When the repository is driven from a table function
+    // there already is one - and RunFunctionInTransaction would DEADLOCK there, because it
+    // takes the client-context lock the running query already holds. So the caller's
+    // transaction is used when it exists, and one is started only for standalone callers
+    // such as unit tests.
+    std::string default_name;
+    const auto resolve = [&]() {
     auto& database_manager = duckdb::DatabaseManager::Get(context);
 
     // Prefer the catalog that is currently default, so an explicit USE keeps
     // working -- but only when it can actually hold the state durably.
-    const std::string default_name = duckdb::DatabaseManager::GetDefaultDatabase(context);
+    default_name = duckdb::DatabaseManager::GetDefaultDatabase(context);
     auto default_database = database_manager.GetDatabase(context, default_name);
     if (default_database && IsUsableStateCatalog(*default_database)) {
         state_catalog = default_database->GetName();
@@ -146,6 +154,13 @@ void OdpSubscriptionRepository::ResolveStateCatalog() {
         if (!candidates.empty()) {
             state_catalog = candidates.front();
         }
+    }
+    };
+
+    if (context.transaction.HasActiveTransaction()) {
+        resolve();
+    } else {
+        context.RunFunctionInTransaction(resolve);
     }
 
     if (state_catalog.empty()) {
@@ -624,7 +639,10 @@ duckdb::unique_ptr<duckdb::MaterializedQueryResult> OdpSubscriptionRepository::E
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
         "Executing ODP state statement (%zu bound parameters)", params.size()));
 
-    duckdb::Connection connection(context.db->GetDatabase(context));
+    // Constructed from the DatabaseInstance rather than via GetDatabase(context):
+    // the latter resolves through the client's transaction context, which is not
+    // active when the repository is driven from bind or from a scan callback.
+    duckdb::Connection connection(*context.db);
     auto prepared = connection.Prepare(sql);
     if (!prepared || prepared->HasError()) {
         throw duckdb::InternalException("Failed to prepare ODP state statement: " +

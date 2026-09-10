@@ -59,9 +59,12 @@ void OdpSubscriptionStateManager::TransitionToDeltaFetch(const std::string& delt
         delta_token, preference_applied ? "true" : "false"));
     
     current_phase_ = SubscriptionPhase::DELTA_FETCH;
-    current_subscription_.delta_token = delta_token;
     current_subscription_.preference_applied = preference_applied;
-    
+
+    // UpdateDeltaToken takes the currently-held token as the compare-and-swap
+    // expectation, so the new one must NOT be assigned first - doing so compares the
+    // new value against the stored old one and reports a phantom concurrent modification
+    // on every transition. UpdateDeltaToken assigns it once the swap succeeds.
     UpdateDeltaToken(delta_token);
     LogCurrentState();
 }
