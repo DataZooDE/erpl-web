@@ -426,6 +426,23 @@ SELECT TOP 5 UserName, FirstName FROM trippin.People;
 
 ---
 
+## 🔁 SAP ODP (Operational Data Provisioning)
+
+`odp_odata_read()` reads SAP ODP delta-enabled services, doing a full initial load once and then
+fetching only what changed on each subsequent read.
+
+```sql
+SELECT * FROM odp_odata_read('https://sap.example.com/sap/opu/odata/sap/ZSRV/EntitySet');
+SELECT * FROM odp_odata_list_subscriptions();
+```
+
+> ⚠️ **`odp_odata_read` returns a change stream, not a snapshot.** After the initial load each read
+> returns inserts, updates **and deletes**, marked by the `ODQ_CHANGEMODE` column (`'D'` = delete).
+> A plain `INSERT INTO ... SELECT` will silently apply deletes as inserts. See
+> **[docs/ODP.md](docs/ODP.md)** for the full contract and a correct merge pattern.
+
+---
+
 ## 🟦 SAP Datasphere (DWAAS Core + Catalog)
 
 ERPL Web includes first-class support for SAP Datasphere using a secured OAuth2 secret. The extension integrates both the DWAAS core APIs and the Catalog OData service to provide discovery and rich metadata.
