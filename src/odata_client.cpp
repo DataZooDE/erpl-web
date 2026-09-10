@@ -183,8 +183,27 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
             return nullptr;
         }
 
-        url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
-        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using next URL: " + url.ToString());
+        // A next link that resolves back onto the URL we just fetched would make
+        // this loop issue the identical request forever, uninterruptibly. Stop
+        // with an error instead: neither terminating nor reporting is worse than
+        // failing. See GitHub #78.
+        const auto previous_url = url.ToString();
+        auto resolved_next_url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
+        if (resolved_next_url.ToString() == previous_url) {
+            throw std::runtime_error(
+                "OData service returned a next link identical to the request that produced it, which would page "
+                "forever. Repeated URL: " + previous_url);
+        }
+
+        if (page_requests >= MAX_PAGE_REQUESTS) {
+            throw std::runtime_error(
+                "OData server-driven paging exceeded the limit of " + std::to_string(MAX_PAGE_REQUESTS) +
+                " pages; the service keeps advertising a next link. Last URL: " + resolved_next_url.ToString());
+        }
+        page_requests++;
+
+        url = resolved_next_url;
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using next URL (page " + std::to_string(page_requests) + "): " + url.ToString());
     }
 
     // Add input parameters to the URL if they exist
