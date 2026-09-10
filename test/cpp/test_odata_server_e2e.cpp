@@ -189,6 +189,54 @@ TEST_CASE("odata_read follows every @odata.nextLink page", "[odata_e2e][paging]"
     REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=3"));
 }
 
+// The paging test above selects a single column, which makes the pushdown helper
+// append a $select and therefore change the request URL. That difference is what
+// kept this bug hidden: the buffered first page is only discarded when the URL
+// changes, but the OData client is rebuilt unconditionally. With every column
+// selected and no filter, the URL is identical, so the scan kept the first page
+// and got a brand-new client with no current_response to advance from --
+// pagination stopped after page one and the rest of the entity set was dropped
+// without a word. `SELECT *` is the most ordinary query there is; against a real
+// SAP service it returned 100 of 4136 rows.
+TEST_CASE("odata_read follows every page when all columns are selected",
+          "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/pgall/Airlines");
+    const std::string context = server.Url("/pgall/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/pgall/$metadata", "edm_trippin.xml");
+
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/pgall/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF},
+                                        entity_url + "?$format=json&$skiptoken=3")));
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/pgall/Airlines" && request.QueryParam("$skiptoken") == "3";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_KL})));
+    server.OnPath("/pgall/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // ORDER BY over the star keeps every column live, so the projection cannot be
+    // pruned back down to one and no $select is emitted.
+    auto result = con.Query("SELECT * FROM odata_read('" + entity_url + "') ORDER BY AirlineCode");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 5);
+
+    const auto requests = server.RequestsFor("/pgall/Airlines");
+    REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=2"));
+    REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=3"));
+}
+
 // Catches GitHub #93: a follow-up page that errors must fail the scan. Swallowing
 // the error would hand the user a silently truncated result set, which is worse
 // than no result at all.

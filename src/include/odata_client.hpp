@@ -182,6 +182,20 @@ public:
     virtual bool HasInputParameters() const { return false; }
 
     std::string Url() const { return url.ToString(); }
+
+    // Adopt a page this client did not fetch itself.
+    //
+    // The bind path probes the URL once to detect the OData version, and that
+    // probe response IS the first page. It used to be parsed and buffered while
+    // the client was left untouched, so the client had no current_response and
+    // Get(true) had nothing to advance from: server-driven paging stopped after
+    // page one and every later page was dropped silently. Handing the response
+    // to the client keeps the saved round trip and makes the next link on that
+    // page reachable. See GitHub #149.
+    void AdoptResponse(std::shared_ptr<TResponse> response) {
+        current_response = std::move(response);
+    }
+
     std::shared_ptr<HttpClient> GetHttpClient() const { return http_client->GetHttpClient(); }
     std::shared_ptr<HttpAuthParams> AuthParams() const { return auth_params; }
 

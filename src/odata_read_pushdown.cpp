@@ -155,7 +155,23 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
       PredicatePushdownHelper()->ApplyFiltersToUrl(odata_client->Url());
     
     ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Updated URL: " + updated_url.ToString());
-    
+
+  // Nothing to apply: keep the client we already have. Replacing it with an
+  // identical one throws away its current_response, and the buffered first page
+  // below is only discarded when the URL changed -- so the scan would keep page
+  // one and then ask a client that has never issued a request to advance to page
+  // two, which it cannot. Server-driven paging stopped dead after the first page
+  // and the rest of the entity set was dropped silently. This is the ordinary
+  // `SELECT *` case: with every column projected and no filter there is no
+  // $select and no $filter to add, so the URL is necessarily unchanged.
+  // See GitHub #149.
+  if (prev_url_str == updated_url.ToString()) {
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     "Predicate pushdown left the URL unchanged; keeping the "
+                     "existing client so server-driven paging can continue");
+    return;
+  }
+
     // Store the current OData version before creating new client
     auto current_version = odata_client->GetODataVersion();
 
@@ -174,7 +190,7 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
   // If the finalized URL changed compared to the prefetched one, discard
   // buffered data so we don't emit unfiltered/unprojected rows. The scan init
   // will prefetch again.
-    if (first_page_cached_ && prev_url_str != updated_url.ToString()) {
+    if (first_page_cached_) {
     ERPL_TRACE_INFO("ODATA_READ_BIND",
                     "Final URL changed after predicate pushdown; discarding "
                     "prefetched buffer and caches");

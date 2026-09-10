@@ -83,3 +83,33 @@ FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/d
 WHERE AgencyID IN ('70017', '70020');
 ----
 true
+
+# ============================================================================
+# GitHub #149 - every page is read when the whole row is selected
+# ============================================================================
+
+# The COUNT(*) assertion above passes even when paging is broken, because DuckDB
+# prunes the projection down to nothing and the resulting $select changes the
+# request URL, which is exactly the condition that hid the bug. Keeping all 25
+# columns live means no $select and no $filter, so the URL is unchanged - and
+# that is the case where the scan used to stop after the first page and return
+# 100 of 4136 rows without a warning.
+query I
+SELECT COUNT(*) = (
+  SELECT COUNT(*) FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+)
+FROM (
+  SELECT * FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+  ORDER BY TravelUUID
+);
+----
+true
+
+# ...and the rows are distinct, so the page that is kept is not simply repeated.
+query I
+SELECT COUNT(*) = COUNT(DISTINCT TravelUUID) FROM (
+  SELECT * FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+  ORDER BY TravelUUID
+);
+----
+true
