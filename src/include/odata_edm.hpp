@@ -2051,10 +2051,6 @@ public:
 
 private:
     ODataVersion version_enum = ODataVersion::V4;
-    
-    // Helper methods for v2 parsing
-    static void ParseV2Associations(const tinyxml2::XMLElement& element, Schema& schema);
-    static void ParseV2NavigationProperties(const tinyxml2::XMLElement& element, EntityType& entity_type);
 };
 
 // TypeVariant Handling ----------------------------------------------------
