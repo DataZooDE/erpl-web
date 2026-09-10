@@ -26,9 +26,27 @@ std::string ODataUrlResolver::resolveMetadataUrl(const HttpUrl &request_url,
     // convention used by Northwind, Business Central and many on-premise services).
     // It is independent of the OData version, so it is honoured before any
     // version-specific path heuristic. See GitHub #60.
-    auto svc_pos = path.find(".svc");
-    if (svc_pos != std::string::npos) {
-        base.Path(path.substr(0, svc_pos + 4) + "/$metadata");
+    // ".svc" only names a service root when it ENDS a path segment. Matching it as a
+    // bare substring would also fire on "/catalog.svcdata/Orders" or a segment merely
+    // containing it, truncating the path at the wrong place.
+    const auto find_svc_segment_end = [](const std::string &candidate) -> size_t {
+        size_t search_from = 0;
+        while (true) {
+            const auto found = candidate.find(".svc", search_from);
+            if (found == std::string::npos) {
+                return std::string::npos;
+            }
+            const auto segment_end = found + 4;
+            if (segment_end == candidate.size() || candidate[segment_end] == '/') {
+                return segment_end;
+            }
+            search_from = found + 1;
+        }
+    };
+
+    const auto svc_segment_end = find_svc_segment_end(path);
+    if (svc_segment_end != std::string::npos) {
+        base.Path(path.substr(0, svc_segment_end) + "/$metadata");
     } else if (path.find("/V2/") != std::string::npos) {
         auto v2_pos = path.find("/V2/");
         auto service_pos = path.find("/", v2_pos + 4);

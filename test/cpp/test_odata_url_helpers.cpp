@@ -87,3 +87,18 @@ TEST_CASE("ODataUrlResolver drops the query string when deriving $metadata", "[o
     auto meta = r.resolveMetadataUrl(base, "");
     REQUIRE(meta.find('?') == std::string::npos);
 }
+
+TEST_CASE("ODataUrlResolver only treats .svc as a service root at a segment boundary", "[odata_url]") {
+    // Matching ".svc" as a bare substring would truncate these at the wrong place.
+    ODataUrlResolver r;
+
+    HttpUrl not_a_service_root("https://host/catalog.svcdata/Orders");
+    REQUIRE(r.resolveMetadataUrl(not_a_service_root, "") == "https://host/catalog.svcdata/$metadata");
+
+    HttpUrl trailing("https://host/odata/Sales.svc");
+    REQUIRE(r.resolveMetadataUrl(trailing, "") == "https://host/odata/Sales.svc/$metadata");
+
+    // A later, genuine .svc segment must still be found when an earlier one is a false match.
+    HttpUrl later_segment("https://host/a.svcx/Sales.svc/Orders");
+    REQUIRE(r.resolveMetadataUrl(later_segment, "") == "https://host/a.svcx/Sales.svc/$metadata");
+}
