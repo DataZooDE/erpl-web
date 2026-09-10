@@ -341,6 +341,19 @@ SELECT * FROM http_post('https://httpbin.org/anything','Hello','text/plain');
 SELECT * FROM http_post('https://httpbin.org/anything','a=1&b=2','application/x-www-form-urlencoded');
 ```
 
+### TLS Certificate Verification
+
+Every HTTPS request made by ERPL Web verifies the server certificate. If you connect
+to an on-premise system with a private or self-signed certificate, trust its CA
+rather than turning verification off:
+
+```sql
+SET erpl_ca_cert_file = '/etc/erpl/my-corporate-ca.pem';
+```
+
+See [docs/TLS.md](docs/TLS.md) for the full picture, including the deliberately
+awkward last-resort opt-out.
+
 ### Debugging Authentication
 
 Enable tracing to see which authentication source is being used:
