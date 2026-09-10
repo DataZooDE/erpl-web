@@ -206,6 +206,14 @@ private:
     // data_extractor's row cache and odata_client's paging cursor, this is the
     // complete set of fields the clone must own.
     bool first_page_cached_ = false;
+
+    // The page the bind-time probe already fetched, kept as DATA rather than as client
+    // state. Every execution clones the bind data and must get its OWN client: they share
+    // one shared_ptr<ODataEntitySetClient> otherwise, and that client owns the mutable
+    // pagination cursor (url, current_response, page_requests). Handing the page to the
+    // bind-time client instead would make the second EXECUTE of a bound `SELECT *` plan
+    // resume from wherever the first one stopped. See GitHub #75 and #149.
+    std::shared_ptr<ODataEntitySetResponse> first_page_response_;
     // Tracks how many rows have been emitted so far to align expanded cache row-wise
     size_t emitted_row_index_ = 0;
     bool service_root_mode_ = false;

@@ -573,9 +573,10 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::FromEntitySetClient(
           std::make_unique<HttpResponse>(HttpMethod::GET, HttpUrl(client->Url()),
                                          200, "application/json", initial_content),
           client->GetODataVersion());
-      // The client must know about this page too, or it cannot follow its next
-      // link when the scan asks for page two (GitHub #149).
-      client->AdoptResponse(synthetic);
+      // Kept as data; CloneForScan adopts it into the private client it mints for each
+      // execution, so the page's next link is reachable without two executions sharing a
+      // pagination cursor (GitHub #149 and #75).
+      bind_data->first_page_response_ = synthetic;
       bind_data->BufferFirstPageFromResponse(synthetic);
     } catch (const std::exception &e) {
       ERPL_TRACE_DEBUG(

@@ -237,6 +237,74 @@ TEST_CASE("odata_read follows every page when all columns are selected",
     REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=3"));
 }
 
+// GitHub #75 + #149 together. The re-execution guarantee and the all-columns paging fix
+// pull in opposite directions: CloneForScan hands every execution the SAME
+// shared_ptr<ODataEntitySetClient>, and the only thing that ever gave a scan a private
+// client was the unconditional rebuild inside UpdateUrlFromPredicatePushdown. Returning
+// early from that rebuild when the URL is unchanged - the exact `SELECT *` case #149 fixes
+// - would hand two executions one mutable pagination cursor.
+//
+// Every existing re-execution case projects (COUNT(*), COUNT(DISTINCT ...)), which emits a
+// $select and so still takes the rebuild path. These two do not, which is why the shape
+// was uncovered.
+TEST_CASE("a bound SELECT * plan returns every row on re-execution", "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/reexec/Airlines");
+    const std::string context = server.Url("/reexec/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/reexec/$metadata", "edm_trippin.xml");
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/reexec/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
+    server.OnPath("/reexec/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    REQUIRE_FALSE(con.Query("PREPARE p AS SELECT * FROM odata_read('" + entity_url + "')")->HasError());
+
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE p");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->RowCount() == 4);
+    }
+}
+
+TEST_CASE("two SELECT * scans of one call each see every row", "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/selfjoin/Airlines");
+    const std::string context = server.Url("/selfjoin/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/selfjoin/$metadata", "edm_trippin.xml");
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/selfjoin/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
+    server.OnPath("/selfjoin/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // A cross join of two unprojected scans: 4 x 4. Sharing one cursor between them makes
+    // this collapse.
+    auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + entity_url + "') a, odata_read('" +
+                            entity_url + "') b");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 16);
+}
+
 // Catches GitHub #93: a follow-up page that errors must fail the scan. Swallowing
 // the error would hand the user a silently truncated result set, which is worse
 // than no result at all.

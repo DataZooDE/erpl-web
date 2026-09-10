@@ -390,7 +390,33 @@ bool ODataReadBindData::HasMoreResults() {
 duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
   // The clone owns every piece of mutable scan state; the source keeps only
   // the schema and configuration settled during bind (GitHub #75).
-  auto clone = duckdb::make_uniq<ODataReadBindData>(odata_client, true);
+  //
+  // That includes the OData client: it carries the pagination cursor (url,
+  // current_response, page_requests), so sharing one between executions makes the second
+  // EXECUTE of a bound plan resume where the first stopped. A projecting plan used to get
+  // a private client by accident, because applying $select rebuilt it; an unprojected
+  // `SELECT *` changes no URL and rebuilds nothing, so the client is minted here instead
+  // and the accident is no longer load-bearing. Service-root mode issues no requests and
+  // keeps its stub.
+  auto scan_client = odata_client;
+  if (!service_root_mode_ && odata_client != nullptr) {
+    scan_client = std::make_shared<ODataEntitySetClient>(
+        odata_client->GetHttpClient(), HttpUrl(odata_client->Url()), odata_client->AuthParams());
+    const auto bound_version = odata_client->GetODataVersion();
+    if (bound_version != ODataVersion::UNKNOWN) {
+      scan_client->SetODataVersionDirectly(bound_version);
+    }
+    // The bind-time probe already paid for page one; adopting it here lets this execution
+    // follow that page's next link without re-fetching it, while keeping the cursor
+    // private. Deliberately NOT odata_client->current_response: after one execution that
+    // is the LAST page, and resuming from it would return nothing.
+    if (first_page_response_ != nullptr) {
+      scan_client->AdoptResponse(first_page_response_);
+    }
+  }
+
+  auto clone = duckdb::make_uniq<ODataReadBindData>(scan_client, true);
+  clone->first_page_response_ = first_page_response_;
 
   clone->service_root_mode_ = service_root_mode_;
   clone->InitializeComponents(service_root_mode_);
