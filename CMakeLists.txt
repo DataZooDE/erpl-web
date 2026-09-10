@@ -99,6 +99,7 @@ target_include_directories(datazoo_oauth2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
 
 set(EXTENSION_SOURCES
     src/tracing.cpp
+    src/conversion_failure_log.cpp
     src/duckdb_argument_helper.cpp
     src/odata_attach_functions.cpp
     src/odata_catalog.cpp

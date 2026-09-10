@@ -29,6 +29,7 @@ list(APPEND TEST_SOURCES
     test_odata_edm_builder.cpp
     test_odata_client.cpp
     test_odata_content.cpp
+    test_conversion_failure_reporting.cpp
     test_odata_row_buffer.cpp
     test_odata_from_entity_set_buffering.cpp
     test_odata_url_helpers.cpp
