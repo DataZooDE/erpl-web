@@ -457,3 +457,265 @@ TEST_CASE("Test OData v2 Error handling - missing results array", "[odata_conten
 
     REQUIRE_THROWS_AS(json_content_instance.ToRows(column_names, column_types), std::runtime_error);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Regression coverage for the typed-column deserialization defects (#69, #70, #72, #76).
+// The pre-existing coverage above is all-VARCHAR, which is exactly why these survived.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Test Edm.Binary is decoded into a BLOB", "[odata_content]")
+{
+    std::cout << std::endl;
+
+    // Northwind's Categories.Picture is an Edm.Binary, which the EDM mapper turns into BLOB.
+    // Before the fix DeserializeJsonValue had no BLOB case, threw "Unsupported DuckDB type"
+    // and ToRows swallowed it into a silent NULL - every Edm.Binary column read as NULL.
+    std::string json_content = R"({
+        "@odata.context": "https://services.odata.org/V4/Northwind/Northwind.svc/$metadata#Categories",
+        "value": [
+            { "CategoryName": "Beverages",   "Picture": "SGVsbG8=" },
+            { "CategoryName": "Condiments",  "Picture": "SGVsbG8" },
+            { "CategoryName": "Confections", "Picture": "-_8=" },
+            { "CategoryName": "Dairy",       "Picture": null }
+        ]
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+
+    std::vector<std::string> column_names = {"CategoryName", "Picture"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR, duckdb::LogicalTypeId::BLOB};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 4);
+
+    // Padded standard base64.
+    REQUIRE_FALSE(rows[0][1].IsNull());
+    REQUIRE(rows[0][1].type().id() == duckdb::LogicalTypeId::BLOB);
+    REQUIRE(duckdb::StringValue::Get(rows[0][1]) == std::string("Hello"));
+
+    // The same payload with the padding stripped.
+    REQUIRE_FALSE(rows[1][1].IsNull());
+    REQUIRE(duckdb::StringValue::Get(rows[1][1]) == std::string("Hello"));
+
+    // base64url alphabet (RFC 4648 section 5), which the OData JSON format mandates.
+    REQUIRE_FALSE(rows[2][1].IsNull());
+    const auto &url_alphabet_bytes = duckdb::StringValue::Get(rows[2][1]);
+    REQUIRE(url_alphabet_bytes.size() == 2);
+    REQUIRE(static_cast<unsigned char>(url_alphabet_bytes[0]) == 0xFB);
+    REQUIRE(static_cast<unsigned char>(url_alphabet_bytes[1]) == 0xFF);
+
+    // A JSON null still maps to SQL NULL.
+    REQUIRE(rows[3][1].IsNull());
+}
+
+TEST_CASE("Test Edm.Duration is decoded into an INTERVAL", "[odata_content]")
+{
+    std::cout << std::endl;
+
+    // TripPin's Trips.Duration is an Edm.Duration, which the EDM mapper turns into INTERVAL.
+    // Before the fix DeserializeJsonValue had no INTERVAL case, so every Edm.Duration read NULL.
+    std::string json_content = R"({
+        "@odata.context": "https://services.odata.org/V4/TripPinService/$metadata#Trips",
+        "value": [
+            { "TripId": "1", "Duration": "PT12H30M" },
+            { "TripId": "2", "Duration": "P3DT4H" },
+            { "TripId": "3", "Duration": "-PT1H" },
+            { "TripId": "4", "Duration": "PT0.5S" },
+            { "TripId": "5", "Duration": null }
+        ]
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+
+    std::vector<std::string> column_names = {"TripId", "Duration"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR, duckdb::LogicalTypeId::INTERVAL};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 5);
+
+    constexpr int64_t MICROS_PER_HOUR = 3600000000LL;
+
+    REQUIRE_FALSE(rows[0][1].IsNull());
+    REQUIRE(rows[0][1].type().id() == duckdb::LogicalTypeId::INTERVAL);
+    auto twelve_thirty = duckdb::IntervalValue::Get(rows[0][1]);
+    REQUIRE(twelve_thirty.months == 0);
+    REQUIRE(twelve_thirty.days == 0);
+    REQUIRE(twelve_thirty.micros == 45000000000LL); // 12h30m
+
+    REQUIRE_FALSE(rows[1][1].IsNull());
+    auto three_days_four_hours = duckdb::IntervalValue::Get(rows[1][1]);
+    REQUIRE(three_days_four_hours.months == 0);
+    REQUIRE(three_days_four_hours.days == 3);
+    REQUIRE(three_days_four_hours.micros == 4 * MICROS_PER_HOUR);
+
+    REQUIRE_FALSE(rows[2][1].IsNull());
+    auto negative_hour = duckdb::IntervalValue::Get(rows[2][1]);
+    REQUIRE(negative_hour.months == 0);
+    REQUIRE(negative_hour.days == 0);
+    REQUIRE(negative_hour.micros == -MICROS_PER_HOUR);
+
+    REQUIRE_FALSE(rows[3][1].IsNull());
+    auto half_second = duckdb::IntervalValue::Get(rows[3][1]);
+    REQUIRE(half_second.micros == 500000LL);
+
+    REQUIRE(rows[4][1].IsNull());
+}
+
+TEST_CASE("Test unknown enum member does not silently become the first member", "[odata_content]")
+{
+    std::cout << std::endl;
+
+    // OData v4 services add enum members over time. Before the fix an unmatched name fell through
+    // the linear search with enum_index still 0, so "Weekend" was silently reported as "Sun" -
+    // data corruption that is indistinguishable from a genuine value.
+    auto members = duckdb::Vector(duckdb::LogicalType::VARCHAR, 3);
+    members.SetValue(0, duckdb::Value("Sun"));
+    members.SetValue(1, duckdb::Value("Mon"));
+    members.SetValue(2, duckdb::Value("Tue"));
+    auto weekday_enum = duckdb::LogicalType::ENUM("Weekday", members, 3);
+
+    std::string json_content = R"({
+        "@odata.context": "https://example.com/svc/$metadata#Shifts",
+        "value": [
+            { "ShiftId": "1", "Day": "Mon" },
+            { "ShiftId": "2", "Day": "Weekend" },
+            { "ShiftId": "3", "Day": null }
+        ]
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+
+    std::vector<std::string> column_names = {"ShiftId", "Day"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR, weekday_enum};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 3);
+
+    // A declared member still resolves correctly.
+    REQUIRE_FALSE(rows[0][1].IsNull());
+    REQUIRE(rows[0][1].ToString() == "Mon");
+
+    // The undeclared member must NOT be reported as "Sun". DeserializeJsonEnum now throws and
+    // ToRows turns that into an honest NULL.
+    REQUIRE(rows[1][1].IsNull());
+
+    REQUIRE(rows[2][1].IsNull());
+}
+
+TEST_CASE("Test service document with a non-string property does not crash", "[odata_content]")
+{
+    std::cout << std::endl;
+
+    // GetStringProperty used to call std::string(yyjson_get_str(...)) after only checking for
+    // presence. yyjson_get_str returns NULL for any non-string node and std::string(nullptr) is
+    // undefined behaviour, so this service document crashed the process.
+    std::string numeric_name = R"({"value":[{"kind":"EntitySet","name":123,"url":"x"}]})";
+    ODataServiceJsonContent numeric_name_instance(numeric_name);
+    REQUIRE_THROWS_AS(numeric_name_instance.EntitySets(), std::runtime_error);
+
+    std::string numeric_kind = R"({"value":[{"kind":42,"name":"Products","url":"Products"}]})";
+    ODataServiceJsonContent numeric_kind_instance(numeric_kind);
+    REQUIRE_THROWS_AS(numeric_kind_instance.EntitySets(), std::runtime_error);
+
+    // A well-formed service document is still parsed.
+    std::string valid = R"({"value":[{"kind":"EntitySet","name":"Products","url":"Products"}]})";
+    ODataServiceJsonContent valid_instance(valid);
+    auto entity_sets = valid_instance.EntitySets();
+    REQUIRE(entity_sets.size() == 1);
+    REQUIRE(entity_sets[0].name == "Products");
+}
+
+TEST_CASE("Test OData v2 /Date(ms)/ keeps millisecond precision", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // DuckDB TIMESTAMP is microsecond-precise, but the parser used to do `ms / 1000` and
+    // Timestamp::FromEpochSeconds, discarding the milliseconds outright. Pre-1970 values were
+    // additionally truncated towards zero.
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                { "ID": "1", "Created": "/Date(1451606400123)/" },
+                { "ID": "2", "Created": "/Date(-1500)/" }
+            ]
+        }
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+    json_content_instance.SetODataVersion(ODataVersion::V2);
+
+    std::vector<std::string> column_names = {"ID", "Created"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR,
+                                                     duckdb::LogicalTypeId::TIMESTAMP};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 2);
+
+    // 1451606400123 ms == 2016-01-01 00:00:00.123 UTC
+    REQUIRE_FALSE(rows[0][1].IsNull());
+    REQUIRE(duckdb::TimestampValue::Get(rows[0][1]).value == 1451606400123000LL);
+
+    // -1500 ms == 1969-12-31 23:59:58.5, not 23:59:59 (truncation towards zero).
+    REQUIRE_FALSE(rows[1][1].IsNull());
+    REQUIRE(duckdb::TimestampValue::Get(rows[1][1]).value == -1500000LL);
+}
+
+TEST_CASE("Test OData v2 /Date(ms+HHMM)/ ignores the SAP offset suffix", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // SAP appends a local-time offset such as "+0060" to the literal. The epoch value in front of
+    // it is ALREADY UTC, so the offset must be ignored - applying it would shift the timestamp.
+    // This test locks that behaviour in: the result must be exactly the same instant as the
+    // literal without the suffix.
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                { "ID": "1", "Created": "/Date(1451606400123+0060)/" },
+                { "ID": "2", "Created": "/Date(1451606400123-0300)/" }
+            ]
+        }
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+    json_content_instance.SetODataVersion(ODataVersion::V2);
+
+    std::vector<std::string> column_names = {"ID", "Created"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR,
+                                                     duckdb::LogicalTypeId::TIMESTAMP};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 2);
+
+    REQUIRE_FALSE(rows[0][1].IsNull());
+    REQUIRE(duckdb::TimestampValue::Get(rows[0][1]).value == 1451606400123000LL);
+
+    REQUIRE_FALSE(rows[1][1].IsNull());
+    REQUIRE(duckdb::TimestampValue::Get(rows[1][1]).value == 1451606400123000LL);
+}
+
+TEST_CASE("Test OData v2 /Date(ms)/ rendered as VARCHAR keeps milliseconds", "[odata_content_v2]")
+{
+    std::cout << std::endl;
+
+    // The same truncation existed a second time in DeserializeJsonString, which renders the
+    // legacy literal into an ISO string for VARCHAR columns.
+    std::string json_content = R"({
+        "d": {
+            "results": [
+                { "ID": "1", "Created": "/Date(1451606400123)/" }
+            ]
+        }
+    })";
+
+    ODataEntitySetJsonContent json_content_instance(json_content);
+    json_content_instance.SetODataVersion(ODataVersion::V2);
+
+    std::vector<std::string> column_names = {"ID", "Created"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR,
+                                                     duckdb::LogicalTypeId::VARCHAR};
+
+    auto rows = json_content_instance.ToRows(column_names, column_types);
+    REQUIRE(rows.size() == 1);
+    REQUIRE(rows[0][1].ToString() == "2016-01-01 00:00:00.123");
+}
