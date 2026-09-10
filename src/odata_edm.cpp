@@ -9,14 +9,14 @@ EdmCache& EdmCache::GetInstance() {
 }
 
 bool EdmCache::IsExpired(const Entry& entry, std::chrono::steady_clock::time_point now) const {
-    if (entry_lifetime <= std::chrono::seconds::zero()) {
+    if (entry_lifetime < std::chrono::seconds::zero()) {
         return false;
     }
     return (now - entry.stored_at) >= entry_lifetime;
 }
 
 void EdmCache::EvictExpired(std::chrono::steady_clock::time_point now) {
-    if (entry_lifetime <= std::chrono::seconds::zero()) {
+    if (entry_lifetime < std::chrono::seconds::zero()) {
         return;
     }
     for (auto it = cache.begin(); it != cache.end();) {

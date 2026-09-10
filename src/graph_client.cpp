@@ -1,4 +1,5 @@
 #include "graph_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "duckdb/common/exception.hpp"
 #include "tracing.hpp"
 
@@ -36,10 +37,8 @@ static void AppendJsonValue(std::string &target, yyjson_val *value) {
 } // namespace
 
 GraphClient::GraphClient(std::shared_ptr<HttpAuthParams> auth_params, std::string trace_component)
-    : auth_params(std::move(auth_params)), trace_component(std::move(trace_component)) {
-    HttpParams http_params;
-    http_params.url_encode = false;
-    http_client = std::make_shared<HttpClient>(http_params);
+    : auth_params(std::move(auth_params)), http_client(CreateODataHttpClient()),
+      trace_component(std::move(trace_component)) {
 }
 
 std::string GraphClient::BaseUrl() {

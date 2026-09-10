@@ -2493,7 +2493,7 @@ public:
     // Number of entries currently held, expired ones included.
     size_t Size() const;
 
-    // Entry lifetime; a non-positive value disables expiry.
+    // Entry lifetime. Zero expires entries immediately; a negative value disables expiry.
     void SetEntryLifetime(std::chrono::seconds lifetime);
     std::chrono::seconds GetEntryLifetime() const;
 

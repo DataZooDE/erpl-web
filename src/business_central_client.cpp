@@ -1,4 +1,5 @@
 #include "business_central_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include <utility>
@@ -36,13 +37,6 @@ std::string BusinessCentralUrlBuilder::BuildCompaniesUrl(const std::string &base
 
 std::string BusinessCentralUrlBuilder::GetResourceUrl() {
     return "https://api.businesscentral.dynamics.com";
-}
-
-// Helper to create HTTP client for OData
-static std::shared_ptr<HttpClient> CreateODataHttpClient() {
-    HttpParams http_params;
-    http_params.url_encode = false;  // OData handles URL encoding
-    return std::make_shared<HttpClient>(http_params);
 }
 
 // Client Factory implementation

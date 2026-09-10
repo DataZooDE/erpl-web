@@ -1,4 +1,5 @@
 #include "dataverse_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "tracing.hpp"
 
 namespace erpl_web {
@@ -31,13 +32,6 @@ std::string DataverseUrlBuilder::BuildEntityDefinitionUrl(const std::string &bas
 
 std::string DataverseUrlBuilder::BuildEntityAttributesUrl(const std::string &base_url, const std::string &logical_name) {
     return base_url + "/EntityDefinitions(LogicalName='" + logical_name + "')/Attributes";
-}
-
-// Helper to create HTTP client for OData
-static std::shared_ptr<HttpClient> CreateODataHttpClient() {
-    HttpParams http_params;
-    http_params.url_encode = false;  // OData handles URL encoding
-    return std::make_shared<HttpClient>(http_params);
 }
 
 // Client Factory implementation

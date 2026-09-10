@@ -2,7 +2,52 @@
 
 #include "datazoo/oauth2/http_client.hpp"
 
+#include <memory>
+
 namespace erpl_web {
+
+// The HTTP client every OData consumer needs.
+//
+// url_encode is off because the OData layer has already encoded what needs encoding:
+// $filter expressions, $expand option groups and key predicates such as
+// Customers('ALFKI') carry percent-escapes and reserved characters on purpose, and a
+// second encoding pass in the transport corrupts them. This used to be spelled out
+// three times, in the Business Central, Dataverse and Graph clients, plus a fourth
+// spelling in datasphere_catalog.cpp that forgot the flag entirely (GitHub #102).
+std::shared_ptr<HttpClient> CreateODataHttpClient();
+
+// One place that knows how a service hands back a change-tracking (delta) link, and how
+// to read the token out of it.
+//
+// This logic existed twice before GitHub #102, and the second copy looked only at the
+// v2 "__delta" property. SAP ODP routinely delivers the token on the terminal page as a
+// "__next" link carrying the "!deltatoken=" sigil instead, and that copy silently returned
+// no token - which leaves the ODP scan in initial-load mode, so the next read re-extracts
+// the whole entity set rather than fetching deltas.
+//
+// This belongs on ODataEntitySetResponse, next to NextUrl(); it lives here only because
+// odata_client.* was being edited elsewhere when #102 was fixed.
+class ODataDeltaLink {
+public:
+    // The delta link carried by an OData JSON payload, or "" when the page has none.
+    // Recognised, in this order:
+    //   v4  {"@odata.deltaLink": "<url>"}
+    //   v2  {"d": {"__delta": "<url>"}}   (also honoured at the document root)
+    //   v2  {"d": {"__next":  "<url with !deltatoken= or $deltatoken=>"}}
+    // A plain "__next" without a delta sigil is ordinary server-driven paging and is not
+    // a delta link.
+    static std::string ExtractDeltaLink(const std::string &json_body);
+
+    // The token inside a delta link: "!deltatoken=" (v2) or "$deltatoken=" (v4).
+    // Surrounding single or double quotes, which SAP Gateway sometimes emits, are stripped.
+    static std::string ExtractToken(const std::string &delta_link);
+
+    // True when the URL carries a delta token in either dialect.
+    static bool IsDeltaLink(const std::string &url);
+
+    // Convenience: the token carried by a payload, "" when the payload has no delta link.
+    static std::string ExtractDeltaToken(const std::string &json_body);
+};
 
 class ODataUrlResolver {
 public:

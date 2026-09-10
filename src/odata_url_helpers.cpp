@@ -1,7 +1,14 @@
 #include "odata_url_helpers.hpp"
+#include "yyjson.hpp"
 #include <sstream>
 
 namespace erpl_web {
+
+std::shared_ptr<HttpClient> CreateODataHttpClient() {
+    HttpParams http_params;
+    http_params.url_encode = false;
+    return std::make_shared<HttpClient>(http_params);
+}
 
 std::string ODataUrlResolver::resolveMetadataUrl(const HttpUrl &request_url,
                                                  const std::string &odata_context_if_any) const
@@ -103,6 +110,45 @@ std::string ODataUrlResolver::resolveMetadataUrl(const HttpUrl &request_url,
     return base.ToString();
 }
 
+namespace {
+
+// OData escapes a single quote inside a string literal by doubling it: O'Brien is written
+// 'O''Brien'. Emitting the raw quote closed the literal early, which either produced a
+// malformed key predicate the service rejected or - worse - let a parameter value inject
+// further OData syntax into the URL. See GitHub #104.
+std::string EscapeSingleQuotes(const std::string &value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char c : value) {
+        escaped += c;
+        if (c == '\'') {
+            escaped += '\'';
+        }
+    }
+    return escaped;
+}
+
+// Integers, decimals and ISO dates go into the key predicate unquoted; everything else is
+// a string literal. An empty value is a string literal, not a zero-length number: the old
+// find_first_not_of test answered npos for "" and emitted a bare "Key=".
+bool IsUnquotedParameterLiteral(const std::string &value) {
+    if (value.empty()) {
+        return false;
+    }
+    const bool only_digits_and_sign = (value.find_first_not_of("0123456789-") == std::string::npos);
+    const bool is_decimal = (value.find_first_not_of("0123456789.-") == std::string::npos &&
+                             value.find('.') != std::string::npos);
+    const bool is_date = (only_digits_and_sign && value.find('-') != std::string::npos && value.length() == 10);
+    const bool is_integer = (only_digits_and_sign && !is_date);
+    // "-", "--" and friends satisfy only_digits_and_sign but are not numbers.
+    if ((is_integer || is_decimal) && value.find_first_of("0123456789") == std::string::npos) {
+        return false;
+    }
+    return is_decimal || is_integer || is_date;
+}
+
+} // namespace
+
 HttpUrl InputParametersFormatter::addParams(const HttpUrl &url,
                                            const std::map<std::string, std::string> &params) const
 {
@@ -118,14 +164,10 @@ HttpUrl InputParametersFormatter::addParams(const HttpUrl &url,
         const auto &value = kv.second;
         if (!first) params_string += ",";
         first = false;
-        const bool only_digits_and_sign = (value.find_first_not_of("0123456789-") == std::string::npos);
-        const bool is_decimal = (value.find_first_not_of("0123456789.-") == std::string::npos && value.find('.') != std::string::npos);
-        const bool is_date = (only_digits_and_sign && value.find('-') != std::string::npos && value.length() == 10);
-        const bool is_integer = (only_digits_and_sign && !is_date);
-        if (is_decimal || is_integer || is_date) {
+        if (IsUnquotedParameterLiteral(value)) {
             params_string += key + "=" + value;
         } else {
-            params_string += key + "='" + value + "'";
+            params_string += key + "='" + EscapeSingleQuotes(value) + "'";
         }
     }
     params_string += ")";
@@ -146,6 +188,103 @@ HttpUrl InputParametersFormatter::addParams(const HttpUrl &url,
     }
     modified_url.Path(new_path);
     return modified_url;
+}
+
+// ----------------------- ODataDeltaLink -----------------------
+
+namespace {
+
+constexpr const char *V2_DELTA_SIGIL = "!deltatoken=";
+constexpr const char *V4_DELTA_SIGIL = "$deltatoken=";
+
+std::string ReadStringMember(duckdb_yyjson::yyjson_val *object, const char *key) {
+    if (object == nullptr) {
+        return std::string();
+    }
+    auto *value = duckdb_yyjson::yyjson_obj_get(object, key);
+    if (value == nullptr || !duckdb_yyjson::yyjson_is_str(value)) {
+        return std::string();
+    }
+    return std::string(duckdb_yyjson::yyjson_get_str(value));
+}
+
+// Reads the token that follows `sigil`, up to the next query separator.
+std::string TokenAfterSigil(const std::string &url, const char *sigil) {
+    const auto sigil_pos = url.find(sigil);
+    if (sigil_pos == std::string::npos) {
+        return std::string();
+    }
+    const auto start = sigil_pos + std::char_traits<char>::length(sigil);
+    const auto end = url.find_first_of("&#", start);
+    auto token = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+
+    // SAP Gateway quotes the token in some releases; the state store keeps it unquoted so
+    // that BuildDeltaUrl can requote it consistently.
+    if (token.size() >= 2 && (token.front() == '\'' || token.front() == '"') && token.back() == token.front()) {
+        token = token.substr(1, token.size() - 2);
+    }
+    return token;
+}
+
+} // namespace
+
+bool ODataDeltaLink::IsDeltaLink(const std::string &url) {
+    return url.find(V2_DELTA_SIGIL) != std::string::npos ||
+           url.find(V4_DELTA_SIGIL) != std::string::npos;
+}
+
+std::string ODataDeltaLink::ExtractToken(const std::string &delta_link) {
+    auto token = TokenAfterSigil(delta_link, V2_DELTA_SIGIL);
+    if (!token.empty()) {
+        return token;
+    }
+    return TokenAfterSigil(delta_link, V4_DELTA_SIGIL);
+}
+
+std::string ODataDeltaLink::ExtractDeltaLink(const std::string &json_body) {
+    if (json_body.empty()) {
+        return std::string();
+    }
+
+    auto *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
+    if (doc == nullptr) {
+        return std::string();
+    }
+
+    std::string delta_link;
+    auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    if (root != nullptr && duckdb_yyjson::yyjson_is_obj(root)) {
+        auto *d_wrapper = duckdb_yyjson::yyjson_obj_get(root, "d");
+        if (d_wrapper != nullptr && !duckdb_yyjson::yyjson_is_obj(d_wrapper)) {
+            d_wrapper = nullptr;
+        }
+
+        delta_link = ReadStringMember(root, "@odata.deltaLink");
+        if (delta_link.empty()) {
+            delta_link = ReadStringMember(d_wrapper, "__delta");
+        }
+        if (delta_link.empty()) {
+            delta_link = ReadStringMember(root, "__delta");
+        }
+        if (delta_link.empty()) {
+            // The form the older parser missed: the terminal page carries the token on its
+            // paging link rather than on a dedicated delta property. See GitHub #102.
+            auto next_link = ReadStringMember(d_wrapper, "__next");
+            if (next_link.empty()) {
+                next_link = ReadStringMember(root, "__next");
+            }
+            if (IsDeltaLink(next_link)) {
+                delta_link = next_link;
+            }
+        }
+    }
+
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return delta_link;
+}
+
+std::string ODataDeltaLink::ExtractDeltaToken(const std::string &json_body) {
+    return ExtractToken(ExtractDeltaLink(json_body));
 }
 
 // ----------------------- ODataUrlCodec -----------------------
