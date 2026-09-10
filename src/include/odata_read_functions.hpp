@@ -20,6 +20,18 @@
 
 using namespace duckdb;
 
+// The implementations declared here are split across six translation units,
+// one per responsibility:
+//   src/odata_read_functions.cpp   - table function registration, ODataReadBind
+//                                    and the bind-time named-parameter helpers
+//   src/odata_read_bind_data.cpp   - ODataReadBindData construction, factories,
+//                                    schema resolution and configuration
+//   src/odata_read_scan_state.cpp  - row buffer, progress tracker, paging and
+//                                    row emission, CloneForScan, scan callbacks
+//   src/odata_read_pushdown.cpp    - projection/filter pushdown wiring
+//   src/odata_type_resolver.cpp    - EDM -> DuckDB type resolution
+//   src/odata_error_mapping.cpp    - ODataErrorHandling
+
 namespace erpl_web {
 
 // Forward declarations
