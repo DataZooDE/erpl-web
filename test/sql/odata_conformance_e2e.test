@@ -1,0 +1,194 @@
+# name: test/sql/odata_conformance_e2e.test
+# description: End-to-end conformance checks against live public OData services
+# group: [erpl_web_odata]
+#
+# Every case here reproduces a defect that reached users, and each one is
+# asserted against a real server rather than a fixture, because the defects were
+# in what we put on the wire. The services are the public OASIS reference
+# implementations at services.odata.org: Northwind v2, Northwind v4 (a .svc
+# service root) and TripPin v4 (no .svc segment).
+
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+# ============================================================================
+# GitHub #60 - a .svc service root must be honoured for both versions
+# ============================================================================
+
+# V4 with a .svc service root. Before the fix the metadata URL resolved to
+# .../V4/Northwind/$metadata, dropping "Northwind.svc", and binding failed with
+# "OData service not found".
+query I
+SELECT COUNT(*) > 0 FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Shippers');
+----
+true
+
+# V2 with a .svc service root - already worked, kept as a regression guard.
+query I
+SELECT COUNT(*) > 0 FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Shippers');
+----
+true
+
+# V4 without a .svc segment - the other branch of the same resolver.
+query I
+SELECT COUNT(*) > 0 FROM odata_read('https://services.odata.org/TripPinRESTierService/People');
+----
+true
+
+# ============================================================================
+# GitHub #59 - ORDER BY ... LIMIT must not ship the Top-N placeholder sentinel
+# ============================================================================
+
+# The defect: DuckDB's Top-N optimizer installs an uninitialized dynamic filter,
+# which was pushed as "$filter=OrderID lt -2147483648". The server honoured it
+# and returned nothing, and no residual filter remained to restore the rows.
+# This returned 0 before the fix.
+query I
+SELECT COUNT(*) FROM (
+    SELECT OrderID FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+    ORDER BY OrderID LIMIT 5
+);
+----
+5
+
+# The same shape on a v4 service.
+query I
+SELECT COUNT(*) FROM (
+    SELECT UserName FROM odata_read('https://services.odata.org/TripPinRESTierService/People')
+    ORDER BY UserName LIMIT 3
+);
+----
+3
+
+# ORDER BY ... LIMIT must return the genuinely smallest keys, not just any five.
+query I
+SELECT MIN(OrderID) FROM (
+    SELECT OrderID FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+    ORDER BY OrderID LIMIT 5
+);
+----
+10248
+
+# ============================================================================
+# GitHub #65 - an embedded single quote must be doubled, not passed through
+# ============================================================================
+
+# Northwind v2 contains the customer "B's Beverages". Before the fix this
+# produced $filter=CompanyName eq 'B's Beverages', which is malformed.
+query I
+SELECT CompanyName FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+WHERE CompanyName = 'B''s Beverages';
+----
+B's Beverages
+
+# The filter must actually discriminate, not merely avoid erroring.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+WHERE CompanyName = 'B''s Beverages';
+----
+1
+
+# ============================================================================
+# GitHub #64 - literals must be typed per OData version, not quoted as strings
+# ============================================================================
+
+# An integer predicate on a v2 service. Before the fix narrow and unsigned
+# integer widths were quoted as Edm.String literals.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+WHERE OrderID = 10248;
+----
+1
+
+# A range predicate, exercising the comparison operators on the wire.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+WHERE OrderID >= 10248 AND OrderID < 10253;
+----
+5
+
+# A string predicate on a v4 service.
+query I
+SELECT COUNT(*) > 0 FROM odata_read('https://services.odata.org/TripPinRESTierService/People')
+WHERE FirstName = 'Russell';
+----
+true
+
+# ============================================================================
+# GitHub #66 - IN must translate to an or-chain rather than failing the query
+# ============================================================================
+
+# Before the fix this threw "Unsupported filter type for OData translation"
+# out of init_global and the whole query failed.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Orders')
+WHERE OrderID IN (10248, 10249, 10250);
+----
+3
+
+# An IN list over strings, which also exercises literal quoting inside the chain.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+WHERE CustomerID IN ('ALFKI', 'ANATR');
+----
+2
+
+# ============================================================================
+# Filters that cannot be pushed down must still produce correct results
+# ============================================================================
+
+# The translator declines some predicates and leaves them to DuckDB. The answer
+# must be identical either way - this is the invariant that makes it safe to
+# drop a filter instead of guessing at its literal form.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+WHERE lower(CompanyName) LIKE 'a%';
+----
+4
+
+# Projection pushdown must not disturb the row count.
+query I
+SELECT COUNT(*) FROM (
+    SELECT CustomerID, CompanyName
+    FROM odata_read('https://services.odata.org/V2/Northwind/Northwind.svc/Customers')
+);
+----
+91
+
+# ============================================================================
+# GitHub #108 - OData v4 control annotations are not columns
+# ============================================================================
+
+# Northwind v4 returns "@odata.etag" on every entity. It was picked up as a
+# column and pushed into $select, which the OData URI parser rejects outright:
+#   Syntax error: character '@' is not valid at position 0 in '@odata'
+# so the entire service was unreadable once its metadata resolved.
+query I
+SELECT COUNT(*) FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Orders');
+----
+830
+
+# A control annotation must not surface as a selectable column.
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Orders') LIMIT 1
+) t(a) WHERE FALSE;
+----
+0
+
+# Projection over an etag-bearing service must still work, which only holds if
+# the annotation never enters the generated $select.
+query II
+SELECT OrderID, ShipCountry
+FROM odata_read('https://services.odata.org/V4/Northwind/Northwind.svc/Orders')
+ORDER BY OrderID LIMIT 1;
+----
+10248	France
