@@ -125,5 +125,40 @@ EXECUTE airlines_nonempty;
 ----
 true
 
+# ============================================================================
+# GitHub #132 - COUNT(*) over an ATTACHed OData table
+# ============================================================================
+
+# COUNT(*) makes DuckDB request only COLUMN_IDENTIFIER_ROW_ID. Row ids are not
+# data columns and take no part in $select, but they still occupy a slot in the
+# output chunk. Dropping them from the projection without remembering WHICH
+# slots they were made the emit path fall back to "output slot j is data column
+# j", writing the first column's string into a BIGINT row-id vector:
+#   Error: Failed to cast value: Could not convert string 'AA' to INT64
+query I
+SELECT COUNT(*) FROM trippin.Airlines;
+----
+3
+
+# The same shape with a filter, so the row-id slot coexists with pushdown.
+query I
+SELECT COUNT(*) FROM trippin.Airlines WHERE AirlineCode = 'AA';
+----
+1
+
+# A projected count must keep working - this is the case that accidentally
+# passed before, and it guards against over-correcting.
+query I
+SELECT COUNT(AirlineCode) FROM trippin.Airlines;
+----
+3
+
+# A row id alongside real data columns: the data must not shift into the row-id
+# slot or vice versa.
+query II
+SELECT COUNT(*), COUNT(DISTINCT AirlineCode) FROM trippin.Airlines;
+----
+3	3
+
 statement ok
 DETACH trippin;
