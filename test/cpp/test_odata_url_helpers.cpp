@@ -56,3 +56,49 @@ TEST_CASE("ODataUrlCodec ensureJsonFormat appends $format=json", "[odata_url]") 
 }
 
 
+
+TEST_CASE("ODataUrlResolver keeps a .svc service root for OData V4", "[odata_url]") {
+    // GitHub #60: the V2 branch honoured a .svc service root while the V4 branch
+    // took the first segment after /V4/, truncating "Northwind.svc" away and
+    // making every WCF-convention V4 service unreachable.
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V4/Northwind/Northwind.svc/Orders");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://services.odata.org/V4/Northwind/Northwind.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver keeps a .svc service root for OData V2", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V2/Northwind/Northwind.svc/Orders");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://services.odata.org/V2/Northwind/Northwind.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver honours a .svc service root with no version segment", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://erp.example.com/odata/Sales.svc/Customers");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://erp.example.com/odata/Sales.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver drops the query string when deriving $metadata", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V4/Northwind/Northwind.svc/Orders?$top=5");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta.find('?') == std::string::npos);
+}
+
+TEST_CASE("ODataUrlResolver only treats .svc as a service root at a segment boundary", "[odata_url]") {
+    // Matching ".svc" as a bare substring would truncate these at the wrong place.
+    ODataUrlResolver r;
+
+    HttpUrl not_a_service_root("https://host/catalog.svcdata/Orders");
+    REQUIRE(r.resolveMetadataUrl(not_a_service_root, "") == "https://host/catalog.svcdata/$metadata");
+
+    HttpUrl trailing("https://host/odata/Sales.svc");
+    REQUIRE(r.resolveMetadataUrl(trailing, "") == "https://host/odata/Sales.svc/$metadata");
+
+    // A later, genuine .svc segment must still be found when an earlier one is a false match.
+    HttpUrl later_segment("https://host/a.svcx/Sales.svc/Orders");
+    REQUIRE(r.resolveMetadataUrl(later_segment, "") == "https://host/a.svcx/Sales.svc/$metadata");
+}

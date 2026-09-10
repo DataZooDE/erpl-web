@@ -1,0 +1,67 @@
+# name: test/sql/tls_settings.test
+# description: TLS server certificate verification settings (GitHub #63)
+# group: [erpl_web]
+
+require erpl_web
+
+# =============================================================================
+# Both TLS settings are registered
+# =============================================================================
+
+query I
+SELECT count(*) FROM duckdb_settings()
+WHERE name IN ('erpl_ca_cert_file', 'erpl_unsafe_disable_server_cert_verification');
+----
+2
+
+# =============================================================================
+# Secure by default: neither knob is engaged out of the box
+# =============================================================================
+
+query I
+SELECT current_setting('erpl_ca_cert_file');
+----
+(empty)
+
+query I
+SELECT current_setting('erpl_unsafe_disable_server_cert_verification');
+----
+(empty)
+
+# =============================================================================
+# The opt-out is hard to trip by accident: only the exact token is accepted
+# =============================================================================
+
+statement error
+SET erpl_unsafe_disable_server_cert_verification = 'true';
+----
+I_UNDERSTAND_THIS_IS_INSECURE
+
+statement error
+SET erpl_unsafe_disable_server_cert_verification = '1';
+----
+I_UNDERSTAND_THIS_IS_INSECURE
+
+statement error
+SET erpl_unsafe_disable_server_cert_verification = 'yes';
+----
+I_UNDERSTAND_THIS_IS_INSECURE
+
+statement ok
+SET erpl_unsafe_disable_server_cert_verification = 'I_UNDERSTAND_THIS_IS_INSECURE';
+
+# Clearing the setting restores verification
+statement ok
+SET erpl_unsafe_disable_server_cert_verification = '';
+
+# =============================================================================
+# A CA bundle path must actually exist
+# =============================================================================
+
+statement error
+SET erpl_ca_cert_file = '/definitely/not/a/real/ca-bundle.pem';
+----
+no such file
+
+statement ok
+SET erpl_ca_cert_file = '';

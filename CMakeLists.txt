@@ -124,7 +124,6 @@ set(EXTENSION_SOURCES
     src/odata_odp_functions.cpp
     src/datasphere_secret.cpp
     src/odata_url_helpers.cpp
-    src/odata_query_builder.cpp
     src/parameter_validation.cpp
     src/error_context.cpp
     src/url_parser.cpp
