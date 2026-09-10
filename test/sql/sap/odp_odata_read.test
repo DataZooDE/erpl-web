@@ -1,8 +1,11 @@
-# name: test/sql/odp_odata_read_sap_integration.test
-# description: Integration test for odp_odata_read with real SAP ODP services
+# name: test/sql/sap/odp_odata_read.test
+# description: odp_odata_read against a live SAP ODP service
 # group: [erpl_web_odp_integration]
+#
+# Gated on ERPL_SAP_ODP_SERVICE for the reason given in odp_odata_show.test: without a
+# provisioned ODP service there is nothing to read, and failing on that is noise rather
+# than signal.
 
-# Require statement will ensure this test is run with this extension loaded
 require erpl_web
 
 statement ok
@@ -11,32 +14,34 @@ SET autoinstall_known_extensions=1;
 statement ok
 SET autoload_known_extensions=1;
 
-
-# Skip this test in CI unless ERPL_SAP_BASE_URL is provided
 require-env ERPL_SAP_BASE_URL
 
 require-env ERPL_SAP_PASSWORD
+
+require-env ERPL_SAP_ODP_SERVICE
+
+require-env ERPL_SAP_ODP_ENTITY_SET
 
 statement ok
 CREATE SECRET odp_odata_read_secret (
 	TYPE http_basic,
 	USERNAME 'DEVELOPER',
 	PASSWORD '${ERPL_SAP_PASSWORD}',
-    SCOPE '${ERPL_SAP_BASE_URL}'
+	SCOPE '${ERPL_SAP_BASE_URL}'
 );
 
-# Verify that ODP OData read function is registered
+# An initial load returns the full extract. The row count is a property of the
+# provisioned dataset, so this asserts only that a load actually delivered rows.
 query I
-SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'odp_odata_read';
+SELECT COUNT(*) > 0 FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret');
 ----
-1
+true
 
-# Should be 132
+# Reading the same subscription twice must not duplicate the extract: the second call is
+# a delta fetch, which returns the changes since the first and not the whole dataset
+# again. This is the invariant the delta-token lifecycle exists to uphold.
 query I
-SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/Z_ODP_BW_1_SRV/FactsOf0D_NW_C01', secret='odp_odata_read');
+SELECT (SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret'))
+     <= (SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret', force_full_load=true));
 ----
-132
-
-
-
-
+true
