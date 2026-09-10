@@ -176,6 +176,11 @@ private:
     // but they still occupy a position in the chunk, so the positional correspondence has
     // to be recorded or every later slot reads the wrong column. See GitHub #132.
     std::vector<bool> output_column_is_row_id;
+
+    // Kept on the bind data, not only inside the log: CloneForScan mints a FRESH log per
+    // execution, so a flag stored solely in the log is silently dropped and the documented
+    // strict_typing parameter becomes a no-op. See GitHub #74 and #75.
+    bool strict_typing_ = false;
     
     // Configuration
     std::map<std::string, std::string> input_parameters;

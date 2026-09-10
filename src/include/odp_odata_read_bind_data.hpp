@@ -168,6 +168,17 @@ public:
      */
     void Initialize();
 
+    /**
+     * @brief Called when the scan is finished, however it finished.
+     *
+     * Commits a staged delta token. The scan can end WITHOUT a final zero-row
+     * FetchNextResult - OdpODataReadScan returns early when HasMoreResults() is already
+     * false - so relying on the fetch path alone means a normally drained scan never
+     * advances the subscription and every read re-extracts from the old token.
+     * Idempotent, so it is safe to call from both exits.
+     */
+    void FinalizeScan();
+
 private:
     // ========================================================================
     // Core Components (Composition Pattern)

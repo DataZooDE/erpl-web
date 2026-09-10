@@ -445,6 +445,7 @@ ODataReadBindData::~ODataReadBindData() {
 }
 
 void ODataReadBindData::SetStrictTyping(bool strict) {
+  strict_typing_ = strict;
   if (!conversion_failure_log) {
     conversion_failure_log = std::make_shared<ConversionFailureLog>();
   }
@@ -1640,6 +1641,11 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
 
   clone->service_root_mode_ = service_root_mode_;
   clone->InitializeComponents(service_root_mode_);
+
+  // InitializeComponents mints a fresh ConversionFailureLog for this execution, which is
+  // what gives the log the right lifetime - but it also resets strict typing, so the
+  // bind-time choice has to be re-applied or strict_typing=true silently does nothing.
+  clone->SetStrictTyping(strict_typing_);
 
   // Schema and configuration: pure values, safe to copy.
   clone->all_result_names = all_result_names;

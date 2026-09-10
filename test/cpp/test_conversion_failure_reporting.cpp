@@ -248,3 +248,37 @@ TEST_CASE("Out-of-range integers are reported, not zeroed", "[conversion_failure
     REQUIRE(failures[0].first_error_message.find("does not fit") != std::string::npos);
     REQUIRE(failures[0].first_offending_value == "4294967295");
 }
+
+TEST_CASE("strict_typing survives the per-scan clone", "[conversion_failure]") {
+    // CloneForScan mints a fresh ConversionFailureLog per execution, which is what gives
+    // the log the right lifetime - but strict typing lived only inside the log, so the
+    // clone silently reset it and the documented strict_typing=true parameter became a
+    // no-op for every odata_read() query. Neither #74's nor #75's tests caught it,
+    // because no test drove the flag through the table function.
+    auto client = MakeOfflineEntitySetClient();
+    ODataReadBindData bind_data(client);
+
+    bind_data.SetStrictTyping(true);
+    REQUIRE(bind_data.GetConversionFailureLog() != nullptr);
+    REQUIRE(bind_data.GetConversionFailureLog()->IsStrictTyping());
+
+    auto clone = bind_data.CloneForScan();
+    REQUIRE(clone != nullptr);
+    REQUIRE(clone->GetConversionFailureLog() != nullptr);
+    REQUIRE(clone->GetConversionFailureLog()->IsStrictTyping());
+
+    // The clone must own a DIFFERENT log, so failures are reported per execution rather
+    // than accumulating across re-executions of one bound plan.
+    REQUIRE(clone->GetConversionFailureLog() != bind_data.GetConversionFailureLog());
+}
+
+TEST_CASE("a non-strict bind data clones as non-strict", "[conversion_failure]") {
+    auto client = MakeOfflineEntitySetClient();
+    ODataReadBindData bind_data(client);
+    bind_data.SetStrictTyping(false);
+
+    auto clone = bind_data.CloneForScan();
+    REQUIRE(clone != nullptr);
+    REQUIRE(clone->GetConversionFailureLog() != nullptr);
+    REQUIRE_FALSE(clone->GetConversionFailureLog()->IsStrictTyping());
+}

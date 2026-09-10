@@ -175,6 +175,11 @@ void ODataPredicatePushdownHelper::ConsumeColumnSelection(const std::vector<duck
 }
 
 void ODataPredicatePushdownHelper::ConsumeFilters(duckdb::optional_ptr<duckdb::TableFilterSet> filters) {
+    // Recomputed from scratch for this filter set. Leaving it set would make $top/$skip
+    // suppression sticky: one untranslatable filter would keep suppressing them for every
+    // later use of the same helper, even after the filters were replaced.
+    has_untranslated_filter = false;
+
     if (filters && !filters->filters.empty()) {
         std::stringstream filters_str;
         /*
