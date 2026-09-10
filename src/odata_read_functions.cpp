@@ -42,7 +42,22 @@ private:
 };
 
 static bool IsODataMetadataField(const std::string &field_name) {
-  return field_name == "__metadata" || field_name == "__deferred";
+  // OData V2 spells control information with a leading double underscore.
+  if (field_name == "__metadata" || field_name == "__deferred") {
+    return true;
+  }
+
+  // OData V4 (JSON Format, "Control Information") puts control information and
+  // annotations in names containing '@' - "@odata.etag", "@odata.id",
+  // "@odata.type", "@odata.editLink", and property-scoped forms such as
+  // "Price@odata.type". A structural property name is a SimpleIdentifier and can
+  // never contain '@', so this is an exact test rather than a heuristic.
+  //
+  // Treating "@odata.etag" as a column meant it was pushed into $select, which
+  // OData rejects outright: "Syntax error: character '@' is not valid at
+  // position 0 in '@odata'". Northwind V4 returns an etag on every entity, so
+  // the whole service was unreadable. See GitHub #108.
+  return field_name.find('@') != std::string::npos;
 }
 
 static bool IsODataV2DeferredNavigationProperty(duckdb_yyjson::yyjson_val *val) {
@@ -1920,7 +1935,7 @@ std::string ExtractExpandClauseFromUrl(const std::string &url) {
   // Try standard $expand= pattern first
     size_t expand_pos = url.find("$expand=");
     if (expand_pos != std::string::npos) {
-        size_t start_pos = expand_pos + 9; // length of "$expand="
+        size_t start_pos = expand_pos + 8; // length of "$expand="
         size_t end_pos = url.find('&', start_pos);
         if (end_pos == std::string::npos) {
             end_pos = url.length();
@@ -1934,7 +1949,7 @@ std::string ExtractExpandClauseFromUrl(const std::string &url) {
   // Try alternative expand= pattern
         expand_pos = url.find("expand=");
         if (expand_pos != std::string::npos) {
-            size_t start_pos = expand_pos + 8; // length of "expand="
+            size_t start_pos = expand_pos + 7; // length of "expand="
             size_t end_pos = url.find('&', start_pos);
             if (end_pos == std::string::npos) {
                 end_pos = url.length();

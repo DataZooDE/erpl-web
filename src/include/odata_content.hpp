@@ -109,6 +109,16 @@ protected:
     duckdb::Value DeserializeJsonEnum(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
     duckdb::Value DeserializeJsonArray(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
     duckdb::Value DeserializeJsonObject(yyjson_val *json_value, const duckdb::LogicalType &duck_type);
+    duckdb::Value DeserializeJsonBlob(yyjson_val *json_value);
+    duckdb::Value DeserializeJsonInterval(yyjson_val *json_value);
+
+    //! Parses the OData V2 legacy date literal "/Date(<epoch-millis>[+/-HHMM])/" with millisecond
+    //! precision. The trailing offset is deliberately ignored because the epoch value is already
+    //! expressed in UTC; applying the offset on top of it would shift the timestamp incorrectly.
+    static bool TryParseODataV2DateLiteral(const std::string &literal, duckdb::timestamp_t &result);
+
+    //! Parses an ISO-8601 duration as produced for Edm.Duration, e.g. "PT12H30M", "P3DT4H", "-PT1H".
+    static bool TryParseIso8601Duration(const std::string &literal, duckdb::interval_t &result);
 
     std::string GetStringProperty(yyjson_val *json_value, const std::string &property_name) const;
 

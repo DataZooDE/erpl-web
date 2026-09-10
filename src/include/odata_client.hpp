@@ -1,6 +1,11 @@
 #pragma once
 #include "cpptrace/cpptrace.hpp"
 #include "yyjson.hpp"
+#include <chrono>
+#include <cstdint>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
 #include <type_traits>
 
 #include "datazoo/oauth2/http_client.hpp"
@@ -12,6 +17,33 @@ using namespace duckdb_yyjson;
 
 namespace erpl_web {
 
+// A failed HTTP request is only worth repeating when the failure is transient. Repeating a 4xx
+// never helps and actively harms: against SAP systems every retried 401 increments the failed
+// logon counter and locks the user after a few attempts.
+inline bool ShouldRetryStatus(int32_t status_code)
+{
+    if (status_code == 429) {
+        return true;
+    }
+    return status_code >= 500 && status_code <= 599;
+}
+
+// Extracted from the request paths so the "transport failed, no response at all" branch stays
+// reachable in unit tests: the concrete HttpClient offers no virtual seam to inject a
+// null-returning stub through.
+inline void ThrowIfNoResponse(const HttpResponse* http_response, const std::string& request_url)
+{
+    if (http_response != nullptr) {
+        return;
+    }
+
+    std::stringstream ss;
+    ss << "No response from OData service at: " << request_url << std::endl;
+    ss << "The request failed before any response was received "
+       << "(check DNS resolution, network connectivity, proxy and TLS settings)." << std::endl;
+    ss << cpptrace::generate_trace(0, 10).to_string() << std::endl;
+    throw std::runtime_error(ss.str());
+}
 
 template <typename TContent>
 class ODataResponse {
@@ -182,9 +214,12 @@ protected:
 
         auto http_response = http_client->SendRequest(http_request);
 
-        if (http_response == nullptr || http_response->Code() != 200) {
+        ThrowIfNoResponse(http_response.get(), modified_url.ToString());
+
+        if (http_response->Code() != 200) {
             std::stringstream ss;
-            ss << "Failed to get OData response: " << http_response->Code() << std::endl;
+            ss << "Failed to get OData response from " << modified_url.ToString()
+               << ": HTTP " << http_response->Code() << std::endl;
             ss << "Content: " << std::endl << http_response->Content() << std::endl;
             ss << cpptrace::generate_trace(0, 10).to_string() << std::endl;
             throw std::runtime_error(ss.str());
@@ -233,15 +268,22 @@ protected:
         }
         ERPL_TRACE_DEBUG("ODATA_CLIENT", request_trace.str());
         
+        // Use the injected client (bypassing the response cache, as metadata is cached separately
+        // in the EdmCache) instead of building a throw-away client per attempt.
+        auto metadata_http_client = (http_client != nullptr) ? http_client->GetHttpClient() : nullptr;
+        if (metadata_http_client == nullptr) {
+            throw std::runtime_error("No HTTP client available to fetch OData metadata from "
+                                     + HttpUrl::MergeWithBaseUrlIfRelative(url, sanitized_raw).ToString());
+        }
+
+        constexpr idx_t MAX_METADATA_ATTEMPTS = 3;
+        constexpr uint64_t METADATA_RETRY_BASE_WAIT_MS = 200;
+
         std::unique_ptr<HttpResponse> metadata_response;
-        for (size_t num_retries = 3; num_retries > 0; --num_retries) {
-            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " of 3");
-            // Use a fresh non-cached HTTP client for metadata to mirror http_get behavior exactly
-            HttpParams meta_params;
-            meta_params.url_encode = false;
-            meta_params.keep_alive = false;
-            HttpClient meta_client(meta_params);
-            metadata_response = meta_client.SendRequest(metadata_request);
+        for (idx_t attempt = 1; attempt <= MAX_METADATA_ATTEMPTS; ++attempt) {
+            ERPL_TRACE_DEBUG("ODATA_CLIENT", "Metadata request attempt " + std::to_string(attempt) + " of "
+                                             + std::to_string(MAX_METADATA_ATTEMPTS));
+            metadata_response = metadata_http_client->SendRequest(metadata_request);
             if (metadata_response != nullptr && metadata_response->Code() == 200) {
                 // Trace successful metadata response
                 std::stringstream response_trace;
@@ -264,7 +306,7 @@ protected:
             // Trace failed metadata response
             if (metadata_response != nullptr) {
                 std::stringstream error_trace;
-                error_trace << "OData Metadata HTTP Error Response (attempt " + std::to_string(4 - num_retries) + "):" << std::endl;
+                error_trace << "OData Metadata HTTP Error Response (attempt " + std::to_string(attempt) + "):" << std::endl;
                 error_trace << "  Status Code: " << metadata_response->Code() << std::endl;
                 error_trace << "  Content Type: " << metadata_response->ContentType() << std::endl;
                 error_trace << "  Response Headers:";
@@ -274,7 +316,34 @@ protected:
                 error_trace << std::endl << "  Response Body (first 4000 chars): " << metadata_response->Content().substr(0, 4000);
                 ERPL_TRACE_WARN("ODATA_CLIENT", error_trace.str());
             } else {
-                ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(4 - num_retries) + " failed: No response received");
+                ERPL_TRACE_WARN("ODATA_CLIENT", "Metadata request attempt " + std::to_string(attempt)
+                                                + " failed: No response received");
+            }
+
+            // Three outcomes, and they are not the same thing:
+            //  - transient (429/5xx, or no response at all): repeat the same request after a wait;
+            //  - 404: the URL is wrong rather than the service being unwell, so fall back to the
+            //    popped, service-root-ward URL below. That is a *different* request, not a repeat;
+            //  - any other 4xx (401/403/...): the server answered deliberately. Repeating it cannot
+            //    help and does harm - every retried 401 increments the SAP failed-logon counter.
+            const bool no_response = (metadata_response == nullptr);
+            const bool is_transient = no_response || ShouldRetryStatus(metadata_response->Code());
+            const bool can_pop_path = !no_response && metadata_response->Code() == 404;
+
+            if (!is_transient && !can_pop_path) {
+                ERPL_TRACE_ERROR("ODATA_CLIENT", "Metadata request failed with non-retryable status "
+                                                 + std::to_string(metadata_response->Code()) + ", not retrying");
+                break;
+            }
+
+            if (attempt == MAX_METADATA_ATTEMPTS) {
+                break;
+            }
+
+            // Back off only when repeating the same request; a 404 fallback targets a different
+            // URL, so there is nothing to wait for.
+            if (is_transient) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(METADATA_RETRY_BASE_WAIT_MS * attempt));
             }
 
             // Pop one level and retry toward service-root $metadata

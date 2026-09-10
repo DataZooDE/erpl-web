@@ -128,43 +128,51 @@ duckdb::optional_ptr<duckdb::CatalogEntry> ODataSchemaEntry::LookupEntry(duckdb:
 void ODataSchemaEntry::LoadTables() {
     // This method should only be called while holding the tables_mutex
     auto &odata_catalog = static_cast<ODataCatalog&>(catalog);
-    try {
-        auto metadata = odata_catalog.GetServiceClient().GetMetadata();
-        auto entity_sets = metadata.FindEntitySets();
-        
-        // Clear existing entries first
-        table_entries.clear();
-        
-        for (const auto& entity_set : entity_sets) {
-            duckdb::CreateTableInfo table_info;
-            table_info.table = entity_set.name;
-            table_info.schema = name;
 
-            try {
-                auto type_variant = metadata.FindType(entity_set.entity_type_name);
-                if (std::holds_alternative<EntityType>(type_variant)) {
-                    auto entity_type = std::get<EntityType>(type_variant);
-                    for (const auto& property : entity_type.properties) {
-                        // Prefer property-aware central mapping (precision/scale + collection)
-                        auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
-                        table_info.columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
-                    }
-                } else {
-                    // Fallback for entity type not found
-                    table_info.columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
+    // Metadata failures are deliberately not swallowed here: a 401, a TLS handshake failure or an
+    // unreachable host must not be reported as "that table does not exist". LoadTables() is only
+    // reached lazily from Scan()/GetEntry()/LookupEntry(), so ATTACH itself still succeeds and the
+    // real cause surfaces on the first statement that needs the schema. tables_loaded is set by the
+    // callers only after this method returns, hence a transient failure is retried on the next use.
+    auto &metadata = odata_catalog.GetCachedMetadata();
+    auto entity_sets = metadata.FindEntitySets();
+
+    // Build into a local map so a failure never leaves a half-populated catalog behind
+    std::unordered_map<std::string, duckdb::unique_ptr<ODataTableEntry>> loaded_entries;
+    loaded_entries.reserve(entity_sets.size());
+
+    for (const auto& entity_set : entity_sets) {
+        if (odata_catalog.IsIgnored(entity_set.name)) {
+            continue;
+        }
+
+        duckdb::CreateTableInfo table_info;
+        table_info.table = entity_set.name;
+        table_info.schema = name;
+
+        try {
+            auto type_variant = metadata.FindType(entity_set.entity_type_name);
+            if (std::holds_alternative<EntityType>(type_variant)) {
+                auto entity_type = std::get<EntityType>(type_variant);
+                for (const auto& property : entity_type.properties) {
+                    // Prefer property-aware central mapping (precision/scale + collection)
+                    auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
+                    table_info.columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
                 }
-            } catch (const std::exception& e) {
+            } else {
                 // Fallback for entity type not found
                 table_info.columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
             }
-            
-            auto table_entry = duckdb::make_uniq<ODataTableEntry>(catalog, *this, table_info);
-            table_entries[entity_set.name] = std::move(table_entry);
+        } catch (const std::exception& e) {
+            // Fallback for entity type not found
+            table_info.columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
         }
-    } catch (const std::exception& e) {
-        // Handle metadata fetch failure - create no tables
-        table_entries.clear();
+
+        auto table_entry = duckdb::make_uniq<ODataTableEntry>(catalog, *this, table_info);
+        loaded_entries[entity_set.name] = std::move(table_entry);
     }
+
+    table_entries = std::move(loaded_entries);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -332,19 +340,17 @@ HttpUrl ODataCatalog::ServiceUrl() {
 }
 
 std::vector<std::string> ODataCatalog::GetTableNames() {
-    try {
-        auto metadata = service_client.GetMetadata();
-        auto entity_sets = metadata.FindEntitySets();
-        std::vector<std::string> table_names;
-        for (const auto& entity_set : entity_sets) {
-            if (!ODataAttachBindData::MatchPattern(entity_set.name, ignore_pattern)) {
-                table_names.push_back(entity_set.name);
-            }
+    auto &metadata = GetCachedMetadata();
+    auto entity_sets = metadata.FindEntitySets();
+
+    std::vector<std::string> table_names;
+    table_names.reserve(entity_sets.size());
+    for (const auto& entity_set : entity_sets) {
+        if (!IsIgnored(entity_set.name)) {
+            table_names.push_back(entity_set.name);
         }
-        return table_names;
-    } catch (const std::exception& e) {
-        return std::vector<std::string>();
     }
+    return table_names;
 }
 
 ODataSchemaEntry& ODataCatalog::GetMainSchema() {
@@ -354,38 +360,35 @@ ODataSchemaEntry& ODataCatalog::GetMainSchema() {
 void ODataCatalog::GetTableInfo(const std::string &table_name, 
                                  duckdb::ColumnList &columns, 
                                  std::vector<duckdb::unique_ptr<duckdb::Constraint>> &constraints) {
-    try {
-        auto metadata = service_client.GetMetadata();
-        auto entity_sets = metadata.FindEntitySets();
-        
-        for (const auto& entity_set : entity_sets) {
-            if (entity_set.name == table_name) {
-                try {
-                    auto type_variant = metadata.FindType(entity_set.entity_type_name);
-                    if (std::holds_alternative<EntityType>(type_variant)) {
-                        auto entity_type = std::get<EntityType>(type_variant);
-                        for (const auto& property : entity_type.properties) {
-                            auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
-                            columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
-                        }
-                        return;
-                    }
-                } catch (const std::exception& e) {
-                    // Fallback for entity type not found
-                    columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
-                    return;
-                }
-            }
+    auto &metadata = GetCachedMetadata();
+    auto entity_sets = metadata.FindEntitySets();
+
+    for (const auto& entity_set : entity_sets) {
+        if (entity_set.name != table_name) {
+            continue;
         }
-    } catch (const std::exception& e) {
-        // If metadata fetch fails, create a minimal table
-        columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
+
+        try {
+            auto type_variant = metadata.FindType(entity_set.entity_type_name);
+            if (std::holds_alternative<EntityType>(type_variant)) {
+                auto entity_type = std::get<EntityType>(type_variant);
+                for (const auto& property : entity_type.properties) {
+                    auto logical_type = DuckTypeConverter::BuildLogicalTypeForProperty(property, metadata);
+                    columns.AddColumn(duckdb::ColumnDefinition(property.name, logical_type));
+                }
+                return;
+            }
+        } catch (const std::exception& e) {
+            // Fallback for entity type not found
+            columns.AddColumn(duckdb::ColumnDefinition("id", duckdb::LogicalType::VARCHAR));
+            return;
+        }
     }
 }
 
 std::optional<ODataEntitySetReference> ODataCatalog::GetEntitySetReference(const std::string &table_name) {
     try {
-        auto metadata = service_client.GetMetadata();
+        auto &metadata = GetCachedMetadata();
         auto entity_sets = metadata.FindEntitySets();
         
         for (const auto& entity_set : entity_sets) {
@@ -404,6 +407,32 @@ std::optional<ODataEntitySetReference> ODataCatalog::GetEntitySetReference(const
 
 ODataServiceClient& ODataCatalog::GetServiceClient() {
     return service_client;
+}
+
+Edmx &ODataCatalog::GetCachedMetadata() {
+    std::lock_guard<std::mutex> lock(metadata_mutex);
+    if (!cached_metadata.has_value()) {
+        try {
+            cached_metadata = service_client.GetMetadata();
+        } catch (const std::exception &e) {
+            // Preserve the underlying cause (401, TLS failure, DNS failure, malformed EDMX, ...)
+            // together with the service URL instead of degrading it into an empty schema.
+            throw duckdb::IOException(duckdb::StringUtil::Format(
+                "Failed to load OData metadata from '%s': %s", path_, std::string(e.what())));
+        }
+    }
+    return cached_metadata.value();
+}
+
+bool ODataCatalog::IsIgnored(const std::string &entity_set_name) const {
+    return MatchesIgnorePattern(entity_set_name, ignore_pattern);
+}
+
+bool ODataCatalog::MatchesIgnorePattern(const std::string &entity_set_name, const std::string &ignore_pattern) {
+    if (ignore_pattern.empty()) {
+        return false;
+    }
+    return ODataAttachBindData::MatchPattern(entity_set_name, ignore_pattern);
 }
 
 } // namespace erpl_web

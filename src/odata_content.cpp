@@ -1,11 +1,55 @@
 #include "odata_content.hpp"
 #include "tracing.hpp"
 
+#include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+
 #include <cpptrace/cpptrace.hpp>
 
 #include <cstdlib>
+#include <cctype>
 
 namespace erpl_web {
+
+namespace {
+
+//! Normalizes the base64url alphabet (RFC 4648 section 5) onto the standard alphabet (section 4)
+//! and restores stripped padding, so that a single decoder handles both spellings. OData services
+//! are inconsistent here: the JSON format mandates base64url, while several SAP gateways emit
+//! plain base64.
+std::string NormalizeBase64(const std::string &encoded)
+{
+    std::string normalized;
+    normalized.reserve(encoded.size() + 3);
+
+    for (const char c : encoded) {
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            continue;
+        }
+        if (c == '-') {
+            normalized.push_back('+');
+        } else if (c == '_') {
+            normalized.push_back('/');
+        } else {
+            normalized.push_back(c);
+        }
+    }
+
+    // A remainder of 1 can never result from a valid base64 encoding, so no amount of padding
+    // would repair it.
+    if (normalized.size() % 4 == 1) {
+        throw duckdb::ParserException("Invalid base64 payload: " + std::to_string(normalized.size()) +
+                                      " characters is not a valid base64 length");
+    }
+    while (normalized.size() % 4 != 0) {
+        normalized.push_back('=');
+    }
+
+    return normalized;
+}
+
+} // namespace
 
 
 // ----------------------------------------------------------------------
@@ -200,6 +244,10 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonValue(yyjson_val* json_value
                 return DeserializeJsonArray(json_value, duck_type);
             case duckdb::LogicalTypeId::STRUCT:
                 return DeserializeJsonObject(json_value, duck_type);
+            case duckdb::LogicalTypeId::BLOB:
+                return DeserializeJsonBlob(json_value);
+            case duckdb::LogicalTypeId::INTERVAL:
+                return DeserializeJsonInterval(json_value);
             default:
                 throw duckdb::ParserException("Unsupported DuckDB type: " + duck_type.ToString());
         }
@@ -562,21 +610,12 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonString(yyjson_val* json_valu
         // Create a safe copy of the string
         std::string safe_string(str_ptr, str_len);
         
-        // Normalize OData V2 legacy date format /Date(ms[+/-HHMM])/: convert to ISO string
-        if (safe_string.size() >= 8 && safe_string.rfind("/Date(", 0) == 0 && safe_string.substr(safe_string.size() - 2) == ")/") {
-            std::string inner = safe_string.substr(6, safe_string.size() - 8);
-            size_t pos = inner.find_first_of("+-", 1);
-            std::string ms_str = (pos == std::string::npos) ? inner : inner.substr(0, pos);
-            try {
-                long long ms = std::stoll(ms_str);
-                long long sec = ms / 1000;
-                auto ts_val = duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(sec));
-                return ts_val.DefaultCastAs(duckdb::LogicalType::VARCHAR);
-            } catch (...) {
-                // ignore and fall back to raw string
-            }
+        // Normalize the OData V2 legacy date format /Date(ms[+/-HHMM])/ into an ISO string.
+        duckdb::timestamp_t legacy_timestamp;
+        if (TryParseODataV2DateLiteral(safe_string, legacy_timestamp)) {
+            return duckdb::Value::TIMESTAMP(legacy_timestamp).DefaultCastAs(duckdb::LogicalType::VARCHAR);
         }
-        
+
         try {
             return duckdb::Value(safe_string);
         } catch (const std::exception& e) {
@@ -690,18 +729,9 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonTimestamp(yyjson_val* json_v
     }
     if (yyjson_is_str(json_value)) {
         std::string s = yyjson_get_str(json_value);
-        // OData v2 legacy format /Date(ms[+/-HHMM])/
-        if (s.size() >= 8 && s.rfind("/Date(", 0) == 0 && s.substr(s.size() - 2) == ")/") {
-            std::string inner = s.substr(6, s.size() - 8);
-            size_t pos = inner.find_first_of("+-", 1);
-            std::string ms_str = (pos == std::string::npos) ? inner : inner.substr(0, pos);
-            try {
-                long long ms = std::stoll(ms_str);
-                long long sec = ms / 1000;
-                return duckdb::Value::TIMESTAMP(duckdb::Timestamp::FromEpochSeconds(sec));
-            } catch (...) {
-                // fall through to ISO cast
-            }
+        duckdb::timestamp_t legacy_timestamp;
+        if (TryParseODataV2DateLiteral(s, legacy_timestamp)) {
+            return duckdb::Value::TIMESTAMP(legacy_timestamp);
         }
         return duckdb::Value(s).DefaultCastAs(duckdb::LogicalType(duckdb::LogicalTypeId::TIMESTAMP));
     }
@@ -730,25 +760,245 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonEnum(yyjson_val* json_value,
     }
     
     if (yyjson_is_str(json_value)) {
-        std::string enum_value = yyjson_get_str(json_value);
-        try {
-            // Find the enum index for the given value
-            uint64_t enum_index = 0;
-            for (idx_t i = 0; i < duckdb::EnumType::GetSize(duck_type); i++) {
-                if (duckdb::EnumType::GetString(duck_type, i).GetString() == enum_value) {
-                    enum_index = i;
-                    break;
-                }
+        const std::string enum_value(yyjson_get_str(json_value), yyjson_get_len(json_value));
+
+        const auto member_count = duckdb::EnumType::GetSize(duck_type);
+        for (duckdb::idx_t i = 0; i < member_count; i++) {
+            if (duckdb::EnumType::GetString(duck_type, i).GetString() == enum_value) {
+                return duckdb::Value::ENUM(static_cast<uint64_t>(i), duck_type);
             }
-            return duckdb::Value::ENUM(enum_index, duck_type);
-        } catch (const std::exception& e) {
-            ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to create ENUM value: " + std::string(e.what()));
-            return duckdb::Value(enum_value);
         }
+
+        // An unmatched member must never collapse onto index 0 - that silently rewrites the value
+        // to a different, plausible-looking member. OData v4 services add enum members over time,
+        // so surface the mismatch instead of corrupting the data.
+        throw duckdb::ParserException("Enum value '" + enum_value + "' is not a declared member of enum type " +
+                                      duck_type.ToString());
     }
-    
+
     ThrowTypeError(json_value, "enum");
     return duckdb::Value(""); // Unreachable
+}
+
+bool ODataJsonContentMixin::TryParseODataV2DateLiteral(const std::string& literal, duckdb::timestamp_t& result)
+{
+    constexpr duckdb::idx_t PREFIX_LENGTH = 6; // "/Date("
+    constexpr duckdb::idx_t SUFFIX_LENGTH = 2; // ")/"
+
+    if (literal.size() < PREFIX_LENGTH + SUFFIX_LENGTH) {
+        return false;
+    }
+    if (literal.rfind("/Date(", 0) != 0 || literal.compare(literal.size() - SUFFIX_LENGTH, SUFFIX_LENGTH, ")/") != 0) {
+        return false;
+    }
+
+    const std::string inner = literal.substr(PREFIX_LENGTH, literal.size() - PREFIX_LENGTH - SUFFIX_LENGTH);
+
+    // SAP appends a local-time offset such as "+0060". It is deliberately ignored: the epoch value
+    // in front of it is already expressed in UTC, so applying the offset would shift the timestamp.
+    const auto offset_pos = inner.find_first_of("+-", 1);
+    const std::string millis_str = (offset_pos == std::string::npos) ? inner : inner.substr(0, offset_pos);
+
+    try {
+        const int64_t millis = static_cast<int64_t>(std::stoll(millis_str));
+        // DuckDB TIMESTAMP is microsecond-precise, so the milliseconds must not be truncated away.
+        result = duckdb::Timestamp::FromEpochMs(millis);
+        return true;
+    } catch (const std::exception& e) {
+        ERPL_TRACE_DEBUG("ODATA_CONTENT", "Not a valid /Date(...)/ literal: " + literal + " (" + e.what() + ")");
+        return false;
+    }
+}
+
+bool ODataJsonContentMixin::TryParseIso8601Duration(const std::string& literal, duckdb::interval_t& result)
+{
+    result = duckdb::interval_t {0, 0, 0};
+
+    duckdb::idx_t pos = 0;
+    bool is_negative = false;
+    if (pos < literal.size() && (literal[pos] == '+' || literal[pos] == '-')) {
+        is_negative = literal[pos] == '-';
+        pos++;
+    }
+    if (pos >= literal.size() || std::toupper(static_cast<unsigned char>(literal[pos])) != 'P') {
+        return false;
+    }
+    pos++;
+
+    int64_t months = 0;
+    int64_t days = 0;
+    int64_t micros = 0;
+    bool in_time_part = false;
+    bool has_component = false;
+
+    while (pos < literal.size()) {
+        if (std::toupper(static_cast<unsigned char>(literal[pos])) == 'T') {
+            if (in_time_part) {
+                return false;
+            }
+            in_time_part = true;
+            pos++;
+            continue;
+        }
+
+        const duckdb::idx_t integer_start = pos;
+        while (pos < literal.size() && std::isdigit(static_cast<unsigned char>(literal[pos]))) {
+            pos++;
+        }
+        if (pos == integer_start) {
+            return false;
+        }
+        const std::string integer_digits = literal.substr(integer_start, pos - integer_start);
+
+        std::string fraction_digits;
+        if (pos < literal.size() && (literal[pos] == '.' || literal[pos] == ',')) {
+            pos++;
+            const duckdb::idx_t fraction_start = pos;
+            while (pos < literal.size() && std::isdigit(static_cast<unsigned char>(literal[pos]))) {
+                pos++;
+            }
+            if (pos == fraction_start) {
+                return false;
+            }
+            fraction_digits = literal.substr(fraction_start, pos - fraction_start);
+        }
+
+        if (pos >= literal.size()) {
+            return false; // a number without a trailing designator
+        }
+        const char designator = static_cast<char>(std::toupper(static_cast<unsigned char>(literal[pos])));
+        pos++;
+
+        int64_t integer_value = 0;
+        try {
+            integer_value = static_cast<int64_t>(std::stoll(integer_digits));
+        } catch (const std::exception&) {
+            return false;
+        }
+
+        // A fraction is only meaningful on the smallest supported component.
+        int64_t fraction_micros = 0;
+        if (!fraction_digits.empty()) {
+            if (!in_time_part || designator != 'S') {
+                return false;
+            }
+            std::string micro_digits = fraction_digits.substr(0, 6);
+            micro_digits.append(6 - micro_digits.size(), '0');
+            fraction_micros = static_cast<int64_t>(std::stoll(micro_digits));
+        }
+
+        if (!in_time_part) {
+            switch (designator) {
+                case 'Y':
+                    months += integer_value * duckdb::Interval::MONTHS_PER_YEAR;
+                    break;
+                case 'M':
+                    months += integer_value;
+                    break;
+                case 'W':
+                    days += integer_value * duckdb::Interval::DAYS_PER_WEEK;
+                    break;
+                case 'D':
+                    days += integer_value;
+                    break;
+                default:
+                    return false;
+            }
+        } else {
+            switch (designator) {
+                case 'H':
+                    micros += integer_value * duckdb::Interval::MICROS_PER_HOUR;
+                    break;
+                case 'M':
+                    micros += integer_value * duckdb::Interval::MICROS_PER_MINUTE;
+                    break;
+                case 'S':
+                    micros += integer_value * duckdb::Interval::MICROS_PER_SEC + fraction_micros;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        has_component = true;
+    }
+
+    if (!has_component) {
+        return false;
+    }
+
+    if (is_negative) {
+        months = -months;
+        days = -days;
+        micros = -micros;
+    }
+
+    result.months = static_cast<int32_t>(months);
+    result.days = static_cast<int32_t>(days);
+    result.micros = micros;
+    return true;
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonBlob(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+
+    if (yyjson_is_null(json_value)) {
+        return duckdb::Value();
+    }
+
+    if (yyjson_is_str(json_value)) {
+        const std::string encoded(yyjson_get_str(json_value), yyjson_get_len(json_value));
+        if (encoded.empty()) {
+            return duckdb::Value::BLOB_RAW(std::string());
+        }
+
+        // Blob::FromBase64 throws a ConversionException on malformed input; let it propagate so the
+        // caller can decide, rather than silently returning a truncated payload.
+        const std::string normalized = NormalizeBase64(encoded);
+        const std::string decoded = duckdb::Blob::FromBase64(duckdb::string_t(normalized));
+        return duckdb::Value::BLOB_RAW(decoded);
+    }
+
+    ThrowTypeError(json_value, "blob (base64 encoded string)");
+    return duckdb::Value(); // Unreachable
+}
+
+duckdb::Value ODataJsonContentMixin::DeserializeJsonInterval(yyjson_val* json_value)
+{
+    if (!json_value) {
+        throw duckdb::ParserException("JSON value is null");
+    }
+
+    if (yyjson_is_null(json_value)) {
+        return duckdb::Value();
+    }
+
+    if (yyjson_is_str(json_value)) {
+        const std::string literal(yyjson_get_str(json_value), yyjson_get_len(json_value));
+        duckdb::interval_t interval {0, 0, 0};
+        if (TryParseIso8601Duration(literal, interval)) {
+            return duckdb::Value::INTERVAL(interval);
+        }
+        // Fall back to DuckDB's own interval grammar (e.g. "90 minutes") for non ISO-8601 spellings.
+        return duckdb::Value(literal).DefaultCastAs(duckdb::LogicalType(duckdb::LogicalTypeId::INTERVAL));
+    }
+
+    if (yyjson_is_int(json_value)) {
+        const int64_t seconds = yyjson_get_int(json_value);
+        return duckdb::Value::INTERVAL(0, 0, seconds * duckdb::Interval::MICROS_PER_SEC);
+    }
+
+    if (yyjson_is_real(json_value)) {
+        const double seconds = yyjson_get_real(json_value);
+        const int64_t total_micros =
+            static_cast<int64_t>(seconds * static_cast<double>(duckdb::Interval::MICROS_PER_SEC));
+        return duckdb::Value::INTERVAL(0, 0, total_micros);
+    }
+
+    ThrowTypeError(json_value, "interval (ISO-8601 duration string or number of seconds)");
+    return duckdb::Value(); // Unreachable
 }
 
 duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val* json_value, const duckdb::LogicalType& duck_type)
@@ -915,8 +1165,14 @@ std::string ODataJsonContentMixin::GetStringProperty(yyjson_val *json_value, con
     if (!json_property) {
         throw std::runtime_error("No " + property_name + "-element found in OData response.");
     }
+    // yyjson_get_str returns NULL for any non-string node, and std::string(nullptr) is undefined
+    // behaviour, so the type has to be checked before converting.
+    if (!yyjson_is_str(json_property)) {
+        throw std::runtime_error("The " + property_name + "-element in the OData response is not a string, but of type '" +
+                                 std::string(yyjson_get_type_desc(json_property)) + "'.");
+    }
 
-    return std::string(yyjson_get_str(json_property));
+    return std::string(yyjson_get_str(json_property), yyjson_get_len(json_property));
 }
 
 // JSON path evaluation for complex expressions like AddressInfo[1].City."Name"
