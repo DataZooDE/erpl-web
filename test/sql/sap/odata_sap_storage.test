@@ -32,3 +32,54 @@ query I
 SELECT AirlineID FROM travel.Airline ORDER BY AirlineID LIMIT 1;
 ----
 AA
+
+# ============================================================================
+# GitHub #147 - OData v4 bound-operation advertisements are not columns
+# ============================================================================
+
+# SAP advertises every bound action and function as a property named
+# "#namespace.ActionName" with an object value. Per the v4 JSON Format those
+# names are control information, like the "@"-prefixed ones, and a structural
+# property name can never begin with '#'. Treated as columns they became
+# phantom VARCHARs that could never hold their object value: this service
+# produced 7 such columns and 654 failed conversions in a single read.
+# Asserted as an exact column count: the 7 advertisements would push it to 32.
+query I
+SELECT COUNT(*) FROM (SELECT * FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel') LIMIT 0) t;
+----
+0
+
+query I
+SELECT COUNT(*) = 25 FROM (DESCRIBE SELECT * FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel'));
+----
+true
+
+# The real columns still arrive, and the rows with them.
+query I
+SELECT COUNT(*) > 4000 FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel');
+----
+true
+
+# ============================================================================
+# Filter literals against a strict SAP Gateway
+# ============================================================================
+
+# Date literals are emitted bare for v4. SAP rejects a quoted date, so this is
+# the case the review could not verify without a real Gateway.
+query I
+SELECT COUNT(*) > 0 FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+WHERE BeginDate >= DATE '2026-01-01' AND BeginDate < DATE '2027-01-01';
+----
+true
+
+# An IN list becomes a parenthesised or-chain; SAP accepts the percent-encoded
+# grouping parentheses.
+query I
+SELECT COUNT(*) = (
+  SELECT COUNT(*) FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+  WHERE AgencyID = '70017' OR AgencyID = '70020'
+)
+FROM odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata4/dmo/ui_travel_d_d_o4/srvd/dmo/ui_travel_d_d/0001/Travel')
+WHERE AgencyID IN ('70017', '70020');
+----
+true

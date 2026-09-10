@@ -56,6 +56,18 @@ static bool IsODataMetadataField(const std::string &field_name) {
     return true;
   }
 
+  // OData V4 advertises a bound action or function as a property whose name is
+  // "#namespace.name" - SAP Gateway emits one per bound operation, with an object
+  // value. A structural property name is a SimpleIdentifier and can never begin
+  // with '#', so these are control information too, not columns.
+  //
+  // Left unfiltered they became phantom VARCHAR columns that could never hold their
+  // object value: a real SAP travel service produced 7 such columns and 654 failed
+  // conversions in a single read. See GitHub #147.
+  if (!field_name.empty() && field_name.front() == '#') {
+    return true;
+  }
+
   // OData V4 (JSON Format, "Control Information") puts control information and
   // annotations in names containing '@' - "@odata.etag", "@odata.id",
   // "@odata.type", "@odata.editLink", and property-scoped forms such as
