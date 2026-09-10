@@ -12,6 +12,7 @@
 #include "odata_edm.hpp"
 #include "odata_content.hpp"
 #include "tracing.hpp"
+#include "odp_trace_redaction.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -217,8 +218,20 @@ protected:
         http_request.SetODataVersion(odata_version);
         http_request.AddODataVersionHeaders();
         
+        // Credentials go only to the origin this client was pointed at. Server-driven
+        // paging follows whatever URL the service puts in @odata.nextLink / __next, so
+        // without this check a compromised or hostile endpoint could redirect the client -
+        // carrying its bearer token - to a host of its choosing. The ODP path and the
+        // redirect handler already do this; the generic path did not.
         if (auth_params != nullptr) {
-            http_request.AuthHeadersFromParams(*auth_params);
+            if (modified_url.IsSameOrigin(url)) {
+                http_request.AuthHeadersFromParams(*auth_params);
+            } else {
+                ERPL_TRACE_WARN("ODATA_CLIENT",
+                                "Not sending credentials to '" + modified_url.ToString() +
+                                "': it is a different origin from the service this client was "
+                                "opened against ('" + url.ToString() + "').");
+            }
         }
 
         auto http_response = http_client->SendRequest(http_request);
@@ -280,7 +293,10 @@ protected:
         request_trace << "  Method: GET" << std::endl;
         request_trace << "  Headers:";
         for (const auto& header : metadata_request.headers) {
-            request_trace << std::endl << "    " << header.first << ": " << header.second;
+            // Redacted: a DEBUG trace otherwise writes the bearer token or basic
+            // credential to disk on every $metadata fetch.
+            request_trace << std::endl << "    " << header.first << ": "
+                          << odp_trace::RedactHeaderValue(header.first, header.second);
         }
         ERPL_TRACE_DEBUG("ODATA_CLIENT", request_trace.str());
         

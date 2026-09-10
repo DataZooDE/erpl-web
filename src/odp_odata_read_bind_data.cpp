@@ -115,9 +115,29 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
             first_fetch_completed_ = true;
         }
         
-        // Drain current page; if exhausted and a next page URL is pending, load it.
+        // Drain the current page; when it is exhausted, keep loading pages until one
+        // yields rows or there is no next page left.
+        //
+        // This has to be a LOOP, not a single retry. A page that legitimately yields zero
+        // rows while still carrying a __next is a real shape - ODP delta packages and
+        // skip-token pages both produce it - and stopping after one attempt would end the
+        // scan there, handing back a partial extraction presented as complete and then
+        // committing the delta token over rows that were never delivered.
+        //
+        // The page count is bounded so a service that answers with an endless run of empty
+        // pages fails loudly instead of spinning; a genuinely long run of empty pages is
+        // still resumed on the next call, because HasMoreResults() stays true while a next
+        // page is pending.
+        constexpr unsigned int MAX_EMPTY_PAGES_PER_CALL = 64;
         unsigned int rows_fetched = odata_bind_data_->FetchNextResult(output);
-        if (rows_fetched == 0 && !pending_next_url_.empty()) {
+        unsigned int empty_pages = 0;
+        while (rows_fetched == 0 && !pending_next_url_.empty()) {
+            if (++empty_pages > MAX_EMPTY_PAGES_PER_CALL) {
+                ERPL_TRACE_WARN("ODP_BIND_DATA",
+                                "Yielding after " + std::to_string(MAX_EMPTY_PAGES_PER_CALL) +
+                                " consecutive empty ODP pages; the scan resumes on the next call");
+                break;
+            }
             FetchAndLoadNextPage();
             rows_fetched = odata_bind_data_->FetchNextResult(output);
         }
