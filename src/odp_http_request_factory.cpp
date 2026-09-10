@@ -44,28 +44,6 @@ HttpRequest OdpHttpRequestFactory::CreateMetadataRequest(const std::string& meta
     return CreateRequest(HttpMethod::GET, metadata_url, config);
 }
 
-HttpRequest OdpHttpRequestFactory::CreateTerminationRequest(const std::string& termination_url) {
-    ERPL_TRACE_INFO("ODP_HTTP_FACTORY", "Creating termination request for URL: " + termination_url);
-    
-    OdpRequestConfig config;
-    config.enable_change_tracking = false;
-    config.request_json = true;
-    config.odata_version = ODataVersion::V2;
-    
-    return CreateRequest(HttpMethod::GET, termination_url, config);
-}
-
-HttpRequest OdpHttpRequestFactory::CreateDeltaTokenDiscoveryRequest(const std::string& delta_links_url) {
-    ERPL_TRACE_INFO("ODP_HTTP_FACTORY", "Creating delta token discovery request for URL: " + delta_links_url);
-    
-    OdpRequestConfig config;
-    config.enable_change_tracking = false;
-    config.request_json = true;
-    config.odata_version = ODataVersion::V2;
-    
-    return CreateRequest(HttpMethod::GET, delta_links_url, config);
-}
-
 HttpRequest OdpHttpRequestFactory::CreateRequest(HttpMethod method, const std::string& url, const OdpRequestConfig& config) {
     ERPL_TRACE_DEBUG("ODP_HTTP_FACTORY", "Creating HTTP request with method: " + method.ToString() + ", URL: " + url);
     

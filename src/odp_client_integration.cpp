@@ -40,20 +40,6 @@ std::unique_ptr<HttpResponse> OdpClientIntegration::ExecuteMetadataRequest(const
     return ExecuteRequest(request);
 }
 
-std::unique_ptr<HttpResponse> OdpClientIntegration::ExecuteTerminationRequest(const std::string& termination_url) {
-    ERPL_TRACE_INFO("ODP_CLIENT_INTEGRATION", "Executing ODP termination request for URL: " + termination_url);
-    
-    auto request = request_factory_->CreateTerminationRequest(termination_url);
-    return ExecuteRequest(request);
-}
-
-std::unique_ptr<HttpResponse> OdpClientIntegration::ExecuteDeltaTokenDiscovery(const std::string& delta_links_url) {
-    ERPL_TRACE_INFO("ODP_CLIENT_INTEGRATION", "Executing ODP delta token discovery for URL: " + delta_links_url);
-    
-    auto request = request_factory_->CreateDeltaTokenDiscoveryRequest(delta_links_url);
-    return ExecuteRequest(request);
-}
-
 OdpHttpRequestFactory& OdpClientIntegration::GetRequestFactory() {
     return *request_factory_;
 }

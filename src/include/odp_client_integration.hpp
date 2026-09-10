@@ -53,20 +53,6 @@ public:
     std::unique_ptr<HttpResponse> ExecuteMetadataRequest(const std::string& metadata_url);
 
     /**
-     * @brief Execute an ODP subscription termination request
-     * @param termination_url Termination function URL
-     * @return HTTP response from termination request
-     */
-    std::unique_ptr<HttpResponse> ExecuteTerminationRequest(const std::string& termination_url);
-
-    /**
-     * @brief Execute an ODP delta token discovery request
-     * @param delta_links_url DeltaLinksOf<EntitySet> URL
-     * @return HTTP response containing available delta tokens
-     */
-    std::unique_ptr<HttpResponse> ExecuteDeltaTokenDiscovery(const std::string& delta_links_url);
-
-    /**
      * @brief Get the ODP HTTP request factory instance
      * @return Reference to the factory
      */
