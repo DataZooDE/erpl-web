@@ -31,11 +31,13 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%' 
 # SECTION 2: Core Extension Settings
 # ============================================================================
 
-# Test that extension-specific settings exist
+# Test that extension-specific settings exist.
+# 10 = 7 tracing/telemetry settings + erpl_ca_cert_file and
+# erpl_unsafe_disable_server_cert_verification, added with TLS verification (#63).
 query I
 SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_%';
 ----
-8
+10
 
 # Verify core settings exist
 query I
@@ -74,3 +76,12 @@ query I
 SELECT COUNT(*) FROM duckdb_extensions() WHERE extension_name = 'erpl_web';
 ----
 1
+
+# The TLS settings must be registered, or a user reaching a self-signed on-premise
+# service has no way to trust its CA and no way to opt out. A bare count would not
+# have caught their absence, so name them (#63).
+query I
+SELECT COUNT(*) FROM duckdb_settings()
+WHERE name IN ('erpl_ca_cert_file', 'erpl_unsafe_disable_server_cert_verification');
+----
+2
