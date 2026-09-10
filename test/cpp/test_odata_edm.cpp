@@ -779,3 +779,154 @@ TEST_CASE("Test OData JSON version detection", "[odata_edm_version_detection_jso
     std::cout << "OData v4 JSON: " << v4_json.length() << " chars" << std::endl;
     std::cout << "OData v2 simple JSON: " << v2_json_simple.length() << " chars" << std::endl;
 }
+TEST_CASE("Edm.Byte maps to UTINYINT and Edm.SByte to TINYINT", "[odata_edm_mapping]")
+{
+    // GitHub #68: Edm.Byte is unsigned 0..255, Edm.SByte is signed -128..127.
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.Byte") == duckdb::LogicalTypeId::UTINYINT);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.SByte") == duckdb::LogicalTypeId::TINYINT);
+
+    REQUIRE(DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString("Edm.Byte") == "UTINYINT");
+    REQUIRE(DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString("Edm.SByte") == "TINYINT");
+
+    auto xml = LoadTestFile("./test/cpp/edm_trippin.xml");
+    auto edmx = Edmx::FromXml(xml);
+
+    Property p_byte;
+    p_byte.name = "TaxTarifCode";
+    p_byte.type_name = "Edm.Byte";
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_byte, edmx).id() == duckdb::LogicalTypeId::UTINYINT);
+
+    Property p_sbyte;
+    p_sbyte.name = "Offset";
+    p_sbyte.type_name = "Edm.SByte";
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_sbyte, edmx).id() == duckdb::LogicalTypeId::TINYINT);
+}
+
+TEST_CASE("SAP GWSAMPLE Product exposes TaxTarifCode as UTINYINT", "[odata_edm_mapping]")
+{
+    // GitHub #68: edm_sap_gsample_basic.xml declares TaxTarifCode as Edm.Byte Nullable="false".
+    // The entity-struct path resolves it through DuckTypeConverter::operator()(PrimitiveType&),
+    // which is a separate copy of the mapping from the string based helpers above.
+    auto xml = LoadTestFile("./test/cpp/edm_sap_gsample_basic.xml");
+    auto edmx = Edmx::FromXmlV2(xml);
+
+    DuckTypeConverter converter(edmx);
+    auto product_type = edmx.FindType("GWSAMPLE_BASIC.Product");
+    auto struct_type = std::visit(converter, product_type);
+    REQUIRE(struct_type.id() == duckdb::LogicalTypeId::STRUCT);
+
+    bool found_tax_tarif_code = false;
+    bool found_weight_measure = false;
+    for (const auto &child : duckdb::StructType::GetChildTypes(struct_type)) {
+        if (child.first == "TaxTarifCode") {
+            found_tax_tarif_code = true;
+            REQUIRE(child.second.id() == duckdb::LogicalTypeId::UTINYINT);
+        }
+        if (child.first == "WeightMeasure") {
+            // Precision="13" Scale="3" is declared, so this stays an exact DECIMAL.
+            found_weight_measure = true;
+            REQUIRE(child.second.ToString() == "DECIMAL(13,3)");
+        }
+    }
+
+    REQUIRE(found_tax_tarif_code == true);
+    REQUIRE(found_weight_measure == true);
+}
+
+TEST_CASE("Property facets default to -1 when the CSDL attribute is absent", "[odata_edm]")
+{
+    // GitHub #73: max_length/fixed_length/precision/scale had no in-class initializer, so a
+    // Property parsed from an element that omits those attributes carried indeterminate values.
+    Property default_property;
+    REQUIRE(default_property.max_length == -1);
+    REQUIRE(default_property.fixed_length == -1);
+    REQUIRE(default_property.precision == -1);
+    REQUIRE(default_property.scale == -1);
+
+    const char *xml = R"(
+        <Property Name="Amount" Type="Edm.Decimal" Nullable="false" />
+    )";
+
+    tinyxml2::XMLDocument doc;
+    doc.Parse(xml);
+    tinyxml2::XMLElement *element = doc.FirstChildElement("Property");
+
+    Property property = Property::FromXml(*element);
+    REQUIRE(property.name == "Amount");
+    REQUIRE(property.type_name == "Edm.Decimal");
+    REQUIRE(property.max_length == -1);
+    REQUIRE(property.fixed_length == -1);
+    REQUIRE(property.precision == -1);
+    REQUIRE(property.scale == -1);
+
+    FunctionParameter default_parameter;
+    REQUIRE(default_parameter.max_length == -1);
+    REQUIRE(default_parameter.precision == -1);
+    REQUIRE(default_parameter.scale == -1);
+}
+
+TEST_CASE("Edm.Decimal without Scale maps to DOUBLE instead of rounding", "[odata_edm_mapping]")
+{
+    // GitHub #80: Precision without Scale used to yield DECIMAL(p,0), which silently turns
+    // 19.99 into 20. An explicitly declared Scale -- including Scale="0" -- is still honoured.
+    auto xml = LoadTestFile("./test/cpp/edm_trippin.xml");
+    auto edmx = Edmx::FromXml(xml);
+
+    Property p_precision_only;
+    p_precision_only.name = "Amount";
+    p_precision_only.type_name = "Edm.Decimal";
+    p_precision_only.precision = 19;
+    REQUIRE(p_precision_only.scale == -1);
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_precision_only, edmx).id() ==
+            duckdb::LogicalTypeId::DOUBLE);
+
+    Property p_no_facets;
+    p_no_facets.name = "Amount";
+    p_no_facets.type_name = "Edm.Decimal";
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_no_facets, edmx).id() ==
+            duckdb::LogicalTypeId::DOUBLE);
+
+    Property p_explicit_zero_scale;
+    p_explicit_zero_scale.name = "EntityCounter";
+    p_explicit_zero_scale.type_name = "Edm.Decimal";
+    p_explicit_zero_scale.precision = 19;
+    p_explicit_zero_scale.scale = 0;
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_explicit_zero_scale, edmx).ToString() ==
+            "DECIMAL(19,0)");
+
+    Property p_money;
+    p_money.name = "UnitPrice";
+    p_money.type_name = "Edm.Decimal";
+    p_money.precision = 19;
+    p_money.scale = 4;
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_money, edmx).ToString() == "DECIMAL(19,4)");
+
+    // Precision beyond DuckDB's DECIMAL limit is still clamped to 38.
+    Property p_wide;
+    p_wide.name = "Wide";
+    p_wide.type_name = "Edm.Decimal";
+    p_wide.precision = 47;
+    p_wide.scale = 2;
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_wide, edmx).ToString() == "DECIMAL(38,2)");
+}
+
+TEST_CASE("Edm.Decimal with variable Scale maps to DOUBLE", "[odata_edm_mapping]")
+{
+    // GitHub #80: SAP OData v2 services publish Scale="variable"; Property::FromXml parses that
+    // to -1, which is indistinguishable from "absent" and equally unfit for a fixed DECIMAL.
+    const char *xml = R"(
+        <Property Name="Price" Type="Edm.Decimal" Precision="16" Scale="variable" />
+    )";
+
+    tinyxml2::XMLDocument doc;
+    doc.Parse(xml);
+    tinyxml2::XMLElement *element = doc.FirstChildElement("Property");
+
+    Property property = Property::FromXml(*element);
+    REQUIRE(property.precision == 16);
+    REQUIRE(property.scale == -1);
+
+    auto edm_xml = LoadTestFile("./test/cpp/edm_trippin.xml");
+    auto edmx = Edmx::FromXml(edm_xml);
+    REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(property, edmx).id() == duckdb::LogicalTypeId::DOUBLE);
+}

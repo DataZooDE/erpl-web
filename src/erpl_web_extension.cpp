@@ -8,6 +8,7 @@
 #endif
 
 #include "erpl_web_extension.hpp"
+#include "datazoo/oauth2/http_client.hpp"
 #include "web_functions.hpp"
 #include "secret_functions.hpp"
 #include "odata_attach_functions.hpp"
@@ -101,6 +102,44 @@ static void OnAPIKey(ClientContext &context, SetScope scope, Value &parameter)
 {
     auto api_key = parameter.GetValue<std::string>();
     PostHogTelemetry::Instance().SetAPIKey(api_key);
+}
+
+// TLS configuration callbacks
+static void OnCaCertFile(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto ca_cert_file = parameter.IsNull() ? std::string() : parameter.GetValue<std::string>();
+    if (!ca_cert_file.empty()) {
+        auto &fs = FileSystem::GetFileSystem(context);
+        if (!fs.FileExists(ca_cert_file)) {
+            throw InvalidInputException("erpl_ca_cert_file: no such file '%s'", ca_cert_file);
+        }
+    }
+    erpl_web::HttpTlsPolicy::SetTrustedCaCertFile(ca_cert_file);
+}
+
+// Deliberately verbose: this is the one knob that turns off transport authentication,
+// so it is named for what it does and refuses anything but the exact opt-out token.
+static void OnUnsafeDisableServerCertVerification(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto value = parameter.IsNull() ? std::string() : parameter.GetValue<std::string>();
+    StringUtil::Trim(value);
+    auto value_upper = StringUtil::Upper(value);
+
+    if (value_upper.empty() || value_upper == "FALSE" || value_upper == "OFF") {
+        erpl_web::HttpTlsPolicy::SetServerCertVerificationEnabled(true);
+        return;
+    }
+
+    if (value_upper != "I_UNDERSTAND_THIS_IS_INSECURE") {
+        throw InvalidInputException(
+            "erpl_unsafe_disable_server_cert_verification only accepts the literal string "
+            "'I_UNDERSTAND_THIS_IS_INSECURE' (or an empty string to re-enable verification). "
+            "Disabling TLS certificate verification exposes every credential this extension sends to "
+            "on-path attackers. To reach an on-premise server with a private or self-signed certificate, "
+            "set erpl_ca_cert_file to the PEM bundle of the issuing CA instead.");
+    }
+
+    erpl_web::HttpTlsPolicy::SetServerCertVerificationEnabled(false);
 }
 
 // Tracing configuration callbacks
@@ -242,6 +281,19 @@ static void RegisterConfiguration(DatabaseInstance &instance)
     config.AddExtensionOption("erpl_telemetry_key", "Telemetry key, see https://erpl.io/telemetry for details.", LogicalTypeId::VARCHAR, 
                                 Value("phc_t3wwRLtpyEmLHYaZCSszG0MqVr74J6wnCrj9D41zk2t"), OnAPIKey);
     
+    // TLS configuration options. Server certificate verification is on by default;
+    // see docs/TLS.md for the on-premise / self-signed migration path.
+    config.AddExtensionOption("erpl_ca_cert_file",
+                                  "Path to a PEM CA bundle used to verify HTTPS server certificates. When set it "
+                                  "replaces the platform trust store, so the file must contain every CA you need to "
+                                  "trust. Use this for on-premise servers with a private or self-signed CA.",
+                                  LogicalTypeId::VARCHAR, Value(""), OnCaCertFile);
+    config.AddExtensionOption("erpl_unsafe_disable_server_cert_verification",
+                                  "DANGEROUS: disables TLS server certificate verification for all HTTPS requests "
+                                  "made by this extension. Only accepts the literal string "
+                                  "'I_UNDERSTAND_THIS_IS_INSECURE'. Prefer erpl_ca_cert_file.",
+                                  LogicalTypeId::VARCHAR, Value(""), OnUnsafeDisableServerCertVerification);
+
     // Tracing configuration options
     config.AddExtensionOption("erpl_trace_enabled", "Enable ERPL Web extension tracing functionality", 
                                   LogicalTypeId::BOOLEAN, Value(false), OnTraceEnabled);

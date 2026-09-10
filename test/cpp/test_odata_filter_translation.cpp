@@ -266,3 +266,40 @@ TEST_CASE("A filter kind that is required for correctness still fails loudly", "
 	REQUIRE_THROWS_AS(TranslateOne(std::move(struct_filter), ODataVersion::V4),
 	                  duckdb::NotImplementedException);
 }
+
+// ---------------------------------------------------------------------------
+// A row limit must not be pushed over a result the server has not filtered
+// ---------------------------------------------------------------------------
+
+TEST_CASE("$top is withheld when a filter could not be translated", "[odata_filter]") {
+	// The server would apply $top to the UNFILTERED result and return a short page,
+	// so the query would silently produce fewer rows than the caller asked for.
+	ODataPredicatePushdownHelper helper({"Col"});
+	helper.SetODataVersion(ODataVersion::V4);
+	helper.ConsumeLimit(10);
+
+	duckdb::TableFilterSet filter_set;
+	// A TIMESTAMP_TZ constant has no safe OData literal form, so it stays local.
+	filter_set.filters[0] = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_EQUAL,
+	    Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	helper.ConsumeFilters(&filter_set);
+
+	HttpUrl url("https://host/svc/Entity");
+	auto applied = helper.ApplyFiltersToUrl(url).ToString();
+	REQUIRE(applied.find("$top") == std::string::npos);
+}
+
+TEST_CASE("$top is pushed when every filter reached the server", "[odata_filter]") {
+	ODataPredicatePushdownHelper helper({"Col"});
+	helper.SetODataVersion(ODataVersion::V4);
+	helper.ConsumeLimit(10);
+
+	duckdb::TableFilterSet filter_set;
+	filter_set.filters[0] = MakeEq(Value::INTEGER(1));
+	helper.ConsumeFilters(&filter_set);
+
+	HttpUrl url("https://host/svc/Entity");
+	auto applied = helper.ApplyFiltersToUrl(url).ToString();
+	REQUIRE(applied.find("$top=10") != std::string::npos);
+}

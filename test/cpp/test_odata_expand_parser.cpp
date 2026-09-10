@@ -308,3 +308,99 @@ TEST_CASE("OData Expand Parser - Performance and Robustness") {
         REQUIRE(paths[0].filter_clause == "$filter=Name eq 'Product-Name_123'");
     }
 }
+
+TEST_CASE("OData Expand Parser - Depth-aware Tokenization") {
+    SECTION("Comma inside a nested expand option list") {
+        auto paths = ODataExpandParser::ParseExpandClause("Suppliers($expand=Products,Categories),Regions");
+        REQUIRE(paths.size() == 2);
+        REQUIRE(paths[0].navigation_property == "Suppliers");
+        REQUIRE(paths[0].sub_expands.size() == 2);
+        REQUIRE(paths[0].sub_expands[0] == "Products");
+        REQUIRE(paths[0].sub_expands[1] == "Categories");
+        REQUIRE(paths[1].navigation_property == "Regions");
+    }
+
+    SECTION("Comma inside a nested option list with options on the children") {
+        auto paths = ODataExpandParser::ParseExpandClause(
+            "Suppliers($expand=Products($select=Name),Categories($top=5)),Regions");
+        REQUIRE(paths.size() == 2);
+        REQUIRE(paths[0].navigation_property == "Suppliers");
+        REQUIRE(paths[0].sub_expands.size() == 2);
+        REQUIRE(paths[0].sub_expands[0] == "Products");
+        REQUIRE(paths[0].sub_expands[1] == "Categories");
+        REQUIRE(paths[0].nested_expands.size() == 2);
+        REQUIRE(paths[0].nested_expands[0].select_clause == "$select=Name");
+        REQUIRE(paths[0].nested_expands[1].top_clause == "$top=5");
+        REQUIRE(paths[1].navigation_property == "Regions");
+    }
+
+    SECTION("Multi-level nesting") {
+        auto paths = ODataExpandParser::ParseExpandClause("Root($expand=Middle($expand=Leaf),Sibling)");
+        REQUIRE(paths.size() == 1);
+        REQUIRE(paths[0].navigation_property == "Root");
+        REQUIRE(paths[0].sub_expands.size() == 2);
+        REQUIRE(paths[0].sub_expands[0] == "Middle");
+        REQUIRE(paths[0].sub_expands[1] == "Sibling");
+        REQUIRE(paths[0].nested_expands.size() == 2);
+        REQUIRE(paths[0].nested_expands[0].navigation_property == "Middle");
+        REQUIRE(paths[0].nested_expands[0].sub_expands.size() == 1);
+        REQUIRE(paths[0].nested_expands[0].sub_expands[0] == "Leaf");
+        REQUIRE(paths[0].nested_expands[1].navigation_property == "Sibling");
+    }
+
+    SECTION("Nested option list does not leak into the parent options") {
+        auto paths = ODataExpandParser::ParseExpandClause("Customers($expand=Orders($select=OrderID);$select=Name)");
+        REQUIRE(paths.size() == 1);
+        REQUIRE(paths[0].navigation_property == "Customers");
+        REQUIRE(paths[0].select_clause == "$select=Name");
+        REQUIRE(paths[0].nested_expands.size() == 1);
+        REQUIRE(paths[0].nested_expands[0].select_clause == "$select=OrderID");
+    }
+}
+
+TEST_CASE("OData Expand Parser - Quote-aware Tokenization") {
+    SECTION("Comma inside a quoted string literal") {
+        auto paths = ODataExpandParser::ParseExpandClause("Products($filter=Name eq 'A,B'),Category");
+        REQUIRE(paths.size() == 2);
+        REQUIRE(paths[0].navigation_property == "Products");
+        REQUIRE(paths[0].filter_clause == "$filter=Name eq 'A,B'");
+        REQUIRE(paths[1].navigation_property == "Category");
+    }
+
+    SECTION("Doubled single quote escapes a quote inside a literal") {
+        auto paths = ODataExpandParser::ParseExpandClause("Products($filter=Name eq 'O''Brien,Inc'),Category");
+        REQUIRE(paths.size() == 2);
+        REQUIRE(paths[0].navigation_property == "Products");
+        REQUIRE(paths[0].filter_clause == "$filter=Name eq 'O''Brien,Inc'");
+        REQUIRE(paths[1].navigation_property == "Category");
+    }
+
+    SECTION("Parenthesis inside a quoted string literal") {
+        auto paths = ODataExpandParser::ParseExpandClause("Products($filter=Name eq 'A)B';$select=Name),Category");
+        REQUIRE(paths.size() == 2);
+        REQUIRE(paths[0].navigation_property == "Products");
+        REQUIRE(paths[0].filter_clause == "$filter=Name eq 'A)B'");
+        REQUIRE(paths[0].select_clause == "$select=Name");
+        REQUIRE(paths[1].navigation_property == "Category");
+    }
+}
+
+TEST_CASE("OData Expand Parser - Round Trip") {
+    SECTION("V4 nested expand round trips through parse and build") {
+        const std::string clause = "Customers($expand=Orders($select=OrderID);$select=Name)";
+        auto paths = ODataExpandParser::ParseExpandClause(clause);
+        REQUIRE(ODataExpandParser::BuildExpandClause(paths) == clause);
+    }
+
+    SECTION("V4 nested expand with siblings round trips") {
+        const std::string clause = "Suppliers($expand=Products,Categories),Regions";
+        auto paths = ODataExpandParser::ParseExpandClause(clause);
+        REQUIRE(ODataExpandParser::BuildExpandClause(paths) == clause);
+    }
+
+    SECTION("V2 slash path round trips unchanged (regression guard)") {
+        const std::string clause = "Category/Products/Supplier";
+        auto paths = ODataExpandParser::ParseExpandClause(clause);
+        REQUIRE(ODataExpandParser::BuildExpandClause(paths) == clause);
+    }
+}

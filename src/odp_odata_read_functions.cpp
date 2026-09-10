@@ -115,12 +115,18 @@ duckdb::unique_ptr<duckdb::GlobalTableFunctionState> OdpODataReadInitGlobalState
     auto &bind_data = input.bind_data->CastNoConst<OdpODataReadBindData>();
     auto column_ids = input.column_ids;
     
-    // Delegate to the underlying OData bind data for initialization
-    auto& odata_bind_data = bind_data.GetODataBindData();
-    
-    odata_bind_data.ActivateColumns(column_ids);
-    odata_bind_data.AddFilters(input.filters);
-    odata_bind_data.UpdateUrlFromPredicatePushdown();
+    // Configure through the ODP wrapper, not the inner ODataReadBindData. The inner
+    // instance is replaced wholesale by UpdateODataClientWithResponse on every page, and
+    // only the wrapper remembers the column selection well enough to re-apply it to the
+    // replacement. Configuring the inner object directly left active_column_ids_ empty, so
+    // the re-application in FetchAndLoadNextPage was a no-op and page 2 onwards ran in
+    // all-columns mode - which, as the comment there notes, can write out of bounds into a
+    // projected chunk. See GitHub #58.
+    bind_data.ActivateColumns(column_ids);
+
+    // Filters are deliberately not pushed down for ODP; see the filter_pushdown comment at
+    // the function registration below.
+    bind_data.GetODataBindData().UpdateUrlFromPredicatePushdown();
 
     // Do NOT call PrefetchFirstPage() here. The ODP first fetch must be orchestrator-owned:
     // it is the only path that applies the required Prefer: odata.track-changes /
@@ -156,9 +162,21 @@ duckdb::TableFunctionSet CreateOdpODataReadFunction() {
         OdpODataReadInitGlobalState
     );
     
-    // Enable pushdown capabilities
-    odp_read_function.filter_pushdown = true;
+    // Projection is pushed down and genuinely honoured: the column selection is stored on
+    // the wrapper and re-applied to every page replacement.
     odp_read_function.projection_pushdown = true;
+
+    // Filter pushdown is deliberately OFF. Declaring it true tells DuckDB that this scan
+    // applies the filters itself, so DuckDB drops the LogicalFilter above the scan - but
+    // every ODP request is issued against the raw entity set URL through the orchestrator
+    // (which owns the Prefer: odata.track-changes headers), so the filters were never
+    // applied anywhere and WHERE clauses silently returned unfiltered rows.
+    //
+    // Turning this back on requires routing the pushdown-derived URL through the
+    // orchestrator and re-applying it after every UpdateODataClientWithResponse, and it can
+    // only be validated against a real SAP ODP system. Until then, correct-and-slower beats
+    // fast-and-wrong. See GitHub #61.
+    odp_read_function.filter_pushdown = false;
     odp_read_function.table_scan_progress = OdpODataReadProgress;
     
     // Add named parameters for ODP-specific functionality
