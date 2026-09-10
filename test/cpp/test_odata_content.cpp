@@ -719,3 +719,168 @@ TEST_CASE("Test OData v2 /Date(ms)/ rendered as VARCHAR keeps milliseconds", "[o
     REQUIRE(rows.size() == 1);
     REQUIRE(rows[0][1].ToString() == "2016-01-01 00:00:00.123");
 }
+
+
+// ---------------------------------------------------------------------------------------------
+// Regression coverage for GitHub #77 (version detection from response headers, and surfacing the
+// error the service itself reported) and GitHub #79 (an empty page that carries a next link).
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Test OData version is taken from the response headers", "[odata_content][version]")
+{
+    // OData v4 declares OData-Version; SAP Gateway appends a parameter list to it.
+    erpl_web::HeaderMap v4_headers;
+    v4_headers["OData-Version"] = "4.0";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromHeaders(v4_headers) == ODataVersion::V4);
+
+    erpl_web::HeaderMap sap_headers;
+    sap_headers["OData-Version"] = "4.0;NetFx";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromHeaders(sap_headers) == ODataVersion::V4);
+
+    // v2 (and v3) services declare DataServiceVersion instead.
+    erpl_web::HeaderMap v2_headers;
+    v2_headers["DataServiceVersion"] = "2.0";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromHeaders(v2_headers) == ODataVersion::V2);
+
+    // Header names are case-insensitive on the wire.
+    erpl_web::HeaderMap lowercase_headers;
+    lowercase_headers["dataserviceversion"] = " 2.0 ";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromHeaders(lowercase_headers) == ODataVersion::V2);
+
+    // Nothing to go on must be reported as such, not guessed.
+    erpl_web::HeaderMap no_version_headers;
+    no_version_headers["Content-Type"] = "application/json";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromHeaders(no_version_headers) == ODataVersion::UNKNOWN);
+}
+
+TEST_CASE("Test headers win over payload sniffing for version detection", "[odata_content][version]")
+{
+    // A body with no discriminator at all: payload sniffing cannot decide, so the version the
+    // service declared has to be used instead of falling through to V4.
+    const std::string inconclusive_body = R"({"error":{"code":"SY/530","message":{"lang":"en","value":"boom"}}})";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersionFromPayload(inconclusive_body) == ODataVersion::UNKNOWN);
+
+    erpl_web::HeaderMap v2_headers;
+    v2_headers["DataServiceVersion"] = "2.0";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion(inconclusive_body, v2_headers) == ODataVersion::V2);
+
+    // An empty body with a v2 header is still v2.
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion("", v2_headers) == ODataVersion::V2);
+
+    // Without any header, the payload still decides.
+    erpl_web::HeaderMap no_headers;
+    const std::string v2_body = R"({"d":{"results":[{"CustomerID":"ALFKI"}]}})";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion(v2_body, no_headers) == ODataVersion::V2);
+}
+
+TEST_CASE("Test OData v4 error payload is surfaced with code and message", "[odata_content][error]")
+{
+    // v4 shape: {"error":{"code":"...","message":"..."}}
+    const std::string error_body =
+        R"({"error":{"code":"Request_ResourceNotFound","message":"Resource 'Foo' does not exist."}})";
+
+    ODataEntitySetJsonContent content(error_body);
+    content.SetODataVersion(ODataVersion::V4);
+
+    std::vector<std::string> column_names = {"CustomerID"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR};
+
+    try {
+        content.ToRows(column_names, column_types);
+        FAIL("expected the service error to be raised");
+    } catch (const std::exception &e) {
+        const std::string message = e.what();
+        INFO(message);
+        REQUIRE(message.find("Request_ResourceNotFound") != std::string::npos);
+        REQUIRE(message.find("Resource 'Foo' does not exist.") != std::string::npos);
+    }
+}
+
+TEST_CASE("Test OData v2 error payload is surfaced with code and message", "[odata_content_v2][error]")
+{
+    // v2 shape: the message is an object, {"lang":"en","value":"..."}
+    const std::string error_body =
+        R"({"error":{"code":"SY/530","message":{"lang":"en","value":"Invalid filter on property Foo"},)"
+        R"("innererror":{"application":{"service_id":"ZSVC"}}}})";
+
+    ODataEntitySetJsonContent content(error_body);
+    content.SetODataVersion(ODataVersion::V2);
+
+    std::vector<std::string> column_names = {"CustomerID"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR};
+
+    try {
+        content.ToRows(column_names, column_types);
+        FAIL("expected the service error to be raised");
+    } catch (const std::exception &e) {
+        const std::string message = e.what();
+        INFO(message);
+        REQUIRE(message.find("SY/530") != std::string::npos);
+        REQUIRE(message.find("Invalid filter on property Foo") != std::string::npos);
+    }
+}
+
+TEST_CASE("Test a v4 page without a value array but with a next link yields zero rows",
+          "[odata_content][paging]")
+{
+    // Graph delta / skip-token pages do this. It is an empty page, not a failure.
+    const std::string page =
+        R"({"@odata.context":"https://example.com/$metadata#Customers",)"
+        R"("@odata.nextLink":"https://example.com/Customers?$skiptoken=abc"})";
+
+    ODataEntitySetJsonContent content(page);
+    content.SetODataVersion(ODataVersion::V4);
+
+    std::vector<std::string> column_names = {"CustomerID"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR};
+
+    REQUIRE(content.ToRows(column_names, column_types).empty());
+    REQUIRE(content.NextUrl().has_value());
+}
+
+TEST_CASE("Test a v2 page without a results array but with a next link yields zero rows",
+          "[odata_content_v2][paging]")
+{
+    const std::string page =
+        R"({"d":{"__next":"https://example.com/MySet?$skiptoken=page2"}})";
+
+    ODataEntitySetJsonContent content(page);
+    content.SetODataVersion(ODataVersion::V2);
+
+    std::vector<std::string> column_names = {"CustomerID"};
+    std::vector<duckdb::LogicalType> column_types = {duckdb::LogicalTypeId::VARCHAR};
+
+    REQUIRE(content.ToRows(column_names, column_types).empty());
+    REQUIRE(content.NextUrl().has_value());
+}
+
+TEST_CASE("A v3 minimalmetadata payload is parsed by shape, not by its version header",
+          "[odata_content]") {
+    // services.odata.org/northwind/northwind.svc announces "DataServiceVersion: 3.0" and
+    // returns a "value" array, because the JSON SHAPE is set by the format
+    // (minimalmetadata/fullmetadata/nometadata all use "value"; only verbose wraps rows in
+    // "d"), not by the protocol version. Letting the header decide sent this document down
+    // the v2 path, which then failed with "No value array found" on a perfectly good
+    // response. The payload is ground truth for how to parse; headers only break ties.
+    const std::string v3_minimal_metadata = R"({
+        "odata.metadata": "https://services.odata.org/Northwind/Northwind.svc/$metadata#Customers",
+        "value": [ { "CustomerID": "ALFKI" } ]
+    })";
+
+    HeaderMap headers;
+    headers["DataServiceVersion"] = "3.0;";
+
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion(v3_minimal_metadata, headers) == ODataVersion::V4);
+}
+
+TEST_CASE("Headers still decide when the payload carries no discriminator", "[odata_content]") {
+    // This is what #77 was actually about: an empty or error body tells us nothing, so the
+    // declared version is the only signal left.
+    HeaderMap v2_headers;
+    v2_headers["DataServiceVersion"] = "2.0";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion("{}", v2_headers) == ODataVersion::V2);
+
+    HeaderMap v4_headers;
+    v4_headers["OData-Version"] = "4.0;NetFx";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion("{}", v4_headers) == ODataVersion::V4);
+}

@@ -49,8 +49,59 @@ std::string NormalizeBase64(const std::string &encoded)
     return normalized;
 }
 
+//! Reads the major version out of an OData version header value. Services are liberal here:
+//! SAP Gateway answers "4.0;NetFx", some proxies pad with whitespace, and v2 services spell the
+//! header "DataServiceVersion" with values "1.0" / "2.0" / "3.0". Only the leading integer is
+//! significant, everything from the first ';' onwards is a parameter list and is ignored.
+bool TryParseHeaderMajorVersion(const std::string &header_value, int &major_version)
+{
+    const auto parameter_start = header_value.find(';');
+    std::string value = header_value.substr(0, parameter_start);
+
+    const auto first = value.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return false;
+    }
+    const auto last = value.find_last_not_of(" \t");
+    value = value.substr(first, last - first + 1);
+
+    if (value.empty() || std::isdigit(static_cast<unsigned char>(value.front())) == 0) {
+        return false;
+    }
+
+    major_version = value.front() - '0';
+    return true;
+}
+
+//! Extracts a string property, tolerating a missing or non-string node.
+std::string OptionalStringProperty(yyjson_val *object, const char *property_name)
+{
+    if (object == nullptr) {
+        return std::string();
+    }
+    auto property = yyjson_obj_get(object, property_name);
+    if (property == nullptr || yyjson_is_str(property) == false) {
+        return std::string();
+    }
+    return std::string(yyjson_get_str(property), yyjson_get_len(property));
+}
+
 } // namespace
 
+
+// ----------------------------------------------------------------------
+
+std::string ODataErrorInfo::ToString() const
+{
+    std::string rendered = "OData service reported an error";
+    if (!code.empty()) {
+        rendered += " (code '" + code + "')";
+    }
+    if (!message.empty()) {
+        rendered += ": " + message;
+    }
+    return rendered;
+}
 
 // ----------------------------------------------------------------------
 
@@ -64,27 +115,96 @@ bool ODataJsonContentMixin::IsJsonContentType(const std::string& content_type)
     return content_type.find("application/json") != std::string::npos;
 }
 
+ODataVersion ODataJsonContentMixin::DetectODataVersionFromHeaders(const HeaderMap& headers)
+{
+    // OData v4 declares "OData-Version: 4.0"; v2 and v3 declare "DataServiceVersion: 2.0".
+    // A v4 service never sends DataServiceVersion, so OData-Version is checked first and wins.
+    static const char *const VERSION_HEADER_NAMES[] = {"OData-Version", "DataServiceVersion"};
+
+    for (const auto *header_name : VERSION_HEADER_NAMES) {
+        const auto header = headers.find(header_name);
+        if (header == headers.end()) {
+            continue;
+        }
+
+        int major_version = 0;
+        if (!TryParseHeaderMajorVersion(header->second, major_version)) {
+            ERPL_TRACE_DEBUG("DETECT_VERSION", std::string("Unparsable ") + header_name + " header: " + header->second);
+            continue;
+        }
+
+        // v1 through v3 all use the "d"-wrapped JSON verbose format this reader treats as V2.
+        if (major_version >= 4) {
+            ERPL_TRACE_DEBUG("DETECT_VERSION", std::string("Header ") + header_name + ": " + header->second + " -> V4");
+            return ODataVersion::V4;
+        }
+        if (major_version >= 1) {
+            ERPL_TRACE_DEBUG("DETECT_VERSION", std::string("Header ") + header_name + ": " + header->second + " -> V2");
+            return ODataVersion::V2;
+        }
+    }
+
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "No OData version header present");
+    return ODataVersion::UNKNOWN;
+}
+
+ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& content, const HeaderMap& headers)
+{
+    // The payload wins whenever it carries a discriminator, because what this decides is
+    // how to PARSE the body, and the body is ground truth for that. The protocol version
+    // in the header does not determine the JSON shape: OData v3 announces
+    // "DataServiceVersion: 3.0" for both the verbose format, which wraps rows in "d", and
+    // the minimalmetadata/fullmetadata/nometadata formats, which use a "value" array like
+    // v4. Trusting the header there sends a v3 minimalmetadata response down the v2 path,
+    // which then fails with "No value array found" on a perfectly good document -
+    // services.odata.org/northwind/northwind.svc does exactly this.
+    const auto from_payload = DetectODataVersionFromPayload(content);
+    if (from_payload != ODataVersion::UNKNOWN) {
+        return from_payload;
+    }
+
+    // Only once the body says nothing - an empty body, a non-JSON body, or an error
+    // document - do the headers decide. That is the case #77 was really about.
+    const auto from_headers = DetectODataVersionFromHeaders(headers);
+    if (from_headers != ODataVersion::UNKNOWN) {
+        return from_headers;
+    }
+
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "Neither payload nor headers are conclusive, defaulting to V4");
+    return ODataVersion::V4;
+}
+
 ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& content)
+{
+    const auto detected = DetectODataVersionFromPayload(content);
+    if (detected != ODataVersion::UNKNOWN) {
+        return detected;
+    }
+
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "No clear indicators found, defaulting to V4");
+    return ODataVersion::V4;
+}
+
+ODataVersion ODataJsonContentMixin::DetectODataVersionFromPayload(const std::string& content)
 {
     ERPL_TRACE_DEBUG("DETECT_VERSION", "Starting OData version detection");
     
     if (content.empty()) {
-        ERPL_TRACE_DEBUG("DETECT_VERSION", "Empty content, defaulting to V4");
-        return ODataVersion::V4;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Empty content, version is undetermined");
+        return ODataVersion::UNKNOWN;
     }
     
     // Parse the JSON content to detect OData version
     auto doc = std::shared_ptr<yyjson_doc>(yyjson_read(content.c_str(), content.size(), 0), yyjson_doc_free);
     if (!doc) {
-        ERPL_TRACE_DEBUG("DETECT_VERSION", "Failed to parse JSON, defaulting to V4");
-        // If we can't parse JSON, default to v4
-        return ODataVersion::V4;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Failed to parse JSON, version is undetermined");
+        return ODataVersion::UNKNOWN;
     }
     
     auto root = yyjson_doc_get_root(doc.get());
     if (!root || !yyjson_is_obj(root)) {
-        ERPL_TRACE_DEBUG("DETECT_VERSION", "Root is not an object, defaulting to V4");
-        return ODataVersion::V4;
+        ERPL_TRACE_DEBUG("DETECT_VERSION", "Root is not an object, version is undetermined");
+        return ODataVersion::UNKNOWN;
     }
     
     // Simple and reliable version detection based on top-level elements
@@ -131,9 +251,68 @@ ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& conten
         return ODataVersion::V2;
     }
     
-    ERPL_TRACE_DEBUG("DETECT_VERSION", "No clear indicators found, defaulting to V4");
-    // Default to v4 if we can't determine
-    return ODataVersion::V4;
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "No clear indicators found in the payload");
+    return ODataVersion::UNKNOWN;
+}
+
+std::optional<ODataErrorInfo> ODataJsonContentMixin::TryGetODataError(yyjson_val *root)
+{
+    if (root == nullptr || !yyjson_is_obj(root)) {
+        return std::nullopt;
+    }
+
+    // v4 and v2 both use "error"; the JSON verbose format of some v2/v3 services spells it
+    // "odata.error" instead.
+    auto error_object = yyjson_obj_get(root, "error");
+    if (error_object == nullptr) {
+        error_object = yyjson_obj_get(root, "odata.error");
+    }
+    if (error_object == nullptr || !yyjson_is_obj(error_object)) {
+        return std::nullopt;
+    }
+
+    ODataErrorInfo error;
+    error.code = OptionalStringProperty(error_object, "code");
+
+    auto message = yyjson_obj_get(error_object, "message");
+    if (message != nullptr && yyjson_is_str(message)) {
+        // v4: {"error":{"code":"...","message":"..."}}
+        error.message = std::string(yyjson_get_str(message), yyjson_get_len(message));
+    } else if (message != nullptr && yyjson_is_obj(message)) {
+        // v2: {"error":{"code":"...","message":{"lang":"en","value":"..."}}}
+        error.message = OptionalStringProperty(message, "value");
+    }
+
+    if (error.code.empty() && error.message.empty()) {
+        return std::nullopt;
+    }
+
+    return error;
+}
+
+std::optional<ODataErrorInfo> ODataJsonContentMixin::TryGetODataError(const std::string& content)
+{
+    if (content.empty()) {
+        return std::nullopt;
+    }
+
+    auto parsed = std::shared_ptr<yyjson_doc>(yyjson_read(content.c_str(), content.size(), 0), yyjson_doc_free);
+    if (!parsed) {
+        return std::nullopt;
+    }
+
+    return TryGetODataError(yyjson_doc_get_root(parsed.get()));
+}
+
+void ODataJsonContentMixin::ThrowIfODataError(yyjson_val *root)
+{
+    const auto error = TryGetODataError(root);
+    if (!error) {
+        return;
+    }
+
+    ERPL_TRACE_ERROR("ODATA_CONTENT", error->ToString());
+    throw std::runtime_error(error->ToString());
 }
 
 void ODataJsonContentMixin::ThrowTypeError(yyjson_val* json_value, const std::string& expected)
@@ -1293,10 +1472,13 @@ yyjson_val* ODataJsonContentMixin::GetValueArray(yyjson_val* root) {
         ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Processing OData v2 structure");
         
         // OData v2: {"d": [...]} or {"d": {"results": [...]}}
+        // A missing or unusable wrapper is reported as "no rows" rather than as a failure: a
+        // delta or skip-token page is allowed to carry a next link and no value array at all
+        // (GitHub #79). Callers decide whether that is an empty page or a real defect.
         auto d_wrapper = yyjson_obj_get(root, "d");
         if (!d_wrapper) {
             ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "No 'd' wrapper found in OData v2 response");
-            throw std::runtime_error("No 'd' wrapper found in OData v2 response.");
+            return nullptr;
         }
         
         // Check if d is directly an array (common case)
@@ -1315,7 +1497,7 @@ yyjson_val* ODataJsonContentMixin::GetValueArray(yyjson_val* root) {
         }
         
         ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "'d' element is neither an array nor contains 'results' array");
-        throw std::runtime_error("'d' element in OData v2 response is not an array or doesn't contain a 'results' array.");
+        return nullptr;
     } else {
         ERPL_TRACE_DEBUG("GET_VALUE_ARRAY", "Processing OData v4 structure");
         // OData v4: {"value": [...]}
@@ -1418,6 +1600,19 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     auto root = yyjson_doc_get_root(doc.get());
     auto json_values = GetValueArray(root);
     if (!json_values) {
+        // The service may have answered with an error document instead of a page. Report what it
+        // actually said rather than a generic parse failure (GitHub #77).
+        ThrowIfODataError(root);
+
+        // A page without a value array but with a next link is a legitimate empty page - Graph
+        // delta and skip-token pages do exactly this. Treat it as zero rows and keep paging
+        // (GitHub #79).
+        const auto next_url = GetNextUrl(root);
+        if (next_url.has_value()) {
+            ERPL_TRACE_DEBUG("ODATA_TO_ROWS", "Page has no value array but carries a next link; yielding zero rows");
+            return {};
+        }
+
         throw std::runtime_error("No value array found in OData response, cannot get rows.");
     }
 
@@ -1532,6 +1727,10 @@ std::vector<ODataEntitySetReference> ODataServiceJsonContent::EntitySets()
 {
     auto root = yyjson_doc_get_root(doc.get());
     auto ret = std::vector<ODataEntitySetReference>();
+
+    // A service that answered with an error document must not look like a service with no
+    // entity sets (GitHub #77).
+    ThrowIfODataError(root);
 
     if (odata_version == ODataVersion::V2) {
         // OData V2 service document: { "d": { "EntitySets": ["Products", ...] } }

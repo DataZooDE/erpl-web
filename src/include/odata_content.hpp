@@ -6,6 +6,8 @@
 #include "yyjson.hpp"
 
 #include <memory>
+#include <optional>
+#include <string>
 
 using namespace duckdb_yyjson;
 
@@ -51,6 +53,20 @@ public:
 };
 
 // -------------------------------------------------------------------------------------------------
+
+//! The error a service reported in its own response body. Both OData v2 and v4 wrap it in a
+//! top-level "error" object; only the shape of "message" differs (a string in v4, a
+//! {"lang","value"} object in v2), which is why both are decoded into the same struct.
+struct ODataErrorInfo {
+    std::string code;
+    std::string message;
+
+    //! Renders the error the way it is surfaced to the user, e.g.
+    //! "OData service reported an error (code 'SY/530'): Property 'Foo' does not exist".
+    std::string ToString() const;
+};
+
+// -------------------------------------------------------------------------------------------------
 class ODataJsonContentMixin {
 public:
     static bool IsJsonContentType(const std::string& content_type);
@@ -61,11 +77,37 @@ public:
     void SetODataVersion(ODataVersion version) { odata_version = version; }
     ODataVersion GetODataVersion() const { return odata_version; }
     
-    // Auto-detect OData version from JSON content
+    //! Detects the version from the payload alone, falling back to V4 when nothing is conclusive.
+    //! Kept for callers that have no access to the response headers.
     static ODataVersion DetectODataVersion(const std::string& content);
+
+    //! Header-based detection: the service tells us the version in "OData-Version" (v4) or
+    //! "DataServiceVersion" (v2/v3). Version suffixes such as SAP's "4.0;NetFx" are tolerated.
+    //! Returns UNKNOWN when no such header is present or the value is not understood.
+    static ODataVersion DetectODataVersionFromHeaders(const HeaderMap& headers);
+
+    //! Payload sniffing, honest about failure: returns UNKNOWN when the body carries no
+    //! discriminator (empty body, non-JSON body, or an error payload), instead of guessing V4.
+    static ODataVersion DetectODataVersionFromPayload(const std::string& content);
+
+    //! The detection order the readers should use: what the service declared in its headers
+    //! first, payload sniffing second, V4 as the last resort.
+    static ODataVersion DetectODataVersion(const std::string& content, const HeaderMap& headers);
+
+    //! Decodes a top-level OData error payload (v2 or v4 shape). Returns nullopt when the body
+    //! is not an error document.
+    static std::optional<ODataErrorInfo> TryGetODataError(const std::string& content);
 
 protected:
     std::shared_ptr<yyjson_doc> doc;
+
+    //! Same as the public overload, on an already-parsed document root.
+    static std::optional<ODataErrorInfo> TryGetODataError(yyjson_val *root);
+
+    //! Throws with the service's own code and message when `root` is an error document; a no-op
+    //! otherwise. Used wherever we would otherwise report a generic parse failure and discard
+    //! what the server actually said.
+    static void ThrowIfODataError(yyjson_val *root);
 
     // Scan-wide failure log (may be null when the content is used standalone)
     // and the column currently being deserialized, used to attribute failures.
