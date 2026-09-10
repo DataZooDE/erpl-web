@@ -1,0 +1,268 @@
+#include "catch.hpp"
+
+#include "odata_predicate_pushdown_helper.hpp"
+#include "odata_url_helpers.hpp"
+
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/in_filter.hpp"
+#include "duckdb/planner/filter/struct_filter.hpp"
+#include "duckdb/planner/filter/bloom_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/common/limits.hpp"
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+
+using namespace erpl_web;
+using duckdb::Value;
+
+namespace {
+
+// The helper percent-encodes the generated expression, so decode it back before
+// asserting. Returns the bare $filter expression, or "" when none was produced.
+std::string FilterExpression(const ODataPredicatePushdownHelper &helper) {
+	auto clause = helper.FilterClause();
+	if (clause.empty()) {
+		return "";
+	}
+	const std::string prefix = "$filter=";
+	REQUIRE(clause.rfind(prefix, 0) == 0);
+	return ODataUrlCodec::decodeQueryValue(clause.substr(prefix.size()));
+}
+
+// Builds a helper over a single column and feeds it one filter.
+std::string TranslateOne(duckdb::unique_ptr<duckdb::TableFilter> filter,
+                         ODataVersion version,
+                         const std::string &column_name = "Col") {
+	ODataPredicatePushdownHelper helper({column_name});
+	helper.SetODataVersion(version);
+
+	duckdb::TableFilterSet filter_set;
+	filter_set.filters[0] = std::move(filter);
+	helper.ConsumeFilters(&filter_set);
+
+	return FilterExpression(helper);
+}
+
+duckdb::unique_ptr<duckdb::ConstantFilter> MakeEq(Value value) {
+	return duckdb::make_uniq<duckdb::ConstantFilter>(duckdb::ExpressionType::COMPARE_EQUAL, std::move(value));
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// GitHub #59 - Top-N placeholder sentinel must never reach the server
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An uninitialized dynamic filter produces no $filter", "[odata_filter]") {
+	// DuckDB's Top-N optimizer installs an OptionalFilter(DynamicFilter) whose
+	// filter_data holds a placeholder sentinel while `initialized` is still
+	// false. Shipping that sentinel produces "$filter=Col lt -2147483648" and
+	// silently returns zero rows, with no residual filter able to restore them.
+	auto filter_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	filter_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN,
+	    Value::INTEGER(duckdb::NumericLimits<int32_t>::Minimum()));
+	filter_data->initialized = false;
+
+	auto dynamic_filter = duckdb::make_uniq<duckdb::DynamicFilter>(filter_data);
+	auto optional_filter = duckdb::make_uniq<duckdb::OptionalFilter>(std::move(dynamic_filter));
+
+	REQUIRE(TranslateOne(std::move(optional_filter), ODataVersion::V4) == "");
+}
+
+TEST_CASE("An initialized dynamic filter is translated normally", "[odata_filter]") {
+	auto filter_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	filter_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(42));
+	filter_data->initialized = true;
+
+	auto dynamic_filter = duckdb::make_uniq<duckdb::DynamicFilter>(filter_data);
+	auto optional_filter = duckdb::make_uniq<duckdb::OptionalFilter>(std::move(dynamic_filter));
+
+	REQUIRE(TranslateOne(std::move(optional_filter), ODataVersion::V4) == "Col lt 42");
+}
+
+// ---------------------------------------------------------------------------
+// GitHub #65 - single quotes inside string literals must be doubled
+// ---------------------------------------------------------------------------
+
+TEST_CASE("V4 string literals double an embedded single quote", "[odata_filter]") {
+	REQUIRE(TranslateOne(MakeEq(Value("O'Brien")), ODataVersion::V4) == "Col eq 'O''Brien'");
+}
+
+TEST_CASE("V2 string literals double an embedded single quote", "[odata_filter]") {
+	REQUIRE(TranslateOne(MakeEq(Value("O'Brien")), ODataVersion::V2) == "Col eq 'O''Brien'");
+}
+
+// ---------------------------------------------------------------------------
+// GitHub #64 - version-aware literal formatting per EDM type
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Narrow and unsigned integers are emitted unquoted", "[odata_filter]") {
+	REQUIRE(TranslateOne(MakeEq(Value::SMALLINT(5)), ODataVersion::V4) == "Col eq 5");
+	REQUIRE(TranslateOne(MakeEq(Value::TINYINT(5)), ODataVersion::V4) == "Col eq 5");
+	REQUIRE(TranslateOne(MakeEq(Value::UBIGINT(5)), ODataVersion::V4) == "Col eq 5");
+	REQUIRE(TranslateOne(MakeEq(Value::HUGEINT(5)), ODataVersion::V4) == "Col eq 5");
+}
+
+TEST_CASE("Floating point values are emitted unquoted", "[odata_filter]") {
+	REQUIRE(TranslateOne(MakeEq(Value::FLOAT(1.5f)), ODataVersion::V4) == "Col eq 1.5");
+}
+
+TEST_CASE("V4 dates are emitted bare, V2 dates use the datetime literal form", "[odata_filter]") {
+	auto date = Value::DATE(duckdb::Date::FromDate(2020, 1, 2));
+	REQUIRE(TranslateOne(MakeEq(date), ODataVersion::V4) == "Col eq 2020-01-02");
+	REQUIRE(TranslateOne(MakeEq(date), ODataVersion::V2) == "Col eq datetime'2020-01-02T00:00:00'");
+}
+
+TEST_CASE("Timestamps use ISO-8601 with a T separator, never a space", "[odata_filter]") {
+	auto ts = Value::TIMESTAMP(duckdb::Timestamp::FromDatetime(duckdb::Date::FromDate(2020, 1, 2),
+	                                                           duckdb::Time::FromTime(3, 4, 5, 0)));
+	auto v4 = TranslateOne(MakeEq(ts), ODataVersion::V4);
+	REQUIRE(v4.find(' ') != std::string::npos); // only the separators around "eq"
+	REQUIRE(v4 == "Col eq 2020-01-02T03:04:05Z");
+	REQUIRE(TranslateOne(MakeEq(ts), ODataVersion::V2) == "Col eq datetime'2020-01-02T03:04:05'");
+}
+
+TEST_CASE("GUIDs are bare in V4 and use the guid literal form in V2", "[odata_filter]") {
+	auto uuid = Value::UUID("11111111-2222-3333-4444-555555555555");
+	REQUIRE(TranslateOne(MakeEq(uuid), ODataVersion::V4) == "Col eq 11111111-2222-3333-4444-555555555555");
+	REQUIRE(TranslateOne(MakeEq(uuid), ODataVersion::V2) == "Col eq guid'11111111-2222-3333-4444-555555555555'");
+}
+
+TEST_CASE("Booleans are emitted lowercase and unquoted", "[odata_filter]") {
+	REQUIRE(TranslateOne(MakeEq(Value::BOOLEAN(true)), ODataVersion::V4) == "Col eq true");
+	REQUIRE(TranslateOne(MakeEq(Value::BOOLEAN(false)), ODataVersion::V4) == "Col eq false");
+}
+
+// ---------------------------------------------------------------------------
+// GitHub #66 - IN filters translate rather than throwing out of init_global
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An IN filter becomes an or-chain instead of throwing", "[odata_filter]") {
+	duckdb::vector<Value> values{Value::INTEGER(1), Value::INTEGER(2), Value::INTEGER(3)};
+	auto in_filter = duckdb::make_uniq<duckdb::InFilter>(std::move(values));
+
+	REQUIRE(TranslateOne(std::move(in_filter), ODataVersion::V4) ==
+	        "(Col eq 1 or Col eq 2 or Col eq 3)");
+}
+
+// ---------------------------------------------------------------------------
+// GitHub #85 - empty child translations must not corrupt a conjunction
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An AND conjunction drops untranslatable children", "[odata_filter]") {
+	// Dropping a child of an AND widens the result set; DuckDB's residual
+	// filter removes the extra rows, so this is safe.
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionAndFilter>();
+	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
+
+	auto sentinel_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	sentinel_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(7));
+	sentinel_data->initialized = false;
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data));
+
+	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "(Col eq 1)");
+}
+
+TEST_CASE("An OR conjunction is abandoned when any child is untranslatable", "[odata_filter]") {
+	// Dropping a child of an OR would NARROW the result set and silently lose
+	// rows that no residual filter can bring back, so the whole disjunction
+	// must be abandoned instead.
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionOrFilter>();
+	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
+
+	auto sentinel_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	sentinel_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(7));
+	sentinel_data->initialized = false;
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data));
+
+	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "");
+}
+
+TEST_CASE("A conjunction with no translatable children produces no $filter", "[odata_filter]") {
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionAndFilter>();
+
+	auto sentinel_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	sentinel_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(7));
+	sentinel_data->initialized = false;
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data));
+
+	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "");
+}
+
+// ---------------------------------------------------------------------------
+// Behaviour that is already correct and must stay that way
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IS NULL and IS NOT NULL translate to the null literal", "[odata_filter]") {
+	ODataPredicatePushdownHelper helper({"Col"});
+	helper.SetODataVersion(ODataVersion::V4);
+
+	duckdb::TableFilterSet filter_set;
+	filter_set.filters[0] = duckdb::make_uniq<duckdb::IsNullFilter>();
+	helper.ConsumeFilters(&filter_set);
+	REQUIRE(FilterExpression(helper) == "Col eq null");
+
+	ODataPredicatePushdownHelper not_null_helper({"Col"});
+	not_null_helper.SetODataVersion(ODataVersion::V4);
+	duckdb::TableFilterSet not_null_set;
+	not_null_set.filters[0] = duckdb::make_uniq<duckdb::IsNotNullFilter>();
+	not_null_helper.ConsumeFilters(&not_null_set);
+	REQUIRE(FilterExpression(not_null_helper) == "Col ne null");
+}
+
+TEST_CASE("Comparison operators map to their OData spellings", "[odata_filter]") {
+	auto translate = [](duckdb::ExpressionType type) {
+		return TranslateOne(duckdb::make_uniq<duckdb::ConstantFilter>(type, Value::INTEGER(1)),
+		                    ODataVersion::V4);
+	};
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_EQUAL) == "Col eq 1");
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_NOTEQUAL) == "Col ne 1");
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_LESSTHAN) == "Col lt 1");
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO) == "Col le 1");
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_GREATERTHAN) == "Col gt 1");
+	REQUIRE(translate(duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO) == "Col ge 1");
+}
+
+// ---------------------------------------------------------------------------
+// An optional filter must never fail the query
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An optional filter wrapping an untranslatable child is skipped, not thrown", "[odata_filter]") {
+	// DuckDB documents OPTIONAL_FILTER as "executing filter is not required for query
+	// correctness". A hash join pushes an optional filter wrapping a bloom filter, so
+	// translating the child eagerly and letting it reach the default: arm would make an
+	// ordinary join fail outright.
+	duckdb::BloomFilter bloom;
+	auto bf_filter = duckdb::make_uniq<duckdb::BFTableFilter>(bloom, false, "Col",
+	                                                          duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER));
+	auto optional_filter = duckdb::make_uniq<duckdb::OptionalFilter>(std::move(bf_filter));
+
+	REQUIRE(TranslateOne(std::move(optional_filter), ODataVersion::V4) == "");
+}
+
+TEST_CASE("A bare bloom filter is skipped rather than throwing", "[odata_filter]") {
+	duckdb::BloomFilter bloom;
+	auto bf_filter = duckdb::make_uniq<duckdb::BFTableFilter>(bloom, false, "Col",
+	                                                          duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER));
+	REQUIRE(TranslateOne(std::move(bf_filter), ODataVersion::V4) == "");
+}
+
+TEST_CASE("A filter kind that is required for correctness still fails loudly", "[odata_filter]") {
+	// The contrast case: unlike an optional filter, a struct-extract filter IS required
+	// for correctness, so silently dropping it could lose rows. Failing is the safe answer.
+	auto child = duckdb::make_uniq<duckdb::ConstantFilter>(duckdb::ExpressionType::COMPARE_EQUAL,
+	                                                       Value::INTEGER(1));
+	auto struct_filter = duckdb::make_uniq<duckdb::StructFilter>(0, "field", std::move(child));
+	REQUIRE_THROWS_AS(TranslateOne(std::move(struct_filter), ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
