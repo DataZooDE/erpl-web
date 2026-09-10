@@ -95,6 +95,10 @@ void OdpODataReadScan(duckdb::ClientContext &context, duckdb::TableFunctionInput
         // Check if we have more results using ODP logic
         if (!bind_data.HasMoreResults()) {
             ERPL_TRACE_DEBUG("ODP_ODATA_READ_SCAN", "No more results available");
+            // This is a real end of scan, and often the ONLY one: when the buffer is
+            // already drained the scan returns here without a final zero-row fetch, so
+            // the staged delta token has to be committed from this exit too.
+            bind_data.FinalizeScan();
             return;
         }
         
@@ -103,6 +107,10 @@ void OdpODataReadScan(duckdb::ClientContext &context, duckdb::TableFunctionInput
         unsigned int rows_fetched = bind_data.FetchNextResult(output);
         
         ERPL_TRACE_INFO("ODP_ODATA_READ_SCAN", duckdb::StringUtil::Format("Fetched %d rows", rows_fetched));
+
+        if (rows_fetched == 0) {
+            bind_data.FinalizeScan();
+        }
         
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_ODATA_READ_SCAN", "Scan failed: " + std::string(e.what()));

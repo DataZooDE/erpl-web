@@ -429,6 +429,10 @@ void OdpODataReadBindData::ProcessRequestResult(const OdpRequestOrchestrator::Od
     }
 }
 
+void OdpODataReadBindData::FinalizeScan() {
+    CommitStagedDeltaToken();
+}
+
 void OdpODataReadBindData::CommitStagedDeltaToken() {
     if (!has_staged_delta_token_) {
         return;
@@ -437,20 +441,23 @@ void OdpODataReadBindData::CommitStagedDeltaToken() {
     ERPL_TRACE_INFO("ODP_BIND_DATA",
                     "Scan drained; committing staged delta token for " + staged_operation_type_);
 
-    // Clear the staging flag first, so a failure to persist cannot be retried in a loop
-    // and cannot be committed twice if the scan is drained more than once.
-    has_staged_delta_token_ = false;
     const auto token = staged_delta_token_;
     const auto operation_type = staged_operation_type_;
     const auto preference_applied = staged_preference_applied_;
-    staged_delta_token_.clear();
-    staged_operation_type_.clear();
 
+    // Persist FIRST. Clearing the staging fields up front would discard the token if the
+    // write then failed, and the next read would re-extract from the previous position.
+    // The flag is cleared only once the write has succeeded, which also makes a second
+    // call a no-op when the scan is drained more than once.
     if (operation_type == "initial_load") {
         state_manager_->TransitionToDeltaFetch(token, preference_applied);
     } else {
         state_manager_->UpdateDeltaToken(token);
     }
+
+    has_staged_delta_token_ = false;
+    staged_delta_token_.clear();
+    staged_operation_type_.clear();
 }
 
 void OdpODataReadBindData::UpdateODataClient(const std::string& url) {

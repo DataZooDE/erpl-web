@@ -92,6 +92,12 @@ public:
 
     //! The detection order the readers should use: what the service declared in its headers
     //! first, payload sniffing second, V4 as the last resort.
+
+    //! Detects the version to PARSE this body with: payload first, because the body is
+    //! ground truth for its own shape; then the response headers, which are what help when
+    //! the body says nothing (empty, non-JSON, or an error document). The declared protocol
+    //! version does not determine the JSON shape - OData v3 announces "DataServiceVersion:
+    //! 3.0" for both the verbose format ("d" wrapper) and minimalmetadata ("value" array).
     static ODataVersion DetectODataVersion(const std::string& content, const HeaderMap& headers);
 
     //! Decodes a top-level OData error payload (v2 or v4 shape). Returns nullopt when the body
