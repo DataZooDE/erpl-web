@@ -2,6 +2,8 @@
 #include "odata_edm.hpp"
 #include "yyjson.hpp"
 
+#include "duckdb/common/exception/conversion_exception.hpp"
+
 #include "tracing.hpp"
 
 #include <algorithm>
@@ -38,6 +40,13 @@ struct JsonDocHandle {
 private:
   JsonDoc *doc;
 };
+
+// NumericRangeError comes from conversion_failure_log.hpp: a JSON number that
+// cannot be represented in the DuckDB column type the EDM metadata demands.
+// It is deliberately distinct from the soft conversion failures the fallback
+// paths absorb - silently substituting a truncated or default value here would
+// corrupt the user's data with no signal - so it is thrown through the parsing
+// chain and recorded against the column by the caller.
 
 static std::string JsonValueToString(JsonValue *value) {
   char *json_str = duckdb_yyjson::yyjson_val_write(value, 0, nullptr);
@@ -348,6 +357,24 @@ void ODataDataExtractor::ProcessExpandedDataRows(
           // strict_typing fails the whole query, so cache alignment no longer
           // matters - let it out.
           throw;
+        } catch (const NumericRangeError &e) {
+          // A value that does not fit its column is a data-integrity problem, so
+          // it is recorded against the column rather than wrapped around into a
+          // different number.
+          //
+          // The cache is indexed by row position, so this row must still
+          // contribute exactly one entry per expand path - skipping it would
+          // shift every later row onto the wrong expanded value, and re-throwing
+          // would leave this page's cache short and misalign the pages after it.
+          // So the failure is logged and an aligned NULL is pushed.
+          // Recorded for the end-of-scan report the user sees, and retained in
+          // GetLastError() for programmatic diagnosis.
+          LogError("EXPANDED_DATA_RANGE",
+                   "Dropping expanded value for path '" + expand_path +
+                       "' at row " + std::to_string(row_index) + ": " +
+                       e.what());
+          RecordConversionFailure(expand_path, "", e.what());
+          expanded_data_cache[expand_path].push_back(duckdb::Value());
         } catch (const std::exception &e) {
           ERPL_TRACE_WARN("DATA_EXTRACTOR",
                           "Failed to parse expand data for path '" +
@@ -493,6 +520,8 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
     }
   } catch (const StrictTypingViolation &) {
     throw;
+  } catch (const NumericRangeError &) {
+    throw;
   } catch (const std::exception &e) {
     LogError("JSON_PARSING",
              "Unexpected error parsing JSON value: " + std::string(e.what()));
@@ -540,29 +569,57 @@ ODataDataExtractor::ConvertVarchar(duckdb_yyjson::yyjson_val *value) {
 duckdb::Value ODataDataExtractor::ConvertInteger(
     duckdb_yyjson::yyjson_val *value,
     const duckdb::LogicalType &target_type) {
-  if (duckdb_yyjson::yyjson_is_int(value)) {
-    return duckdb::Value(
-        static_cast<int32_t>(duckdb_yyjson::yyjson_get_int(value)));
-  }
+  // yyjson_is_int() is true for both the signed and the unsigned number
+  // subtype, so the unsigned case has to be tested first. yyjson_get_int()
+  // returns a plain `int` and would truncate anything wider, which is exactly
+  // the silent corruption this function must avoid: read the full 64-bit value
+  // and range-check it against the INTEGER column instead.
   if (duckdb_yyjson::yyjson_is_uint(value)) {
-    const auto uint_value = duckdb_yyjson::yyjson_get_uint(value);
-    if (uint_value <= static_cast<uint64_t>(INT32_MAX)) {
-      return duckdb::Value(static_cast<int32_t>(uint_value));
+    const uint64_t uint_value = duckdb_yyjson::yyjson_get_uint(value);
+    if (uint_value > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+      throw NumericRangeError(
+          "OData value " + std::to_string(uint_value) +
+          " does not fit into a DuckDB INTEGER column (INT32 range is " +
+          std::to_string(std::numeric_limits<int32_t>::min()) + " .. " +
+          std::to_string(std::numeric_limits<int32_t>::max()) + ")");
     }
-    const auto range_message = "value " + std::to_string(uint_value) +
-                               " is out of range for " + target_type.ToString();
-    LogError("INTEGER_CONVERSION", range_message);
-    return CreateFallbackValue(target_type, range_message,
-                               std::to_string(uint_value));
+    return duckdb::Value(static_cast<int32_t>(uint_value));
+  }
+  if (duckdb_yyjson::yyjson_is_sint(value)) {
+    const int64_t int_value = duckdb_yyjson::yyjson_get_sint(value);
+    if (int_value < static_cast<int64_t>(std::numeric_limits<int32_t>::min()) ||
+        int_value > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+      throw NumericRangeError(
+          "OData value " + std::to_string(int_value) +
+          " does not fit into a DuckDB INTEGER column (INT32 range is " +
+          std::to_string(std::numeric_limits<int32_t>::min()) + " .. " +
+          std::to_string(std::numeric_limits<int32_t>::max()) + ")");
+    }
+    return duckdb::Value(static_cast<int32_t>(int_value));
   }
   if (duckdb_yyjson::yyjson_is_str(value)) {
+    const std::string string_value = duckdb_yyjson::yyjson_get_str(value);
     try {
-      return duckdb::Value(std::stoi(duckdb_yyjson::yyjson_get_str(value)));
-    } catch (const std::exception &e) {
-      LogError("INTEGER_CONVERSION",
-               "Failed to convert string '" +
-                   std::string(duckdb_yyjson::yyjson_get_str(value)) +
-                   "' to integer: " + e.what());
+      const int64_t parsed_value = std::stoll(string_value);
+      if (parsed_value < static_cast<int64_t>(std::numeric_limits<int32_t>::min()) ||
+          parsed_value > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+        throw NumericRangeError(
+            "OData value '" + string_value +
+            "' does not fit into a DuckDB INTEGER column (INT32 range is " +
+            std::to_string(std::numeric_limits<int32_t>::min()) + " .. " +
+            std::to_string(std::numeric_limits<int32_t>::max()) + ")");
+      }
+      return duckdb::Value(static_cast<int32_t>(parsed_value));
+    } catch (const std::out_of_range &) {
+      throw NumericRangeError(
+          "OData value '" + string_value +
+          "' does not fit into a DuckDB INTEGER column (INT32 range is " +
+          std::to_string(std::numeric_limits<int32_t>::min()) + " .. " +
+          std::to_string(std::numeric_limits<int32_t>::max()) + ")");
+    } catch (const std::invalid_argument &e) {
+      LogError("INTEGER_CONVERSION", "Failed to convert string '" +
+                                         string_value +
+                                         "' to integer: " + e.what());
     }
   }
   return CreateFallbackValue(target_type);
@@ -570,20 +627,22 @@ duckdb::Value ODataDataExtractor::ConvertInteger(
 
 duckdb::Value
 ODataDataExtractor::ConvertBigint(duckdb_yyjson::yyjson_val *value) {
-  if (duckdb_yyjson::yyjson_is_int(value)) {
-    return duckdb::Value(duckdb_yyjson::yyjson_get_int(value));
-  }
+  // Unsigned first: yyjson_is_int() also matches the unsigned subtype.
   if (duckdb_yyjson::yyjson_is_uint(value)) {
-    const auto uint_value = duckdb_yyjson::yyjson_get_uint(value);
-    if (uint_value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-      return duckdb::Value(static_cast<int64_t>(uint_value));
+    const uint64_t uint_value = duckdb_yyjson::yyjson_get_uint(value);
+    if (uint_value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+      throw NumericRangeError(
+          "OData value " + std::to_string(uint_value) +
+          " does not fit into a DuckDB BIGINT column (INT64 maximum is " +
+          std::to_string(std::numeric_limits<int64_t>::max()) + ")");
     }
-    const auto range_message =
-        "value " + std::to_string(uint_value) + " is out of range for BIGINT";
-    LogError("BIGINT_CONVERSION", range_message);
-    return CreateFallbackValue(
-        duckdb::LogicalType(duckdb::LogicalTypeId::BIGINT), range_message,
-        std::to_string(uint_value));
+    return duckdb::Value(static_cast<int64_t>(uint_value));
+  }
+  if (duckdb_yyjson::yyjson_is_sint(value)) {
+    // yyjson_get_int() returns a plain `int` and would truncate the value to
+    // 32 bits before it ever reaches the BIGINT column.
+    return duckdb::Value(
+        static_cast<int64_t>(duckdb_yyjson::yyjson_get_sint(value)));
   }
   if (duckdb_yyjson::yyjson_is_str(value)) {
     try {
@@ -604,13 +663,14 @@ ODataDataExtractor::ConvertFloatLike(duckdb_yyjson::yyjson_val *value) {
   if (duckdb_yyjson::yyjson_is_real(value)) {
     return duckdb::Value(duckdb_yyjson::yyjson_get_real(value));
   }
-  if (duckdb_yyjson::yyjson_is_int(value)) {
-    return duckdb::Value(
-        static_cast<double>(duckdb_yyjson::yyjson_get_int(value)));
-  }
   if (duckdb_yyjson::yyjson_is_uint(value)) {
     return duckdb::Value(
         static_cast<double>(duckdb_yyjson::yyjson_get_uint(value)));
+  }
+  if (duckdb_yyjson::yyjson_is_sint(value)) {
+    // yyjson_get_int() truncates to 32 bits; yyjson_get_sint() keeps all 64.
+    return duckdb::Value(
+        static_cast<double>(duckdb_yyjson::yyjson_get_sint(value)));
   }
   if (duckdb_yyjson::yyjson_is_str(value)) {
     try {
@@ -751,22 +811,39 @@ ODataDataExtractor::ParseJsonArray(duckdb_yyjson::yyjson_val *array_val,
         duckdb_yyjson::yyjson_arr_iter arr_it;
         duckdb_yyjson::yyjson_arr_iter_init(array_val, &arr_it);
         
+    // Every element is converted. An earlier version stopped after batch_size_
+    // items, which dropped the remainder of every larger expanded collection
+    // with nothing but a trace warning to show for it - the caller received a
+    // short list and had no way to tell it was incomplete.
+    list_values.reserve(duckdb_yyjson::yyjson_arr_size(array_val));
+
     duckdb_yyjson::yyjson_val *item;
-        size_t item_count = 0;
         while ((item = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
-            if (item_count >= batch_size_) {
-        ERPL_TRACE_WARN("DATA_EXTRACTOR", "Array too large, truncating at " +
-                                              std::to_string(batch_size_) +
-                                              " items");
-                break;
+            try {
+                list_values.push_back(ParseJsonValueToDuckDBValue(item, child_type));
+            } catch (const StrictTypingViolation &) {
+                throw;
+            } catch (const NumericRangeError &e) {
+                // One unrepresentable element must not discard the rest of the
+                // collection, and must not shorten it either: a missing element
+                // would re-index every element after it. So the failure is
+                // recorded and a typed NULL takes its place, in position.
+                LogError("ARRAY_ELEMENT_RANGE", e.what());
+                // Attribute the failure to the column being extracted, not to the
+                // element's type, so the end-of-scan report names something the
+                // user can act on.
+                RecordConversionFailure(current_column_context_.empty()
+                                            ? child_type.ToString()
+                                            : current_column_context_,
+                                        JsonValueToString(item), e.what());
+                list_values.push_back(duckdb::Value(child_type));
             }
-            
-            list_values.push_back(ParseJsonValueToDuckDBValue(item, child_type));
-            item_count++;
         }
-        
+
         return duckdb::Value::LIST(child_type, list_values);
-        
+
+  } catch (const StrictTypingViolation &) {
+    throw;
   } catch (const std::exception &e) {
     LogError("ARRAY_PARSING",
              "Failed to parse JSON array: " + std::string(e.what()));
@@ -805,12 +882,28 @@ ODataDataExtractor::ParseJsonObject(duckdb_yyjson::yyjson_val *obj_val,
             if (it != child_index.end()) {
                 size_t pos = it->second;
                 const auto &field_type = struct_types[pos].second;
-                struct_values[pos] = ParseJsonValueToDuckDBValue(json_val, field_type);
+                try {
+                    struct_values[pos] = ParseJsonValueToDuckDBValue(json_val, field_type);
+                } catch (const StrictTypingViolation &) {
+                    throw;
+                } catch (const NumericRangeError &e) {
+                    // Only the offending field becomes NULL. Discarding the whole
+                    // record because one number does not fit would throw away the
+                    // fields that are perfectly good, and the record still has to
+                    // occupy its position so later rows are not re-indexed.
+                    LogError("STRUCT_FIELD_RANGE",
+                             "Field '" + struct_types[pos].first + "': " + e.what());
+                    RecordConversionFailure(struct_types[pos].first,
+                                            JsonValueToString(json_val), e.what());
+                    struct_values[pos] = duckdb::Value(field_type);
+                }
             }
         }
         
         return duckdb::Value::STRUCT(target_type, struct_values);
-        
+
+  } catch (const StrictTypingViolation &) {
+    throw;
   } catch (const std::exception &e) {
     LogError("OBJECT_PARSING",
              "Failed to parse JSON object: " + std::string(e.what()));
@@ -888,25 +981,26 @@ ODataDataExtractor::InferTypeFromJsonValue(duckdb_yyjson::yyjson_val *value) {
         return duckdb::LogicalTypeId::VARCHAR;
     }
     
-    if (duckdb_yyjson::yyjson_is_int(value)) {
-        int64_t int_val = duckdb_yyjson::yyjson_get_int(value);
-    if (int_val >= std::numeric_limits<int32_t>::min() &&
-        int_val <= std::numeric_limits<int32_t>::max()) {
-            return duckdb::LogicalTypeId::INTEGER;
-        } else {
-            return duckdb::LogicalTypeId::BIGINT;
-        }
-    }
-    
+    // Unsigned before signed: yyjson_is_int() matches both subtypes. Reading
+    // the value with yyjson_get_int() would truncate it to 32 bits and could
+    // classify a wide number as INTEGER, which then loses data on conversion.
     if (duckdb_yyjson::yyjson_is_uint(value)) {
-        uint64_t uint_val = duckdb_yyjson::yyjson_get_uint(value);
-        if (uint_val <= std::numeric_limits<int32_t>::max()) {
+        const uint64_t uint_val = duckdb_yyjson::yyjson_get_uint(value);
+        if (uint_val <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
             return duckdb::LogicalTypeId::INTEGER;
-        } else {
-            return duckdb::LogicalTypeId::BIGINT;
         }
+        return duckdb::LogicalTypeId::BIGINT;
     }
-    
+
+    if (duckdb_yyjson::yyjson_is_sint(value)) {
+        const int64_t int_val = duckdb_yyjson::yyjson_get_sint(value);
+        if (int_val >= static_cast<int64_t>(std::numeric_limits<int32_t>::min()) &&
+            int_val <= static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            return duckdb::LogicalTypeId::INTEGER;
+        }
+        return duckdb::LogicalTypeId::BIGINT;
+    }
+
     if (duckdb_yyjson::yyjson_is_real(value)) {
         return duckdb::LogicalTypeId::DOUBLE;
     }

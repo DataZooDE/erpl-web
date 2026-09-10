@@ -245,6 +245,6 @@ TEST_CASE("Out-of-range integers are reported, not zeroed", "[conversion_failure
     auto failures = log->Drain();
     REQUIRE(failures.size() == 1);
     REQUIRE(failures[0].column_name == "Counters");
-    REQUIRE(failures[0].first_error_message.find("out of range") != std::string::npos);
+    REQUIRE(failures[0].first_error_message.find("does not fit") != std::string::npos);
     REQUIRE(failures[0].first_offending_value == "4294967295");
 }
