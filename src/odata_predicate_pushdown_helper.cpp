@@ -485,9 +485,16 @@ void ODataPredicatePushdownHelper::MergeParametersIntoQuery(std::map<std::string
     upsert_param(select_clause, true);
     // $filter: do not overwrite an existing one (avoid double-encoding after redirects)
     upsert_param(filter_clause, false);
-    // $top/$skip: overwrite to latest
-    upsert_param(top_clause, true);
-    upsert_param(skip_clause, true);
+    // $top/$skip: overwrite to latest, but only when every filter reached the server.
+    // Pushing a row limit over a result the server did not filter returns too few rows.
+    if (has_untranslated_filter) {
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                         "Not pushing $top/$skip: a filter is being applied locally, so a "
+                         "server-side row limit would truncate the unfiltered result");
+    } else {
+        upsert_param(top_clause, true);
+        upsert_param(skip_clause, true);
+    }
     // $expand: only set if not already present (respect explicit URL expand)
     upsert_param(expand_clause, false);
     // v2-specific inline count and skip token: overwrite
@@ -631,7 +638,7 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
     return result;
 }
 
-std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) const {
+std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) {
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Building filter clause");
     
     if (!filters || filters->filters.empty()) {
@@ -677,6 +684,9 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
             valid_filters.push_back(translated_filter);
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Valid filter: " + translated_filter);
         } else {
+            // The filter stays with DuckDB. Record that, so $top/$skip are not pushed
+            // on top of a result the server has not filtered. See the member comment.
+            has_untranslated_filter = true;
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Filter translation resulted in empty string for column: " + column_name);
         }
     }
