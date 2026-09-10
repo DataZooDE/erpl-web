@@ -259,6 +259,27 @@ TEST_CASE("a bound SELECT * plan returns every row on re-execution", "[odata_e2e
         },
         CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
     server.OnPath("/reexec/Airlines",
+
+// The OData clients wrapped their HTTP client in CachingHttpClient, a process-wide 30s
+// response cache keyed on method + URL + body hash - credentials are NOT part of the key.
+// Nothing that repeats ever reached it (DoMetadataHttpGet bypasses it because the EDM is
+// cached separately, and ProbeUrl builds its own bare client), so its only traffic was
+// nextLink pages, each fetched once: a 0% hit rate with 100% retention. The one time the
+// key did match was the dangerous one - the same page URL fetched under two different
+// credentials, where the second caller was served the first caller's rows.
+TEST_CASE("a page fetched under different credentials is not served from cache",
+          "[odata_e2e][security]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/creds/Airlines");
+    const std::string context = server.Url("/creds/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/creds/$metadata", "edm_trippin.xml");
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/creds/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
+    server.OnPath("/creds/Airlines",
                   CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
                                                   entity_url + "?$format=json&$skiptoken=2")));
 
@@ -303,6 +324,31 @@ TEST_CASE("two SELECT * scans of one call each see every row", "[odata_e2e][pagi
     INFO((result->HasError() ? result->GetError() : std::string()));
     REQUIRE_FALSE(result->HasError());
     REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 16);
+
+    const std::string scope = server.BaseUrl();
+    for (const std::string &user : {std::string("alice"), std::string("bob")}) {
+        REQUIRE_FALSE(con.Query("DROP SECRET IF EXISTS s")->HasError());
+        auto created = con.Query("CREATE SECRET s (TYPE http_basic, USERNAME '" + user +
+                                 "', PASSWORD '" + user + "-pw', SCOPE '" + scope + "')");
+        INFO((created->HasError() ? created->GetError() : std::string()));
+        REQUIRE_FALSE(created->HasError());
+
+        auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + entity_url + "')");
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 4);
+    }
+
+    // The second page is the one that goes through the client under test. Both reads must
+    // have fetched it themselves, under their own Authorization header.
+    std::vector<std::string> page_two_authorizations;
+    for (const auto &request : server.RequestsFor("/creds/Airlines")) {
+        if (request.QueryParam("$skiptoken") == "2") {
+            page_two_authorizations.push_back(request.Header("Authorization"));
+        }
+    }
+    REQUIRE(page_two_authorizations.size() == 2);
+    REQUIRE(page_two_authorizations[0] != page_two_authorizations[1]);
 }
 
 // Catches GitHub #93: a follow-up page that errors must fail the scan. Swallowing
