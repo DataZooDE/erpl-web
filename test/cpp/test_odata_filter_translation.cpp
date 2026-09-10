@@ -177,10 +177,11 @@ TEST_CASE("An AND conjunction drops advisory children", "[odata_filter]") {
 	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "(Col eq 1)");
 }
 
-TEST_CASE("An OR conjunction is abandoned when any child is untranslatable", "[odata_filter]") {
-	// Dropping a child of an OR would NARROW the result set and silently lose
-	// rows that no residual filter can bring back, so the whole disjunction
-	// must be abandoned instead.
+TEST_CASE("An OR conjunction is abandoned when a branch is merely advisory", "[odata_filter]") {
+	// An advisory branch carries no predicate of its own, so the disjunction it appears in
+	// constrains nothing and pushing a partial form would NARROW the result. Abandoning it
+	// is safe here precisely because the branch was advisory; a branch that genuinely
+	// cannot be translated throws instead (see the case above).
 	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionOrFilter>();
 	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
 
@@ -251,6 +252,70 @@ TEST_CASE("An AND conjunction fails loudly when a child cannot be translated", "
 
 	REQUIRE_THROWS_AS(TranslateOne(std::move(conjunction), ODataVersion::V4),
 	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("An initialised dynamic filter of an untranslatable type is skipped, not thrown",
+          "[odata_filter]") {
+	// A dynamic filter comes from the Top-N optimiser and is always enforced again above
+	// the scan, so it is advisory whatever it holds. Once initialised it reaches
+	// TranslateConstantComparison, which now throws for a type with no literal form -- that
+	// would abort "ORDER BY <timestamptz col> LIMIT n", a query that works today.
+	auto filter_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	filter_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	filter_data->initialized = true;
+
+	REQUIRE(TranslateOne(duckdb::make_uniq<duckdb::DynamicFilter>(filter_data),
+	                     ODataVersion::V4) == "");
+}
+
+TEST_CASE("An IN filter fails loudly when a value cannot be translated", "[odata_filter]") {
+	// Same reasoning as the constant comparison: dropping the filter returns rows that do
+	// not satisfy the WHERE clause, and nothing downstream filters them out.
+	duckdb::vector<Value> values;
+	values.push_back(Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	REQUIRE_THROWS_AS(TranslateOne(duckdb::make_uniq<duckdb::InFilter>(std::move(values)),
+	                               ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("A very long IN list is still translated", "[odata_filter]") {
+	// The old 100-value ceiling silently dropped the filter and returned the whole entity
+	// set. A long URL is the service's business; a 414 is loud.
+	duckdb::vector<Value> values;
+	for (int i = 0; i < 101; i++) {
+		values.push_back(Value::INTEGER(i));
+	}
+	const auto translated = TranslateOne(duckdb::make_uniq<duckdb::InFilter>(std::move(values)),
+	                                     ODataVersion::V4);
+	REQUIRE(translated.find("Col eq 0") != std::string::npos);
+	REQUIRE(translated.find("Col eq 100") != std::string::npos);
+}
+
+TEST_CASE("An OR conjunction fails loudly when a branch cannot be translated", "[odata_filter]") {
+	// Pushing nothing means the server returns everything and DuckDB re-applies nothing,
+	// so the query silently widens -- the same defect as dropping an AND child.
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionOrFilter>();
+	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_EQUAL, Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0))));
+
+	REQUIRE_THROWS_AS(TranslateOne(std::move(conjunction), ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("A filter on a column that cannot be resolved fails loudly", "[odata_filter]") {
+	// The filter is neither pushed nor re-applied, so continuing past it returns rows that
+	// do not satisfy the WHERE clause. Unlike the other cases this one fires on an ordinary
+	// projection/expand mapping bug rather than on an exotic type, which makes silently
+	// widening worse, not better.
+	ODataPredicatePushdownHelper helper({"Col"});
+	helper.SetODataVersion(ODataVersion::V4);
+
+	duckdb::TableFilterSet filter_set;
+	filter_set.filters[7] = MakeEq(Value::INTEGER(1));  // no column at index 7
+
+	REQUIRE_THROWS(helper.ConsumeFilters(&filter_set));
 }
 
 TEST_CASE("Advisory filters are still skipped rather than failing", "[odata_filter]") {

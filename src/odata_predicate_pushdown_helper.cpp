@@ -27,11 +27,14 @@ std::string EscapeODataStringLiteral(const std::string &value)
 // Renders a DuckDB constant as an OData literal for the given protocol version,
 // or nullopt when the type has no literal form we can emit safely.
 //
-// Returning nullopt drops the filter rather than guessing. That is safe for a
-// ConstantFilter: DuckDB keeps it as a residual filter above the scan, so the
-// rows are still filtered locally - we merely transfer more of them. Emitting a
-// wrongly-typed literal is not safe, because a lenient server silently returns a
-// different row set that no residual filter can repair.
+// Returning nullopt means "this value has no OData spelling", not "drop the filter".
+// DuckDB does NOT keep a pushed filter as a residual above the scan - once a predicate
+// becomes a TableFilter and the function advertises filter_pushdown, the optimizer removes
+// it from the plan (optimizer/pushdown/pushdown_get.cpp). So every caller must either fail
+// the query or be advisory by construction (optional, bloom, dynamic filters); dropping
+// the comparison returns rows that do not satisfy the WHERE clause. See GitHub #153.
+// Emitting a wrongly-typed literal is not safe either, because a lenient server silently
+// returns a different row set.
 std::optional<std::string> FormatODataLiteral(const duckdb::Value &value, ODataVersion version)
 {
     if (value.IsNull()) {
@@ -674,8 +677,15 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
         if (column_name_resolver) {
             column_name = column_name_resolver(filter_entry.first);
             if (column_name.empty()) {
+                // Skipping loses the predicate entirely: DuckDB pushed it here and removed
+                // it from the plan, so nothing re-applies it and the scan returns rows that
+                // do not satisfy the WHERE clause. See GitHub #153.
                 ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for index " + std::to_string(filter_entry.first));
-                continue;
+                throw duckdb::InternalException(
+                    "OData pushdown could not resolve a column name for filter index " +
+                    std::to_string(filter_entry.first) +
+                    "; refusing to drop the filter, which would return rows that do not match "
+                    "the query");
             }
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Column name resolver mapped index " + std::to_string(filter_entry.first) + " to: " + column_name);
         } else {
@@ -684,8 +694,13 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "No column name resolver, using direct index: " + std::to_string(column_index));
             
             if (column_index >= all_column_names.size()) {
+                // As above: dropping the filter silently widens the result.
                 ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column index " + std::to_string(column_index) + " is out of bounds for column names array");
-                continue;
+                throw duckdb::InternalException(
+                    "OData pushdown got a filter for column index " + std::to_string(column_index) +
+                    ", but the scan has only " + std::to_string(all_column_names.size()) +
+                    " columns; refusing to drop the filter, which would return rows that do not "
+                    "match the query");
             }
             
             column_name = all_column_names[column_index];
@@ -795,6 +810,13 @@ namespace {
 // and unused on 1.4, which makes this case label simply unreachable on the LTS build.
 constexpr auto BLOOM_FILTER_TABLE_FILTER_TYPE = static_cast<duckdb::TableFilterType>(10);
 
+// Where the 1.5 header exists, hold the numeric value to the real enumerator: a future
+// renumbering would otherwise silently point this case label at a different filter kind.
+#if __has_include("duckdb/planner/filter/bloom_filter.hpp")
+static_assert(BLOOM_FILTER_TABLE_FILTER_TYPE == duckdb::TableFilterType::BLOOM_FILTER,
+              "TableFilterType::BLOOM_FILTER is no longer 10; update the LTS fallback value");
+#endif
+
 }  // namespace
 
 std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const {
@@ -855,7 +877,19 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
                 result = "";
                 break;
             }
-            result = TranslateConstantComparison(*filter_data.filter, column_name);
+            try {
+                result = TranslateConstantComparison(*filter_data.filter, column_name);
+            } catch (const duckdb::NotImplementedException &) {
+                // A dynamic filter is advisory by construction: the Top-N operator that
+                // produced it enforces the bound again above the scan. Failing here would
+                // abort a query that works today - ORDER BY <timestamptz col> LIMIT n - for
+                // a filter we are never required to push.
+                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                                 "Dynamic filter on column '" + column_name +
+                                 "' has no OData translation; skipping it (it is not required "
+                                 "for correctness)");
+                result = "";
+            }
             break;
         }
         case duckdb::TableFilterType::IN_FILTER:
@@ -958,23 +992,24 @@ std::string ODataPredicatePushdownHelper::TranslateInFilter(const duckdb::InFilt
         return "";
     }
 
-    constexpr idx_t MAX_IN_LIST_SIZE = 100;
-    if (filter.values.size() > MAX_IN_LIST_SIZE) {
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
-                         "IN list on column '" + column_name + "' has " +
-                         std::to_string(filter.values.size()) + " values; too long for a URL, filtering locally");
-        return "";
-    }
+    // There is no local fallback to fall back TO: DuckDB removed this filter from the plan
+    // when it pushed it here, so returning "" hands back the whole entity set. The old
+    // 100-value ceiling did exactly that. A long URL is the service's business - a 414 is
+    // loud, where a dropped filter is silently wrong. See GitHub #153.
 
     std::stringstream result;
     result << "(";
     for (idx_t i = 0; i < filter.values.size(); ++i) {
         const auto literal = FormatODataLiteral(filter.values[i], odata_version);
         if (!literal.has_value()) {
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+            ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN",
                              "IN list on column '" + column_name +
-                             "' holds a value with no OData literal form; filtering locally");
-            return "";
+                             "' holds a value with no OData literal form");
+            throw duckdb::NotImplementedException(
+                "OData pushdown has no literal form for type " + filter.values[i].type().ToString() +
+                " used in an IN list on column '" + column_name +
+                "'. Materialise the read first, for example: CREATE TEMP TABLE t AS SELECT * FROM "
+                "odata_read(...); SELECT * FROM t WHERE ...");
         }
         if (i > 0) {
             result << " or ";
@@ -1017,9 +1052,11 @@ std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::Con
 }
 
 std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const {
-    // An OR is all-or-nothing: dropping a branch would NARROW the disjunction
-    // and withhold rows the server would otherwise return, which no residual
-    // filter can recover. So if any child fails to translate, push nothing.
+    // An OR is all-or-nothing. A branch that cannot be translated throws from the child
+    // translation, like everywhere else (GitHub #153). A branch that translates to "" is
+    // merely advisory and carries no predicate of its own, so pushing a partial form would
+    // wrongly NARROW the disjunction; that case abandons the whole thing, which is safe
+    // because whatever produced the advisory filter re-applies it above the scan.
     std::vector<std::string> translated;
     translated.reserve(filter.child_filters.size());
     for (const auto &child : filter.child_filters) {
