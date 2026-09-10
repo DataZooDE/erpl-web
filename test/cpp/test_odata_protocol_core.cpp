@@ -354,3 +354,45 @@ TEST_CASE("Metadata is fetched once and shared across clients", "[edm_cache][oda
     // Exactly one document is held for the service, not one per consumer.
     REQUIRE(erpl_web::EdmCache::GetInstance().Size() == 1);
 }
+
+
+// ============================================================================
+// GitHub #104 -- the EDM primitive mapping exists once
+// ============================================================================
+
+TEST_CASE("EDM primitive mappings agree across entry points", "[odata_edm_mapping]")
+{
+    using erpl_web::DuckTypeConverter;
+
+    // The LogicalType-valued and the string-valued mapping used to be separate
+    // hand-written ladders, which is how Edm.Byte ended up wrong in several of them at
+    // once (GitHub #68). They now read the same table, so they cannot disagree.
+    const std::vector<std::string> edm_types{
+        "Edm.Binary", "Edm.Boolean", "Edm.Byte",  "Edm.SByte",  "Edm.Date",
+        "Edm.DateTime", "Edm.DateTimeOffset",     "Edm.Double", "Edm.Duration",
+        "Edm.Guid",   "Edm.Int16",   "Edm.Int32", "Edm.Int64",  "Edm.Single",
+        "Edm.Stream", "Edm.String",  "Edm.Time",  "Edm.TimeOfDay",
+        "Edm.SomethingNobodyHasHeardOf"};
+
+    for (const auto &edm_type : edm_types) {
+        const auto logical_type = DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType(edm_type);
+        const auto type_name = DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(edm_type);
+        INFO("EDM type: " << edm_type);
+        REQUIRE(logical_type.ToString() == type_name);
+    }
+
+    // The PrimitiveType-keyed visitor reads the same table.
+    erpl_web::Edmx empty_edmx;
+    DuckTypeConverter converter(empty_edmx);
+    auto byte_type = erpl_web::PrimitiveType("Edm.Byte");
+    REQUIRE(converter(byte_type).id() == duckdb::LogicalTypeId::UTINYINT);
+    auto sbyte_type = erpl_web::PrimitiveType("Edm.SByte");
+    REQUIRE(converter(sbyte_type).id() == duckdb::LogicalTypeId::TINYINT);
+
+    // ... apart from Edm.GeographyPoint, which this path models structurally. The
+    // divergence predates the collapse; it is asserted so that it stays deliberate.
+    auto geography_point = erpl_web::PrimitiveType("Edm.GeographyPoint");
+    REQUIRE(converter(geography_point).id() == duckdb::LogicalTypeId::LIST);
+    REQUIRE(DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType("Edm.GeographyPoint").id() ==
+            duckdb::LogicalTypeId::VARCHAR);
+}

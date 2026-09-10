@@ -84,6 +84,88 @@ std::string EdmCache::UrlWithoutFragment(const std::string& url_str) const {
     return ss.str();
 }
 
+// -----------------------------------------------------------------------------
+// The one EDM primitive type table
+// -----------------------------------------------------------------------------
+namespace {
+
+struct EdmPrimitiveMapping {
+    const char *edm_type_name;
+    duckdb::LogicalTypeId logical_type_id;
+    const char *duckdb_type_name;
+};
+
+// Edm.Byte is UNSIGNED (0..255); Edm.SByte is the signed one (-128..127). Mapping both
+// to TINYINT silently NULLed 128..255 (GitHub #68). Edm.Decimal appears here without
+// precision or scale; property-aware callers go through BuildDecimalLogicalType instead.
+const EdmPrimitiveMapping EDM_PRIMITIVE_MAPPINGS[] = {
+    {"Edm.Binary",         duckdb::LogicalTypeId::BLOB,      "BLOB"},
+    {"Edm.Boolean",        duckdb::LogicalTypeId::BOOLEAN,   "BOOLEAN"},
+    {"Edm.Byte",           duckdb::LogicalTypeId::UTINYINT,  "UTINYINT"},
+    {"Edm.SByte",          duckdb::LogicalTypeId::TINYINT,   "TINYINT"},
+    {"Edm.Date",           duckdb::LogicalTypeId::DATE,      "DATE"},
+    {"Edm.DateTime",       duckdb::LogicalTypeId::TIMESTAMP, "TIMESTAMP"},
+    {"Edm.DateTimeOffset", duckdb::LogicalTypeId::TIMESTAMP, "TIMESTAMP"},
+    {"Edm.Decimal",        duckdb::LogicalTypeId::DECIMAL,   "DECIMAL"},
+    {"Edm.Double",         duckdb::LogicalTypeId::DOUBLE,    "DOUBLE"},
+    {"Edm.Duration",       duckdb::LogicalTypeId::INTERVAL,  "INTERVAL"},
+    {"Edm.Guid",           duckdb::LogicalTypeId::VARCHAR,   "VARCHAR"},
+    {"Edm.Int16",          duckdb::LogicalTypeId::SMALLINT,  "SMALLINT"},
+    {"Edm.Int32",          duckdb::LogicalTypeId::INTEGER,   "INTEGER"},
+    {"Edm.Int64",          duckdb::LogicalTypeId::BIGINT,    "BIGINT"},
+    {"Edm.Single",         duckdb::LogicalTypeId::FLOAT,     "FLOAT"},
+    {"Edm.Stream",         duckdb::LogicalTypeId::BLOB,      "BLOB"},
+    {"Edm.String",         duckdb::LogicalTypeId::VARCHAR,   "VARCHAR"},
+    {"Edm.Time",           duckdb::LogicalTypeId::TIME,      "TIME"},
+    {"Edm.TimeOfDay",      duckdb::LogicalTypeId::TIME,      "TIME"},
+};
+
+const EdmPrimitiveMapping *FindEdmPrimitiveMapping(const std::string &type_name) {
+    for (const auto &mapping : EDM_PRIMITIVE_MAPPINGS) {
+        if (type_name == mapping.edm_type_name) {
+            return &mapping;
+        }
+    }
+    return nullptr;
+}
+
+// Geography/Geometry are surfaced as VARCHAR for now; the family is recognised by prefix
+// because CSDL spells out a dozen of them.
+bool IsEdmSpatialType(const std::string &type_name) {
+    return type_name.rfind("Edm.Geography", 0) == 0 || type_name.rfind("Edm.Geometry", 0) == 0;
+}
+
+} // namespace
+
+duckdb::LogicalType DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name) {
+    if (const auto *mapping = FindEdmPrimitiveMapping(type_name)) {
+        return duckdb::LogicalType(mapping->logical_type_id);
+    }
+    // Unknown types, spatial ones included, fall back to VARCHAR.
+    return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+}
+
+std::string DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(const std::string &edm_type) {
+    if (const auto *mapping = FindEdmPrimitiveMapping(edm_type)) {
+        return mapping->duckdb_type_name;
+    }
+    return "VARCHAR";
+}
+
+duckdb::LogicalType DuckTypeConverter::operator()(PrimitiveType &type) const {
+    // Edm.GeographyPoint is the one spatial type this path models structurally, as a pair
+    // of doubles. The string-keyed mapping above still reports VARCHAR for it, which is a
+    // pre-existing inconsistency between the two entry points and not one this change
+    // introduces; unifying them would change catalog column types.
+    if (type == erpl_web::GeographyPoint) {
+        return duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::DOUBLE));
+    }
+    if (IsEdmSpatialType(type.name)) {
+        return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    }
+    return ConvertEdmPrimitiveStringToLogicalType(type.name);
+}
+
 // Version-specific parsing methods
 Edmx Edmx::FromXmlV2(const std::string& xml) {
     tinyxml2::XMLDocument doc;
