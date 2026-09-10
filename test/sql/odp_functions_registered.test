@@ -1,0 +1,20 @@
+# name: test/sql/odp_functions_registered.test
+# description: The ODP entry points exist without needing a provisioned SAP ODP service
+# group: [erpl_web]
+#
+# The live ODP tests under test/sql/sap/ are gated on a real ODP service being
+# provisioned, so on a system without one they skip entirely. Registration is
+# cheap to check and must not skip with them: a missing or renamed function
+# would otherwise go unnoticed on every machine that has no ODP service.
+
+require erpl_web
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'odp_odata_read';
+----
+1
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'odp_odata_show';
+----
+1

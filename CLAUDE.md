@@ -75,7 +75,17 @@ make release    # Full reconfigure + release build
 - `make test_debug` - Run all SQL tests (SQLLogicTests)
 - `make test` - Run all tests (release mode)
 - `make test_cpp` - Run C++ unit tests (**always use this**, not the binary directly — see note below)
-- `make test_debug_sap` - Run SAP-specific tests with local SAP environment
+- `make test_debug_sap` - Run SAP-specific tests against the local A4H sandbox. The ODP
+  cases need a **provisioned ODP service**, which a stock system does not have, so they
+  are gated on `ERPL_SAP_ODP_SERVICE` / `ERPL_SAP_ODP_ENTITY_SET` and skip with a stated
+  reason when those are unset:
+  `make test_debug_sap ERPL_SAP_ODP_SERVICE=Z_ODP_BW_1_SRV ERPL_SAP_ODP_ENTITY_SET=FactsOf0D_NW_C01`.
+  Pass them through the target rather than exporting them by hand: sqllogictest's
+  `require-env` skips only when `getenv` returns null, so an **empty but exported**
+  variable runs the ODP cases and fails them. The target omits the variables entirely
+  when they are empty, which is the only shape that skips correctly. Function
+  registration is covered unconditionally in `test/sql/odp_functions_registered.test`, so
+  it does not skip along with the live cases.
 - `make test_build_guard` - Regression test for GitHub #45 (pure CMake, no build needed). Verifies the dev-only C++ test target stays gated on the in-tree `duckdb` submodule so consumers who statically link erpl_web (via `duckdb_extension_load`/FetchContent, where the submodule is absent) don't try to compile `test/cpp` and hit `catch.hpp file not found`. Run after touching the `add_subdirectory(test)` guard in `CMakeLists.txt`.
 - `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`)
 

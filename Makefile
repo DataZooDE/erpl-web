@@ -32,8 +32,22 @@ release_win: ${EXTENSION_CONFIG_STEP}
 	cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_RELEASE_FLAGS) $(VCPKG_MANIFEST_FLAGS) -DCMAKE_BUILD_TYPE=Release -S $(DUCKDB_SRCDIR) -B build/release
 	cmake --build build/release --config Release --parallel
 
+# Run the SAP integration tests against the local A4H sandbox.
+#
+# The ODP cases additionally need a provisioned ODP service, which a stock system does
+# not have. Name it to opt in; leave the variables unset and those cases skip with a
+# stated reason instead of failing:
+#   ERPL_SAP_ODP_SERVICE     - e.g. Z_ODP_BW_1_SRV
+#   ERPL_SAP_ODP_ENTITY_SET  - e.g. FactsOf0D_NW_C01
+# The variables must be ABSENT, not empty, when there is no ODP service: sqllogictest's
+# require-env skips only when getenv returns null, so exporting an empty value would run
+# the ODP cases and fail them - exactly what the gate exists to prevent.
+ERPL_SAP_ODP_ENV := $(if $(ERPL_SAP_ODP_SERVICE),ERPL_SAP_ODP_SERVICE='$(ERPL_SAP_ODP_SERVICE)') \
+                    $(if $(ERPL_SAP_ODP_ENTITY_SET),ERPL_SAP_ODP_ENTITY_SET='$(ERPL_SAP_ODP_ENTITY_SET)')
+
 test_debug_sap: ${EXTENSION_CONFIG_STEP}
-	ERPL_SAP_BASE_URL='http://localhost:50000' ERPL_SAP_PASSWORD='ABAPtr2023#00' ./build/debug/test/unittest "[sap]"
+	ERPL_SAP_BASE_URL='http://localhost:50000' ERPL_SAP_PASSWORD='ABAPtr2023#00' \
+		$(ERPL_SAP_ODP_ENV) ./build/debug/test/unittest "[sap]"
 
 # Run Microsoft 365 / Graph API integration tests against a real tenant.
 # Requires environment variables sourced from an Azure App Registration with
