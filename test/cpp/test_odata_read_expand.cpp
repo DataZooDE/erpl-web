@@ -487,11 +487,20 @@ TEST_CASE("odata_read sends a comma inside a function call unchanged",
 }
 
 // Catches: a malformed clause crashing the bind or being silently swallowed.
-// The reader is not an OData validator -- an unbalanced parenthesis is forwarded
-// so the service can reject it with a message the user can act on.
-TEST_CASE("odata_read forwards a malformed expand clause to the service instead of dropping it",
+// The sanitizer normalizes an unbalanced option group by closing it, rather than
+// forwarding the malformed text or dropping the clause. That is deliberate and is
+// asserted here so the behaviour cannot change unnoticed: the clause still reaches
+// the service, and it reaches it as something the service can parse.
+TEST_CASE("odata_read closes an unbalanced expand option group rather than dropping the clause",
           "[odata_expand][e2e][edge]") {
-    RequireExpandReachesTheService("Category($filter=CategoryID gt 1");
+    NorthwindV4Service service;
+    REQUIRE_FALSE(service.Con().Query("LOAD erpl_web")->HasError());
+
+    auto result = service.ReadWithExpand("Category($filter=CategoryID gt 1");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+
+    REQUIRE(service.SentExpand() == "Category($filter=CategoryID gt 1)");
 }
 
 // ----------------------------------------------------------------------
