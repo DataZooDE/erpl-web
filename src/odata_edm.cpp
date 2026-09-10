@@ -8,20 +8,73 @@ EdmCache& EdmCache::GetInstance() {
     return instance;
 }
 
-duckdb::optional_ptr<Edmx> EdmCache::Get(const std::string& metadata_url) {
-    std::lock_guard<std::mutex> lock(cache_lock);
-    auto url_without_fragment = UrlWithoutFragment(metadata_url);
-    auto it = cache.find(url_without_fragment);
-    if (it != cache.end()) {
-        return duckdb::optional_ptr<Edmx>(&(it->second));
+bool EdmCache::IsExpired(const Entry& entry, std::chrono::steady_clock::time_point now) const {
+    if (entry_lifetime < std::chrono::seconds::zero()) {
+        return false;
     }
-    return duckdb::optional_ptr<Edmx>();
+    return (now - entry.stored_at) >= entry_lifetime;
 }
 
-void EdmCache::Set(const std::string& metadata_url, Edmx edmx) {
+void EdmCache::EvictExpired(std::chrono::steady_clock::time_point now) {
+    if (entry_lifetime < std::chrono::seconds::zero()) {
+        return;
+    }
+    for (auto it = cache.begin(); it != cache.end();) {
+        it = IsExpired(it->second, now) ? cache.erase(it) : std::next(it);
+    }
+}
+
+std::shared_ptr<const Edmx> EdmCache::Get(const std::string& metadata_url) {
+    const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(cache_lock);
-    auto url_without_fragment = UrlWithoutFragment(metadata_url);
-    cache[url_without_fragment] = std::move(edmx);
+
+    // Sweeping on every lookup keeps the map from growing without bound in a
+    // long-lived process that attaches many services. See GitHub #106.
+    EvictExpired(now);
+
+    const auto url_without_fragment = UrlWithoutFragment(metadata_url);
+    const auto it = cache.find(url_without_fragment);
+    if (it == cache.end()) {
+        return nullptr;
+    }
+    // The shared_ptr copy leaves the lock with the caller; whatever happens to the map
+    // slot afterwards, the document the caller reads stays alive and unchanged.
+    return it->second.edmx;
+}
+
+std::shared_ptr<const Edmx> EdmCache::Set(const std::string& metadata_url, Edmx edmx) {
+    auto snapshot = std::make_shared<const Edmx>(std::move(edmx));
+    const auto now = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(cache_lock);
+    EvictExpired(now);
+    cache[UrlWithoutFragment(metadata_url)] = Entry{snapshot, now};
+    return snapshot;
+}
+
+void EdmCache::Invalidate(const std::string& metadata_url) {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    cache.erase(UrlWithoutFragment(metadata_url));
+}
+
+void EdmCache::Clear() {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    cache.clear();
+}
+
+size_t EdmCache::Size() const {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    return cache.size();
+}
+
+void EdmCache::SetEntryLifetime(std::chrono::seconds lifetime) {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    entry_lifetime = lifetime;
+}
+
+std::chrono::seconds EdmCache::GetEntryLifetime() const {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    return entry_lifetime;
 }
 
 std::string EdmCache::UrlWithoutFragment(const std::string& url_str) const {
@@ -29,6 +82,88 @@ std::string EdmCache::UrlWithoutFragment(const std::string& url_str) const {
     auto url = HttpUrl(url_str);
     ss << url.ToSchemeHostAndPort() << url.ToPathQuery();
     return ss.str();
+}
+
+// -----------------------------------------------------------------------------
+// The one EDM primitive type table
+// -----------------------------------------------------------------------------
+namespace {
+
+struct EdmPrimitiveMapping {
+    const char *edm_type_name;
+    duckdb::LogicalTypeId logical_type_id;
+    const char *duckdb_type_name;
+};
+
+// Edm.Byte is UNSIGNED (0..255); Edm.SByte is the signed one (-128..127). Mapping both
+// to TINYINT silently NULLed 128..255 (GitHub #68). Edm.Decimal appears here without
+// precision or scale; property-aware callers go through BuildDecimalLogicalType instead.
+const EdmPrimitiveMapping EDM_PRIMITIVE_MAPPINGS[] = {
+    {"Edm.Binary",         duckdb::LogicalTypeId::BLOB,      "BLOB"},
+    {"Edm.Boolean",        duckdb::LogicalTypeId::BOOLEAN,   "BOOLEAN"},
+    {"Edm.Byte",           duckdb::LogicalTypeId::UTINYINT,  "UTINYINT"},
+    {"Edm.SByte",          duckdb::LogicalTypeId::TINYINT,   "TINYINT"},
+    {"Edm.Date",           duckdb::LogicalTypeId::DATE,      "DATE"},
+    {"Edm.DateTime",       duckdb::LogicalTypeId::TIMESTAMP, "TIMESTAMP"},
+    {"Edm.DateTimeOffset", duckdb::LogicalTypeId::TIMESTAMP, "TIMESTAMP"},
+    {"Edm.Decimal",        duckdb::LogicalTypeId::DECIMAL,   "DECIMAL"},
+    {"Edm.Double",         duckdb::LogicalTypeId::DOUBLE,    "DOUBLE"},
+    {"Edm.Duration",       duckdb::LogicalTypeId::INTERVAL,  "INTERVAL"},
+    {"Edm.Guid",           duckdb::LogicalTypeId::VARCHAR,   "VARCHAR"},
+    {"Edm.Int16",          duckdb::LogicalTypeId::SMALLINT,  "SMALLINT"},
+    {"Edm.Int32",          duckdb::LogicalTypeId::INTEGER,   "INTEGER"},
+    {"Edm.Int64",          duckdb::LogicalTypeId::BIGINT,    "BIGINT"},
+    {"Edm.Single",         duckdb::LogicalTypeId::FLOAT,     "FLOAT"},
+    {"Edm.Stream",         duckdb::LogicalTypeId::BLOB,      "BLOB"},
+    {"Edm.String",         duckdb::LogicalTypeId::VARCHAR,   "VARCHAR"},
+    {"Edm.Time",           duckdb::LogicalTypeId::TIME,      "TIME"},
+    {"Edm.TimeOfDay",      duckdb::LogicalTypeId::TIME,      "TIME"},
+};
+
+const EdmPrimitiveMapping *FindEdmPrimitiveMapping(const std::string &type_name) {
+    for (const auto &mapping : EDM_PRIMITIVE_MAPPINGS) {
+        if (type_name == mapping.edm_type_name) {
+            return &mapping;
+        }
+    }
+    return nullptr;
+}
+
+// Geography/Geometry are surfaced as VARCHAR for now; the family is recognised by prefix
+// because CSDL spells out a dozen of them.
+bool IsEdmSpatialType(const std::string &type_name) {
+    return type_name.rfind("Edm.Geography", 0) == 0 || type_name.rfind("Edm.Geometry", 0) == 0;
+}
+
+} // namespace
+
+duckdb::LogicalType DuckTypeConverter::ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name) {
+    if (const auto *mapping = FindEdmPrimitiveMapping(type_name)) {
+        return duckdb::LogicalType(mapping->logical_type_id);
+    }
+    // Unknown types, spatial ones included, fall back to VARCHAR.
+    return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+}
+
+std::string DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(const std::string &edm_type) {
+    if (const auto *mapping = FindEdmPrimitiveMapping(edm_type)) {
+        return mapping->duckdb_type_name;
+    }
+    return "VARCHAR";
+}
+
+duckdb::LogicalType DuckTypeConverter::operator()(PrimitiveType &type) const {
+    // Edm.GeographyPoint is the one spatial type this path models structurally, as a pair
+    // of doubles. The string-keyed mapping above still reports VARCHAR for it, which is a
+    // pre-existing inconsistency between the two entry points and not one this change
+    // introduces; unifying them would change catalog column types.
+    if (type == erpl_web::GeographyPoint) {
+        return duckdb::LogicalType::LIST(duckdb::LogicalType(duckdb::LogicalTypeId::DOUBLE));
+    }
+    if (IsEdmSpatialType(type.name)) {
+        return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    }
+    return ConvertEdmPrimitiveStringToLogicalType(type.name);
 }
 
 // Version-specific parsing methods

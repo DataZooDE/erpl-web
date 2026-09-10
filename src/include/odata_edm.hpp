@@ -11,6 +11,7 @@
 #include <variant>
 #include <iostream>
 #include <memory>
+#include <chrono>
 
 // Cross-platform string comparison
 #ifdef _WIN32
@@ -2062,53 +2063,13 @@ private:
 class DuckTypeConverter 
 {
     public:
-        DuckTypeConverter(Edmx &edmx) : edmx(edmx) {}
+        explicit DuckTypeConverter(const Edmx &edmx) : edmx(edmx) {}
 
-        // Central primitive EDM->DuckDB LogicalType mapping
-        static duckdb::LogicalType ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name) {
-            if (type_name == "Edm.Binary") {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type_name == "Edm.Boolean") {
-                return duckdb::LogicalTypeId::BOOLEAN;
-            } else if (type_name == "Edm.Byte") {
-                // Edm.Byte is an UNSIGNED 8-bit integer (0..255); Edm.SByte is the signed
-                // one (-128..127). Mapping both to TINYINT silently NULLed 128..255. (GitHub #68)
-                return duckdb::LogicalTypeId::UTINYINT;
-            } else if (type_name == "Edm.SByte") {
-                return duckdb::LogicalTypeId::TINYINT;
-            } else if (type_name == "Edm.Date") {
-                return duckdb::LogicalTypeId::DATE;
-            } else if (type_name == "Edm.DateTime" || type_name == "Edm.DateTimeOffset") {
-                return duckdb::LogicalTypeId::TIMESTAMP;
-            } else if (type_name == "Edm.Decimal") {
-                return duckdb::LogicalTypeId::DECIMAL;
-            } else if (type_name == "Edm.Double") {
-                return duckdb::LogicalTypeId::DOUBLE;
-            } else if (type_name == "Edm.Duration") {
-                return duckdb::LogicalTypeId::INTERVAL;
-            } else if (type_name == "Edm.Guid") {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type_name == "Edm.Int16") {
-                return duckdb::LogicalTypeId::SMALLINT;
-            } else if (type_name == "Edm.Int32") {
-                return duckdb::LogicalTypeId::INTEGER;
-            } else if (type_name == "Edm.Int64") {
-                return duckdb::LogicalTypeId::BIGINT;
-            } else if (type_name == "Edm.Single") {
-                return duckdb::LogicalTypeId::FLOAT;
-            } else if (type_name == "Edm.Stream") {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type_name == "Edm.String") {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type_name == "Edm.Time" || type_name == "Edm.TimeOfDay") {
-                return duckdb::LogicalTypeId::TIME;
-            } else if (type_name.find("Edm.Geography") == 0 || type_name.find("Edm.Geometry") == 0) {
-                return duckdb::LogicalTypeId::VARCHAR; // Geography/Geometry types as VARCHAR for now
-            } else {
-                // Fallback for unknown types - treat as VARCHAR
-                return duckdb::LogicalTypeId::VARCHAR;
-            }
-        }
+        // The single EDM primitive -> DuckDB type mapping. Everything that needs to know
+        // what "Edm.Int32" means goes through here (or through the string-valued sibling
+        // below, which reads the same table); there used to be three hand-written copies,
+        // which is how Edm.Byte stayed wrong in all of them at once (GitHub #68).
+        static duckdb::LogicalType ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name);
 
         // Build the DuckDB type for an Edm.Decimal property from its CSDL facets.
         //
@@ -2136,7 +2097,7 @@ class DuckTypeConverter
         }
 
         // Central property-aware mapping (handles Decimal p/s and Collection(...))
-        static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, Edmx &edmx) {
+        static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, const Edmx &edmx) {
             // Detect Collection(T)
             std::regex collection_regex("Collection\\(([^\\)]+)\\)");
             std::smatch match;
@@ -2166,99 +2127,11 @@ class DuckTypeConverter
             return duck_type;
         }
 
-        // Static method to convert EDM type string to DuckDB type string (for catalog functions)
-        static std::string ConvertEdmTypeStringToDuckDbTypeString(const std::string& edm_type) {
-            if (edm_type == "Edm.Binary") {
-                return "BLOB";
-            } else if (edm_type == "Edm.Boolean") {
-                return "BOOLEAN";
-            } else if (edm_type == "Edm.Byte") {
-                return "UTINYINT"; // unsigned 0..255, unlike Edm.SByte (GitHub #68)
-            } else if (edm_type == "Edm.SByte") {
-                return "TINYINT";
-            } else if (edm_type == "Edm.Date") {
-                return "DATE";
-            } else if (edm_type == "Edm.DateTime" || edm_type == "Edm.DateTimeOffset") {
-                return "TIMESTAMP";
-            } else if (edm_type == "Edm.Decimal") {
-                return "DECIMAL";
-            } else if (edm_type == "Edm.Double") {
-                return "DOUBLE";
-            } else if (edm_type == "Edm.Duration") {
-                return "INTERVAL";
-            } else if (edm_type == "Edm.Guid") {
-                return "VARCHAR";
-            } else if (edm_type == "Edm.Int16") {
-                return "SMALLINT";
-            } else if (edm_type == "Edm.Int32") {
-                return "INTEGER";
-            } else if (edm_type == "Edm.Int64") {
-                return "BIGINT";
-            } else if (edm_type == "Edm.Single") {
-                return "FLOAT";
-            } else if (edm_type == "Edm.Stream") {
-                return "BLOB";
-            } else if (edm_type == "Edm.String") {
-                return "VARCHAR";
-            } else if (edm_type == "Edm.Time") {
-                return "TIME";
-            } else if (edm_type == "Edm.TimeOfDay") {
-                return "TIME";
-            } else if (edm_type.find("Edm.Geography") == 0 || edm_type.find("Edm.Geometry") == 0) {
-                return "VARCHAR"; // Geography/Geometry types as VARCHAR for now
-            } else {
-                // Fallback for unknown types - treat as VARCHAR
-                return "VARCHAR";
-            }
-        }
+        // The same mapping expressed as a DuckDB type name, for the catalog functions that
+        // report column types as strings.
+        static std::string ConvertEdmTypeStringToDuckDbTypeString(const std::string& edm_type);
 
-        duckdb::LogicalType operator()(PrimitiveType &type) const 
-        {
-            if (type == erpl_web::Binary) {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type == erpl_web::Boolean) {
-                return duckdb::LogicalTypeId::BOOLEAN;
-            } else if (type == erpl_web::Byte) {
-                return duckdb::LogicalTypeId::UTINYINT; // unsigned 0..255 (GitHub #68)
-            } else if (type == erpl_web::Date) {
-                return duckdb::LogicalTypeId::DATE;
-            } else if (type == erpl_web::DateTime) {
-                return duckdb::LogicalTypeId::TIMESTAMP;
-            } else if (type == erpl_web::DateTimeOffset) {
-                return duckdb::LogicalTypeId::TIMESTAMP;
-            } else if (type == erpl_web::Decimal) {
-                return duckdb::LogicalTypeId::DECIMAL;
-            } else if (type == erpl_web::Double) {
-                return duckdb::LogicalTypeId::DOUBLE;
-            } else if (type == erpl_web::Duration) {
-                return duckdb::LogicalTypeId::INTERVAL;
-            } else if (type == erpl_web::Guid) {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type == erpl_web::Int16) {
-                return duckdb::LogicalTypeId::SMALLINT;
-            } else if (type == erpl_web::Int32) {
-                return duckdb::LogicalTypeId::INTEGER;
-            } else if (type == erpl_web::Int64) {
-                return duckdb::LogicalTypeId::BIGINT;
-            } else if (type == erpl_web::SByte) {
-                return duckdb::LogicalTypeId::TINYINT;
-            } else if (type == erpl_web::Single) {
-                return duckdb::LogicalTypeId::FLOAT;
-            } else if (type == erpl_web::Stream) {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type == erpl_web::String) {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type == erpl_web::Time) {
-                return duckdb::LogicalTypeId::TIME;
-            } else if (type == erpl_web::TimeOfDay) {
-                return duckdb::LogicalTypeId::TIME;
-            } else if (type == erpl_web::GeographyPoint) {
-                return duckdb::LogicalType::LIST(duckdb::LogicalTypeId::DOUBLE);
-            } else {
-                // Fallback for unknown primitive types - treat as VARCHAR
-                return duckdb::LogicalTypeId::VARCHAR;
-            }
-        }
+        duckdb::LogicalType operator()(PrimitiveType &type) const;
 
         duckdb::LogicalType operator()(EnumType &type) const 
         {
@@ -2426,13 +2299,15 @@ class DuckTypeConverter
 
     
     public:
-        Edmx &edmx;
+        // Held by const reference: the EDM is shared, potentially across connections
+        // via EdmCache, and this converter only reads it.
+        const Edmx &edmx;
 };
 
 // Centralized OData EDM-based type builder utilities (for expand schema)
 class ODataEdmTypeBuilder {
 public:
-    explicit ODataEdmTypeBuilder(Edmx &edmx) : edmx(edmx), converter(edmx) {}
+    explicit ODataEdmTypeBuilder(const Edmx &edmx) : edmx(edmx), converter(edmx) {}
 
     // Resolve (is_collection, target_type_name) for a navigation property on an entity type
     std::pair<bool, std::string> ResolveNavTargetOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const;
@@ -2448,26 +2323,67 @@ public:
                                                 const std::vector<std::string> &nested_children) const;
 
 private:
-    Edmx &edmx;
+    const Edmx &edmx;
     DuckTypeConverter converter;
 };
 
+// Process-global cache of parsed $metadata documents, keyed by metadata URL.
+//
+// Ownership: entries are handed out as shared_ptr<const Edmx> snapshots rather than as
+// pointers into the map. The previous optional_ptr<Edmx> was borrowed from a map entry
+// after the lock had already been released, so a concurrent Set() on the same URL --
+// two connections attaching or reading the same service is the normal case -- destroyed
+// the Edmx the first caller was still reading. A shared_ptr keeps the snapshot alive for
+// exactly as long as somebody holds it, and Set() replaces the map slot rather than the
+// object, so readers are never disturbed. The payload is const because it is shared.
 class EdmCache
 {
 public:
+    // A cached document is considered stale after this long. $metadata is not immutable:
+    // a service redeployment changes it, and without an expiry the entry survives for the
+    // lifetime of the process. See GitHub #106.
+    static constexpr int64_t DEFAULT_ENTRY_LIFETIME_SECONDS = 900;
+
     static EdmCache& GetInstance();
 
     EdmCache(const EdmCache&) = delete;
     EdmCache& operator=(const EdmCache&) = delete;
 
-    duckdb::optional_ptr<Edmx> Get(const std::string& key);
-    void Set(const std::string& key, Edmx edmx);
+    // Returns a snapshot, or nullptr when the URL is unknown or its entry has expired.
+    std::shared_ptr<const Edmx> Get(const std::string& metadata_url);
+
+    // Stores a snapshot and returns it, so a caller that has just parsed a document can
+    // hold the cached instance instead of keeping a private copy of it.
+    std::shared_ptr<const Edmx> Set(const std::string& metadata_url, Edmx edmx);
+
+    // Drops one entry (e.g. after a metadata request failed against a redeployed service).
+    void Invalidate(const std::string& metadata_url);
+
+    // Drops every entry. Mainly for tests and for a future `erpl_odata_clear_cache` pragma.
+    void Clear();
+
+    // Number of entries currently held, expired ones included.
+    size_t Size() const;
+
+    // Entry lifetime. Zero expires entries immediately; a negative value disables expiry.
+    void SetEntryLifetime(std::chrono::seconds lifetime);
+    std::chrono::seconds GetEntryLifetime() const;
 
 private:
     EdmCache() = default;
 
-    std::mutex cache_lock;
-    std::unordered_map<std::string, Edmx> cache;
+    struct Entry {
+        std::shared_ptr<const Edmx> edmx;
+        std::chrono::steady_clock::time_point stored_at;
+    };
+
+    // Caller must hold cache_lock.
+    bool IsExpired(const Entry& entry, std::chrono::steady_clock::time_point now) const;
+    void EvictExpired(std::chrono::steady_clock::time_point now);
+
+    mutable std::mutex cache_lock;
+    std::unordered_map<std::string, Entry> cache;
+    std::chrono::seconds entry_lifetime{DEFAULT_ENTRY_LIFETIME_SECONDS};
 
     std::string UrlWithoutFragment(const std::string& url) const;
 };
