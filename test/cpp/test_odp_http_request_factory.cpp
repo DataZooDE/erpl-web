@@ -120,48 +120,6 @@ TEST_CASE("OdpHttpRequestFactory Metadata Request", "[odp_http_factory]") {
     }
 }
 
-TEST_CASE("OdpHttpRequestFactory Termination Request", "[odp_http_factory]") {
-    OdpHttpRequestFactory factory;
-    std::string termination_url = "https://example.com/sap/opu/odata/sap/TEST_SRV/TerminateDeltasForEntityOfTest";
-
-    SECTION("Create termination request") {
-        auto request = factory.CreateTerminationRequest(termination_url);
-        
-        // Verify method and URL
-        REQUIRE(request.method == HttpMethod::GET);
-        REQUIRE(request.url.ToString().find("$format=json") != std::string::npos);
-        
-        // Verify OData v2 headers
-        REQUIRE(request.headers.at("DataServiceVersion") == "2.0");
-        REQUIRE(request.headers.at("MaxDataServiceVersion") == "2.0");
-        REQUIRE(request.headers.at("Accept") == "application/json;odata=verbose");
-        
-        // Verify no Prefer header for termination requests
-        REQUIRE(request.headers.find("Prefer") == request.headers.end());
-    }
-}
-
-TEST_CASE("OdpHttpRequestFactory Delta Token Discovery Request", "[odp_http_factory]") {
-    OdpHttpRequestFactory factory;
-    std::string delta_links_url = "https://example.com/sap/opu/odata/sap/TEST_SRV/DeltaLinksOfEntityOfTest";
-
-    SECTION("Create delta token discovery request") {
-        auto request = factory.CreateDeltaTokenDiscoveryRequest(delta_links_url);
-        
-        // Verify method and URL
-        REQUIRE(request.method == HttpMethod::GET);
-        REQUIRE(request.url.ToString().find("$format=json") != std::string::npos);
-        
-        // Verify OData v2 headers
-        REQUIRE(request.headers.at("DataServiceVersion") == "2.0");
-        REQUIRE(request.headers.at("MaxDataServiceVersion") == "2.0");
-        REQUIRE(request.headers.at("Accept") == "application/json;odata=verbose");
-        
-        // Verify no Prefer header for discovery requests
-        REQUIRE(request.headers.find("Prefer") == request.headers.end());
-    }
-}
-
 TEST_CASE("OdpHttpRequestFactory Custom Request Configuration", "[odp_http_factory]") {
     OdpHttpRequestFactory factory;
     std::string test_url = "https://example.com/test";

@@ -4,6 +4,8 @@
 #include "odata_client.hpp"
 #include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <optional>
@@ -50,18 +52,44 @@ public:
         std::shared_ptr<ODataEntitySetResponse> response;
         std::string extracted_delta_token;
         std::string extracted_delta_url;
+        /// Headers of the HTTP response that produced `response`. Preserved verbatim so that
+        /// callers can validate server behaviour (notably `Preference-Applied`) rather than
+        /// inferring it from the payload. `HeaderMap` lookup is case-insensitive.
+        HeaderMap response_headers;
+        /// True only when the server actually echoed `Preference-Applied: odata.track-changes`.
+        /// Never inferred from the presence of a delta token - see GitHub #97.
         bool preference_applied;
         bool has_more_pages;
         int http_status_code;
         size_t response_size_bytes;
-        
-        OdpRequestResult() 
+
+        OdpRequestResult()
             : preference_applied(false)
             , has_more_pages(false)
             , http_status_code(0)
-            , response_size_bytes(0) 
+            , response_size_bytes(0)
         {}
     };
+
+    /**
+     * @brief Bounds the re-poll loop that services HTTP 202 Accepted responses.
+     *
+     * SAP answers 202 while an extraction package is still being prepared. The client must
+     * wait and ask again; these limits stop that from becoming an unbounded stall.
+     */
+    struct RetryPolicy {
+        /// Maximum number of 202 responses tolerated before giving up.
+        uint32_t max_attempts = 20;
+        /// Wait used when a 202 carries no (or an unparsable) `Retry-After` header.
+        std::chrono::milliseconds default_delay{std::chrono::seconds(5)};
+        /// Upper bound on the summed wait across all re-polls of a single request.
+        std::chrono::milliseconds max_total_wait{std::chrono::minutes(10)};
+    };
+
+    /// Injection seam for the wait between re-polls. Defaults to `std::this_thread::sleep_for`.
+    /// Tests substitute a recording no-op so that they exercise the retry arithmetic without
+    /// actually sleeping.
+    using SleepFunction = std::function<void(std::chrono::milliseconds)>;
 
     /**
      * @brief Construct orchestrator with authentication parameters
@@ -162,6 +190,22 @@ public:
      */
     uint32_t GetDefaultPageSize() const;
 
+    /**
+     * @brief Replace the bounds applied to the HTTP 202 re-poll loop
+     */
+    void SetRetryPolicy(const RetryPolicy& policy);
+
+    /**
+     * @brief Get the bounds currently applied to the HTTP 202 re-poll loop
+     */
+    const RetryPolicy& GetRetryPolicy() const;
+
+    /**
+     * @brief Replace the function used to wait between re-polls (test seam)
+     * @param sleep_function Callable invoked with the duration to wait; ignored when empty
+     */
+    void SetSleepFunction(SleepFunction sleep_function);
+
 private:
     // Core components
     std::unique_ptr<OdpHttpRequestFactory> http_factory_;
@@ -172,6 +216,13 @@ private:
     // server-supplied follow-up URL is checked against it before credentials
     // are attached.
     std::string service_origin_url_;
+    RetryPolicy retry_policy_;
+    SleepFunction sleep_function_;
+
+    /// Send `request`, servicing any HTTP 202 Accepted responses by waiting for the interval the
+    /// server asks for and asking again, within the bounds of `retry_policy_`.
+    std::unique_ptr<HttpResponse> SendRequestHandlingAccepted(const HttpRequest& request,
+                                                             const std::string& operation_type);
 
     // Helper methods
     OdpRequestResult ExecuteRequest(const HttpRequest& request, const std::string& operation_type);
@@ -187,6 +238,21 @@ public:
     static std::string EnsureJsonFormat(const std::string& url);
     static bool HasJsonFormat(const std::string& url);
     static bool ValidatePreferenceApplied(const HttpResponse& response);
+
+    /**
+     * @brief Parse an HTTP `Retry-After` header value (RFC 7231 section 7.1.3)
+     *
+     * Accepts both permitted forms: delta-seconds (`"120"`) and an HTTP-date
+     * (`"Wed, 21 Oct 2015 07:28:00 GMT"`, plus the two obsolete date formats recipients are
+     * required to tolerate). A date already in the past yields a zero wait.
+     *
+     * @param header_value Raw header value
+     * @param now Reference instant against which an HTTP-date is measured
+     * @return The wait requested, or std::nullopt when the value cannot be parsed
+     */
+    static std::optional<std::chrono::milliseconds> ParseRetryAfter(
+        const std::string& header_value,
+        std::chrono::system_clock::time_point now);
 
     // Strip surrounding single/double quotes from a raw delta token if present.
     static std::string NormalizeDeltaToken(const std::string& raw);

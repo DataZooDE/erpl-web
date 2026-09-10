@@ -62,20 +62,6 @@ public:
     HttpRequest CreateMetadataRequest(const std::string& metadata_url);
 
     /**
-     * @brief Create HTTP request for ODP subscription termination
-     * @param termination_url URL for termination function
-     * @return Configured HttpRequest for subscription termination
-     */
-    HttpRequest CreateTerminationRequest(const std::string& termination_url);
-
-    /**
-     * @brief Create HTTP request for delta token discovery
-     * @param delta_links_url URL for DeltaLinksOf<EntitySet> endpoint
-     * @return Configured HttpRequest for delta token discovery
-     */
-    HttpRequest CreateDeltaTokenDiscoveryRequest(const std::string& delta_links_url);
-
-    /**
      * @brief Create generic ODP request with custom configuration
      * @param method HTTP method
      * @param url Target URL
