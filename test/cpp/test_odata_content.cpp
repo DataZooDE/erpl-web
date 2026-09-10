@@ -853,3 +853,34 @@ TEST_CASE("Test a v2 page without a results array but with a next link yields ze
     REQUIRE(content.ToRows(column_names, column_types).empty());
     REQUIRE(content.NextUrl().has_value());
 }
+
+TEST_CASE("A v3 minimalmetadata payload is parsed by shape, not by its version header",
+          "[odata_content]") {
+    // services.odata.org/northwind/northwind.svc announces "DataServiceVersion: 3.0" and
+    // returns a "value" array, because the JSON SHAPE is set by the format
+    // (minimalmetadata/fullmetadata/nometadata all use "value"; only verbose wraps rows in
+    // "d"), not by the protocol version. Letting the header decide sent this document down
+    // the v2 path, which then failed with "No value array found" on a perfectly good
+    // response. The payload is ground truth for how to parse; headers only break ties.
+    const std::string v3_minimal_metadata = R"({
+        "odata.metadata": "https://services.odata.org/Northwind/Northwind.svc/$metadata#Customers",
+        "value": [ { "CustomerID": "ALFKI" } ]
+    })";
+
+    HeaderMap headers;
+    headers["DataServiceVersion"] = "3.0;";
+
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion(v3_minimal_metadata, headers) == ODataVersion::V4);
+}
+
+TEST_CASE("Headers still decide when the payload carries no discriminator", "[odata_content]") {
+    // This is what #77 was actually about: an empty or error body tells us nothing, so the
+    // declared version is the only signal left.
+    HeaderMap v2_headers;
+    v2_headers["DataServiceVersion"] = "2.0";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion("{}", v2_headers) == ODataVersion::V2);
+
+    HeaderMap v4_headers;
+    v4_headers["OData-Version"] = "4.0;NetFx";
+    REQUIRE(ODataJsonContentMixin::DetectODataVersion("{}", v4_headers) == ODataVersion::V4);
+}

@@ -150,17 +150,27 @@ ODataVersion ODataJsonContentMixin::DetectODataVersionFromHeaders(const HeaderMa
 
 ODataVersion ODataJsonContentMixin::DetectODataVersion(const std::string& content, const HeaderMap& headers)
 {
-    const auto from_headers = DetectODataVersionFromHeaders(headers);
-    if (from_headers != ODataVersion::UNKNOWN) {
-        return from_headers;
-    }
-
+    // The payload wins whenever it carries a discriminator, because what this decides is
+    // how to PARSE the body, and the body is ground truth for that. The protocol version
+    // in the header does not determine the JSON shape: OData v3 announces
+    // "DataServiceVersion: 3.0" for both the verbose format, which wraps rows in "d", and
+    // the minimalmetadata/fullmetadata/nometadata formats, which use a "value" array like
+    // v4. Trusting the header there sends a v3 minimalmetadata response down the v2 path,
+    // which then fails with "No value array found" on a perfectly good document -
+    // services.odata.org/northwind/northwind.svc does exactly this.
     const auto from_payload = DetectODataVersionFromPayload(content);
     if (from_payload != ODataVersion::UNKNOWN) {
         return from_payload;
     }
 
-    ERPL_TRACE_DEBUG("DETECT_VERSION", "Neither headers nor payload are conclusive, defaulting to V4");
+    // Only once the body says nothing - an empty body, a non-JSON body, or an error
+    // document - do the headers decide. That is the case #77 was really about.
+    const auto from_headers = DetectODataVersionFromHeaders(headers);
+    if (from_headers != ODataVersion::UNKNOWN) {
+        return from_headers;
+    }
+
+    ERPL_TRACE_DEBUG("DETECT_VERSION", "Neither payload nor headers are conclusive, defaulting to V4");
     return ODataVersion::V4;
 }
 

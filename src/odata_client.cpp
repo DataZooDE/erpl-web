@@ -145,12 +145,17 @@ std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataConten
     ERPL_TRACE_DEBUG("ODATA_CONTENT", "Content size: " + std::to_string(content.length()) + " bytes");
     
     if (ODataJsonContentMixin::IsJsonContentType(ContentType())) {
-        // Detection order (GitHub #77): what the service declared in its response headers, then
-        // payload sniffing, then the version the metadata document implied - which is what the
-        // `odata_version` parameter carries. Guessing V4 is the last resort, not the first.
-        auto detected_version = ODataJsonContentMixin::DetectODataVersionFromHeaders(http_response->headers);
+        // Detection order (GitHub #77): the payload first, because what this decides is how to
+        // PARSE the body and the body is ground truth for that. The declared protocol version
+        // does not determine the JSON shape - OData v3 announces "DataServiceVersion: 3.0" for
+        // both the verbose format, which wraps rows in "d", and the minimalmetadata format,
+        // which uses a "value" array like v4. Then the headers, which are what actually helps
+        // when the body says nothing (empty, non-JSON, or an error document). Then the version
+        // the metadata document implied, carried by `odata_version`. Guessing V4 is the last
+        // resort, not the first.
+        auto detected_version = ODataJsonContentMixin::DetectODataVersionFromPayload(content);
         if (detected_version == ODataVersion::UNKNOWN) {
-            detected_version = ODataJsonContentMixin::DetectODataVersionFromPayload(content);
+            detected_version = ODataJsonContentMixin::DetectODataVersionFromHeaders(http_response->headers);
         }
         if (detected_version == ODataVersion::UNKNOWN) {
             detected_version = (odata_version != ODataVersion::UNKNOWN) ? odata_version : ODataVersion::V4;
