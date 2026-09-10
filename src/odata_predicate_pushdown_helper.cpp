@@ -787,6 +787,16 @@ std::string ODataPredicatePushdownHelper::SkipTokenClause() const {
     }
 }
 
+namespace {
+
+// DuckDB 1.5 appended TableFilterType::BLOOM_FILTER (= 10). The 1.4 LTS line, which this
+// extension still builds against, stops at EXPRESSION_FILTER (= 9) and has no such
+// enumerator, so naming it directly fails to compile there. The numeric value is stable
+// and unused on 1.4, which makes this case label simply unreachable on the LTS build.
+constexpr auto BLOOM_FILTER_TABLE_FILTER_TYPE = static_cast<duckdb::TableFilterType>(10);
+
+}  // namespace
+
 std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const {
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Translating filter for column '" + column_name + "' with filter type: " + std::to_string(static_cast<int>(filter.filter_type)));
     
@@ -822,7 +832,7 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
                 result = "";
             }
             break;
-        case duckdb::TableFilterType::BLOOM_FILTER:
+        case BLOOM_FILTER_TABLE_FILTER_TYPE:
             // A probabilistic join pre-filter: dropping it costs only the rows it would
             // have skipped early, never correctness.
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",

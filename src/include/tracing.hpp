@@ -20,6 +20,19 @@
 #ifdef DEBUG
 #undef DEBUG
 #endif
+// INFO and WARN are a special case. The other names here collide with OBJECT-like macros
+// from the Windows SDK (ERROR is #define ERROR 0 in wingdi.h), which would expand inside
+// "TraceLevel::ERROR" and have to be removed outright. INFO and WARN, in a test
+// translation unit, are Catch's FUNCTION-like macros - and undefining them here silently
+// deleted Catch's INFO()/WARN() for every test that includes this header after catch.hpp,
+// breaking the MSVC build across test_odata_content.cpp, test_odata_protocol_core.cpp and
+// test_odata_read_expand.cpp with "error C3861: 'INFO': identifier not found".
+//
+// A function-like macro only expands when followed by "(", so "TraceLevel::INFO" is
+// unaffected by one being defined. Saving and restoring them therefore lets the
+// enumerators below compile while leaving Catch's macros intact for the rest of the unit.
+#pragma push_macro("INFO")
+#pragma push_macro("WARN")
 #ifdef INFO
 #undef INFO
 #endif
@@ -38,6 +51,8 @@
 #ifdef BOTH
 #undef BOTH
 #endif
+#pragma pop_macro("WARN")
+#pragma pop_macro("INFO")
 #ifdef min
 #undef min
 #endif
