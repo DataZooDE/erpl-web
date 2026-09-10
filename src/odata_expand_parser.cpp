@@ -1,249 +1,316 @@
 #include "odata_expand_parser.hpp"
-#include <sstream>
-#include <algorithm>
-#include <cctype>
-#include <cstring>
+
+#include <cstddef>
+#include <string>
+#include <vector>
 
 namespace erpl_web {
 
 namespace {
-	// Return the substring between the first '(' and its matching ')' or empty when absent
-	static inline std::string ExtractOptionsSubstring(const std::string& path) {
-		size_t paren_start = path.find('(');
-		if (paren_start == std::string::npos) {
-			return "";
-		}
-		size_t paren_end = path.rfind(')');
-		if (paren_end == std::string::npos || paren_end <= paren_start) {
-			return "";
-		}
-		return path.substr(paren_start + 1, paren_end - paren_start - 1);
-	}
 
-	// Find an option value inside options substring and return "key + value" or empty
-	static inline std::string ExtractOptionClause(const std::string& options, const char* key) {
-		if (options.empty()) {
-			return "";
-		}
-		size_t key_pos = options.find(key);
-		if (key_pos == std::string::npos) {
-			return "";
-		}
-		size_t value_start = key_pos + std::strlen(key);
-		size_t value_end = options.find(';', value_start);
-		if (value_end == std::string::npos) {
-			value_end = options.length();
-		}
-		return std::string(key) + options.substr(value_start, value_end - value_start);
-	}
+constexpr char SINGLE_QUOTE = '\'';
+constexpr char PAREN_OPEN = '(';
+constexpr char PAREN_CLOSE = ')';
+constexpr char SEGMENT_SEPARATOR = '/';
+constexpr char OPTION_SEPARATOR = ';';
+constexpr char PATH_SEPARATOR = ',';
 
-	// Extract sub-expands from options substring, e.g., for "($expand=Services(),Other)" → ["Services", "Other"]
-	static inline std::vector<std::string> ExtractSubExpandsFromOptions(const std::string &path) {
-		std::vector<std::string> result;
-		const std::string options = ExtractOptionsSubstring(path);
-		if (options.empty()) {
-			return result;
+// Return the index just past the closing quote of the literal that starts at
+// open_quote. OData escapes a single quote by doubling it ('O''Brien'), so a
+// doubled quote continues the literal instead of terminating it. An
+// unterminated literal consumes the rest of the input.
+std::size_t SkipQuotedLiteral(const std::string& text, std::size_t open_quote) {
+	std::size_t i = open_quote + 1;
+	while (i < text.size()) {
+		if (text[i] != SINGLE_QUOTE) {
+			i++;
+			continue;
 		}
-		std::string expand_clause = ExtractOptionClause(options, "$expand=");
-		if (expand_clause.empty()) {
-			return result;
+		if (i + 1 < text.size() && text[i + 1] == SINGLE_QUOTE) {
+			i += 2;
+			continue;
 		}
-		// Strip the "$expand=" prefix
-		const std::string prefix = "$expand=";
-		if (expand_clause.rfind(prefix, 0) == 0) {
-			expand_clause = expand_clause.substr(prefix.size());
-		}
-		// Split by comma at top-level (simple parser; nested options are ignored here)
-		std::stringstream ss(expand_clause);
-		std::string item;
-		while (std::getline(ss, item, ',')) {
-			// Trim
-			size_t start = item.find_first_not_of(" \t\r\n");
-			size_t end = item.find_last_not_of(" \t\r\n");
-			std::string trimmed = (start == std::string::npos) ? std::string() : item.substr(start, end - start + 1);
-			if (trimmed.empty()) continue;
-			// Take the token before '(' if present, e.g., "Services()" → "Services"
-			size_t paren = trimmed.find('(');
-			if (paren != std::string::npos && paren > 0) {
-				trimmed = trimmed.substr(0, paren);
-				// Trim again
-				size_t s2 = trimmed.find_first_not_of(" \t\r\n");
-				size_t e2 = trimmed.find_last_not_of(" \t\r\n");
-				trimmed = (s2 == std::string::npos) ? std::string() : trimmed.substr(s2, e2 - s2 + 1);
-			}
-			if (!trimmed.empty()) {
-				result.push_back(trimmed);
-			}
-		}
-		return result;
+		return i + 1;
 	}
+	return i;
 }
 
+// Split text at every occurrence of delimiter that is neither nested inside
+// parentheses nor inside a quoted string literal.
+std::vector<std::string> SplitTopLevel(const std::string& text, char delimiter) {
+	std::vector<std::string> parts;
+	std::size_t depth = 0;
+	std::size_t start = 0;
+	std::size_t i = 0;
+	while (i < text.size()) {
+		const char c = text[i];
+		if (c == SINGLE_QUOTE) {
+			i = SkipQuotedLiteral(text, i);
+			continue;
+		}
+		if (c == PAREN_OPEN) {
+			depth++;
+			i++;
+			continue;
+		}
+		if (c == PAREN_CLOSE) {
+			if (depth > 0) {
+				depth--;
+			}
+			i++;
+			continue;
+		}
+		if (depth == 0 && c == delimiter) {
+			parts.push_back(text.substr(start, i - start));
+			start = i + 1;
+		}
+		i++;
+	}
+	parts.push_back(text.substr(start));
+	return parts;
+}
+
+// Locate the balanced option group of a segment. Returns the index of the
+// opening parenthesis and writes the index of its match to close_index, or
+// npos when there is no balanced group (e.g. a malformed "Nav($filter=x").
+std::size_t FindOptionGroup(const std::string& segment, std::size_t& close_index) {
+	std::size_t i = 0;
+	while (i < segment.size()) {
+		const char c = segment[i];
+		if (c == SINGLE_QUOTE) {
+			i = SkipQuotedLiteral(segment, i);
+			continue;
+		}
+		if (c == PAREN_OPEN) {
+			break;
+		}
+		i++;
+	}
+	if (i >= segment.size()) {
+		return std::string::npos;
+	}
+
+	const std::size_t open_index = i;
+	std::size_t depth = 0;
+	while (i < segment.size()) {
+		const char c = segment[i];
+		if (c == SINGLE_QUOTE) {
+			i = SkipQuotedLiteral(segment, i);
+			continue;
+		}
+		if (c == PAREN_OPEN) {
+			depth++;
+			i++;
+			continue;
+		}
+		if (c == PAREN_CLOSE) {
+			depth--;
+			if (depth == 0) {
+				close_index = i;
+				return open_index;
+			}
+			i++;
+			continue;
+		}
+		i++;
+	}
+	return std::string::npos;
+}
+
+std::string Trim(const std::string& str) {
+	const std::size_t start = str.find_first_not_of(" \t\r\n");
+	if (start == std::string::npos) {
+		return "";
+	}
+	const std::size_t end = str.find_last_not_of(" \t\r\n");
+	return str.substr(start, end - start + 1);
+}
+
+// Split one path segment into its navigation property name and the raw content
+// of its option group (without the surrounding parentheses).
+void SplitSegment(const std::string& segment, std::string& name, std::string& options) {
+	std::size_t close_index = std::string::npos;
+	const std::size_t open_index = FindOptionGroup(segment, close_index);
+	if (open_index != std::string::npos) {
+		name = Trim(segment.substr(0, open_index));
+		options = segment.substr(open_index + 1, close_index - open_index - 1);
+		return;
+	}
+
+	// Unbalanced parentheses: keep the name, discard the malformed options.
+	const std::size_t paren = segment.find(PAREN_OPEN);
+	name = Trim(paren == std::string::npos ? segment : segment.substr(0, paren));
+	options.clear();
+}
+
+} // namespace
+
 std::vector<ODataExpandParser::ExpandPath> ODataExpandParser::ParseExpandClause(const std::string& expand_clause) {
-    std::vector<ExpandPath> paths;
-    if (expand_clause.empty()) { return paths; }
-    
-    auto path_strings = SplitByComma(expand_clause);
-    for (const auto& path_str : path_strings) {
-        ExpandPath path;
-        path.full_expand_path = path_str;
-        path.navigation_property = ExtractNavigationProperty(path_str);
-        path.sub_expands = ExtractSubExpands(path_str);
-        // Also include sub-expands defined inside options via $expand=
-        {
-            auto option_subs = ExtractSubExpandsFromOptions(path_str);
-            path.sub_expands.insert(path.sub_expands.end(), option_subs.begin(), option_subs.end());
-        }
-        path.filter_clause = ExtractFilterClause(path_str);
-        path.select_clause = ExtractSelectClause(path_str);
-        path.top_clause = ExtractTopClause(path_str);
-        path.skip_clause = ExtractSkipClause(path_str);
-        
-        // Determine if this expand has options
-        path.has_options = !path.filter_clause.empty() || 
-                          !path.select_clause.empty() || 
-                          !path.top_clause.empty() || 
-                          !path.skip_clause.empty() ||
-                          !path.sub_expands.empty();
-        
-        // Set clean column name (navigation property without options)
-        path.column_name = path.navigation_property;
-        
-        paths.push_back(path);
-    }
-    return paths;
+	std::vector<ExpandPath> paths;
+	if (expand_clause.empty()) {
+		return paths;
+	}
+
+	for (const auto& path_str : SplitByComma(expand_clause)) {
+		paths.push_back(ParseSinglePath(path_str));
+	}
+	return paths;
+}
+
+ODataExpandParser::ExpandPath ODataExpandParser::ParseSinglePath(const std::string& path_str) {
+	ExpandPath path;
+	path.full_expand_path = path_str;
+
+	const std::vector<std::string> segments = SplitTopLevel(path_str, SEGMENT_SEPARATOR);
+
+	std::string name;
+	std::string options;
+	SplitSegment(segments.front(), name, options);
+	path.navigation_property = name;
+
+	// Slash-chained children ("Nav/Sub/SubSub"); their own options are not part
+	// of the flat child name.
+	for (std::size_t i = 1; i < segments.size(); ++i) {
+		std::string sub_name;
+		std::string sub_options;
+		SplitSegment(segments[i], sub_name, sub_options);
+		if (!sub_name.empty()) {
+			path.sub_expands.push_back(sub_name);
+		}
+	}
+
+	ApplyOptions(options, path);
+
+	path.has_options = !path.filter_clause.empty() ||
+	                   !path.select_clause.empty() ||
+	                   !path.top_clause.empty() ||
+	                   !path.skip_clause.empty() ||
+	                   !path.sub_expands.empty();
+
+	path.column_name = path.navigation_property;
+	return path;
+}
+
+void ODataExpandParser::ApplyOptions(const std::string& options, ExpandPath& path) {
+	if (options.empty()) {
+		return;
+	}
+
+	for (const auto& part : SplitTopLevel(options, OPTION_SEPARATOR)) {
+		const std::string option = Trim(part);
+		if (option.empty()) {
+			continue;
+		}
+		const std::size_t equals = option.find('=');
+		if (equals == std::string::npos) {
+			continue;
+		}
+		const std::string key = Trim(option.substr(0, equals));
+		const std::string value = Trim(option.substr(equals + 1));
+		if (value.empty()) {
+			continue;
+		}
+
+		if (key == "$filter") {
+			path.filter_clause = "$filter=" + value;
+		} else if (key == "$select") {
+			path.select_clause = "$select=" + value;
+		} else if (key == "$top") {
+			path.top_clause = "$top=" + value;
+		} else if (key == "$skip") {
+			path.skip_clause = "$skip=" + value;
+		} else if (key == "$expand") {
+			path.nested_expands = ParseExpandClause(value);
+			path.syntax = ExpandSyntax::Nested;
+			for (const auto& nested : path.nested_expands) {
+				if (!nested.navigation_property.empty()) {
+					path.sub_expands.push_back(nested.navigation_property);
+				}
+			}
+		}
+	}
 }
 
 std::string ODataExpandParser::BuildExpandClause(const std::vector<ExpandPath>& paths) {
-    if (paths.empty()) {
-        return "";
-    }
-    
-    std::stringstream result;
-    
-    for (size_t i = 0; i < paths.size(); ++i) {
-        if (i > 0) {
-            result << ",";
-        }
-        
-        const auto& path = paths[i];
-        result << path.navigation_property;
-        
-        // Add sub-expands
-        for (const auto& sub_expand : path.sub_expands) {
-            result << "/" << sub_expand;
-        }
-        
-        // Add query options if any exist
-        std::vector<std::string> options;
-        if (!path.filter_clause.empty()) options.push_back(path.filter_clause);
-        if (!path.select_clause.empty()) options.push_back(path.select_clause);
-        if (!path.top_clause.empty()) options.push_back(path.top_clause);
-        if (!path.skip_clause.empty()) options.push_back(path.skip_clause);
-        
-        if (!options.empty()) {
-            result << "(";
-            for (size_t j = 0; j < options.size(); ++j) {
-                if (j > 0) result << ";";
-                result << options[j];
-            }
-            result << ")";
-        }
-    }
-    
-    return result.str();
+	std::string result;
+	for (std::size_t i = 0; i < paths.size(); ++i) {
+		if (i > 0) {
+			result += PATH_SEPARATOR;
+		}
+		result += BuildSingleExpand(paths[i]);
+	}
+	return result;
+}
+
+std::string ODataExpandParser::BuildSingleExpand(const ExpandPath& path) {
+	std::string result = path.navigation_property;
+
+	std::vector<std::string> options;
+	if (path.syntax == ExpandSyntax::Nested) {
+		// OData v4 nesting: children live in the option list, not in the path.
+		std::string nested;
+		if (!path.nested_expands.empty()) {
+			nested = BuildExpandClause(path.nested_expands);
+		} else {
+			for (std::size_t i = 0; i < path.sub_expands.size(); ++i) {
+				if (i > 0) {
+					nested += PATH_SEPARATOR;
+				}
+				nested += path.sub_expands[i];
+			}
+		}
+		if (!nested.empty()) {
+			options.push_back("$expand=" + nested);
+		}
+	} else {
+		// OData v2 path syntax.
+		for (const auto& sub_expand : path.sub_expands) {
+			result += SEGMENT_SEPARATOR;
+			result += sub_expand;
+		}
+	}
+
+	if (!path.filter_clause.empty()) {
+		options.push_back(path.filter_clause);
+	}
+	if (!path.select_clause.empty()) {
+		options.push_back(path.select_clause);
+	}
+	if (!path.top_clause.empty()) {
+		options.push_back(path.top_clause);
+	}
+	if (!path.skip_clause.empty()) {
+		options.push_back(path.skip_clause);
+	}
+
+	if (options.empty()) {
+		return result;
+	}
+
+	result += PAREN_OPEN;
+	for (std::size_t i = 0; i < options.size(); ++i) {
+		if (i > 0) {
+			result += OPTION_SEPARATOR;
+		}
+		result += options[i];
+	}
+	result += PAREN_CLOSE;
+	return result;
 }
 
 std::string ODataExpandParser::TrimWhitespace(const std::string& str) {
-    size_t start = str.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) {
-        return "";
-    }
-    size_t end = str.find_last_not_of(" \t\r\n");
-    return str.substr(start, end - start + 1);
+	return Trim(str);
 }
 
 std::vector<std::string> ODataExpandParser::SplitByComma(const std::string& str) {
-    std::vector<std::string> result;
-    std::stringstream ss(str);
-    std::string item;
-    
-    while (std::getline(ss, item, ',')) {
-        std::string trimmed = TrimWhitespace(item);
-        if (!trimmed.empty()) {
-            result.push_back(trimmed);
-        }
-    }
-    
-    return result;
-}
-
-std::string ODataExpandParser::ExtractNavigationProperty(const std::string& path) {
-    // Find the first occurrence of '(' or '/'
-    size_t paren_pos = path.find('(');
-    size_t slash_pos = path.find('/');
-    
-    size_t end_pos = std::string::npos;
-    if (paren_pos != std::string::npos && slash_pos != std::string::npos) {
-        end_pos = std::min(paren_pos, slash_pos);
-    } else if (paren_pos != std::string::npos) {
-        end_pos = paren_pos;
-    } else if (slash_pos != std::string::npos) {
-        end_pos = slash_pos;
-    }
-    
-    if (end_pos != std::string::npos) {
-        return TrimWhitespace(path.substr(0, end_pos));
-    }
-    
-    return TrimWhitespace(path);
-}
-
-std::vector<std::string> ODataExpandParser::ExtractSubExpands(const std::string& path) {
-    std::vector<std::string> sub_expands;
-    
-    // Find the part between the first slash and the first parenthesis
-    size_t slash_pos = path.find('/');
-    if (slash_pos == std::string::npos) {
-        return sub_expands;
-    }
-    
-    size_t paren_pos = path.find('(');
-    size_t end_pos = (paren_pos != std::string::npos) ? paren_pos : path.length();
-    
-    std::string sub_path = path.substr(slash_pos + 1, end_pos - slash_pos - 1);
-    
-    // Split by slashes to get multiple sub-expands
-    std::stringstream ss(sub_path);
-    std::string item;
-    while (std::getline(ss, item, '/')) {
-        std::string trimmed = TrimWhitespace(item);
-        if (!trimmed.empty()) {
-            sub_expands.push_back(trimmed);
-        }
-    }
-    
-    return sub_expands;
-}
-
-std::string ODataExpandParser::ExtractFilterClause(const std::string& path) {
-    const std::string options = ExtractOptionsSubstring(path);
-    return ExtractOptionClause(options, "$filter=");
-}
-
-std::string ODataExpandParser::ExtractSelectClause(const std::string& path) {
-    const std::string options = ExtractOptionsSubstring(path);
-    return ExtractOptionClause(options, "$select=");
-}
-
-std::string ODataExpandParser::ExtractTopClause(const std::string& path) {
-    const std::string options = ExtractOptionsSubstring(path);
-    return ExtractOptionClause(options, "$top=");
-}
-
-std::string ODataExpandParser::ExtractSkipClause(const std::string& path) {
-    const std::string options = ExtractOptionsSubstring(path);
-    return ExtractOptionClause(options, "$skip=");
+	std::vector<std::string> result;
+	for (const auto& part : SplitTopLevel(str, PATH_SEPARATOR)) {
+		const std::string trimmed = Trim(part);
+		if (!trimmed.empty()) {
+			result.push_back(trimmed);
+		}
+	}
+	return result;
 }
 
 } // namespace erpl_web
