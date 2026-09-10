@@ -1,4 +1,5 @@
 #include "odp_request_orchestrator.hpp"
+#include "odata_url_helpers.hpp"
 #include "odp_trace_redaction.hpp"
 #include "tracing.hpp"
 #include <iomanip>
@@ -192,23 +193,20 @@ bool OdpRequestOrchestrator::ValidatePreferenceApplied(const HttpResponse& respo
 
 std::string OdpRequestOrchestrator::ExtractDeltaToken(const ODataEntitySetResponse& response) {
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", "Extracting delta token from response");
-    
-    std::string response_content = response.RawContent();
-    ODataVersion version = response.GetODataVersion();
-    
-    std::string delta_token;
-    if (version == ODataVersion::V2) {
-        delta_token = ExtractDeltaTokenFromV2Response(response_content);
-    } else {
-        delta_token = ExtractDeltaTokenFromV4Response(response_content);
-    }
-    
+
+    // One implementation for every spelling, including the one this code used to miss:
+    // SAP ODP hands the token back on "__next" as "...&!deltatoken=...", not on "__delta".
+    // Reading only "__delta" left the subscription in initial-load mode, so the next read
+    // re-extracted the entire dataset. See GitHub #102.
+    const auto delta_link = ODataDeltaLink::ExtractDeltaLink(response.RawContent());
+    const auto delta_token = ODataDeltaLink::ExtractToken(delta_link);
+
     if (!delta_token.empty()) {
         ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Extracted delta token: " + delta_token.substr(0, 20) + "...");
     } else {
         ERPL_TRACE_WARN("ODP_ORCHESTRATOR", "No delta token found in response");
     }
-    
+
     return delta_token;
 }
 
@@ -614,30 +612,9 @@ std::string OdpRequestOrchestrator::ExtractTokenFromDeltaUrl(const std::string& 
 }
 
 std::string OdpRequestOrchestrator::ExtractDeltaUrl(const ODataEntitySetResponse& response) {
-    try {
-        auto content = response.RawContent();
-        auto doc = duckdb_yyjson::yyjson_read(content.c_str(), content.length(), 0);
-        if (!doc) {
-            return "";
-        }
-        auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
-        if (!root) {
-            duckdb_yyjson::yyjson_doc_free(doc);
-            return "";
-        }
-        auto d_obj = duckdb_yyjson::yyjson_obj_get(root, "d");
-        if (d_obj) {
-            auto delta_val = duckdb_yyjson::yyjson_obj_get(d_obj, "__delta");
-            if (delta_val && duckdb_yyjson::yyjson_is_str(delta_val)) {
-                std::string delta_url = duckdb_yyjson::yyjson_get_str(delta_val);
-                duckdb_yyjson::yyjson_doc_free(doc);
-                return delta_url;
-            }
-        }
-        duckdb_yyjson::yyjson_doc_free(doc);
-    } catch (...) {
-    }
-    return "";
+    // Same single implementation, so the URL and the token can never disagree about
+    // which spellings count as a delta link. See GitHub #102.
+    return ODataDeltaLink::ExtractDeltaLink(response.RawContent());
 }
 
 std::string OdpRequestOrchestrator::NormalizeDeltaUrl(const std::string& delta_url) {
