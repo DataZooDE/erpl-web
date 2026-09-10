@@ -254,6 +254,110 @@ TEST_CASE("odata_read keeps paging through an empty page that has a next link",
     REQUIRE(AnyRequestQueryContains(server.RequestsFor("/empty/Airlines"), "$skiptoken=3"));
 }
 
+// Catches GitHub #79 (v4 branch): a page that omits the "value" array altogether while carrying
+// a next link. Graph delta and skip-token pages legitimately do this. Before the fix the missing
+// array made ToRows() throw "No value array found in OData response", which aborted the whole
+// scan and dropped every row on the pages that follow.
+TEST_CASE("odata_read keeps paging when a v4 page omits the value array entirely",
+          "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/novalue/Airlines");
+    const std::string context = server.Url("/novalue/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/novalue/$metadata", "edm_trippin.xml");
+    // Page 2 has a next link but no "value" member at all.
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/novalue/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json("{\"@odata.context\":\"" + context + "\",\"@odata.nextLink\":\"" +
+                             entity_url + "?$format=json&$skiptoken=3\"}"));
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/novalue/Airlines" && request.QueryParam("$skiptoken") == "3";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
+    server.OnPath("/novalue/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT count(*) FROM odata_read('" + entity_url + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 4);
+
+    // The page AFTER the value-less one really was fetched.
+    REQUIRE(AnyRequestQueryContains(server.RequestsFor("/novalue/Airlines"), "$skiptoken=3"));
+}
+
+// Catches GitHub #79 (v2 branch): the same defect on the OData v2 side, where the abort came from
+// a throw inside GetValueArray() ("'d' element ... is not an array or doesn't contain a 'results'
+// array") rather than from the nullptr path. A v4-only fix leaves half the bug in place.
+TEST_CASE("odata_read keeps paging when a v2 page omits the results array",
+          "[odata_e2e][paging][v2]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/v2empty/Regions");
+
+    server.ServeMetadataFixture("/v2empty/$metadata", "edm_northwind_v2.xml");
+    // Page 2 is a "d" wrapper with a __next link and no results array.
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/v2empty/Regions" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json("{\"d\":{\"__next\":\"" + entity_url +
+                             "?$format=json&$skiptoken=3\"}}"));
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/v2empty/Regions" && request.QueryParam("$skiptoken") == "3";
+        },
+        CannedResponse::Json(MakeV2Page({R"({"RegionID":3,"RegionDescription":"Northern"})"})));
+    server.OnPath("/v2empty/Regions",
+                  CannedResponse::Json(MakeV2Page({R"({"RegionID":1,"RegionDescription":"Eastern"})",
+                                                   R"({"RegionID":2,"RegionDescription":"Western"})"},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT count(*) FROM odata_read('" + entity_url + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 3);
+
+    REQUIRE(AnyRequestQueryContains(server.RequestsFor("/v2empty/Regions"), "$skiptoken=3"));
+}
+
+// Catches GitHub #77: a SAP Gateway style error payload answered with HTTP 200. The scan must
+// fail with the code and message the SERVICE reported; before the fix the missing value array
+// produced the generic "No value array found in OData response" and the server's own diagnosis
+// was discarded.
+TEST_CASE("odata_read surfaces the service's own error code and message",
+          "[odata_e2e][error]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/svcerr/Airlines");
+
+    server.ServeMetadataFixture("/svcerr/$metadata", "edm_trippin.xml");
+    server.OnPath("/svcerr/Airlines",
+                  CannedResponse::Json(R"({"error":{"code":"SY/530","message":{"lang":"en",)"
+                                       R"("value":"Invalid filter on property Foo"}}})"));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT * FROM odata_read('" + entity_url + "')");
+    REQUIRE(result->HasError());
+    const auto message = result->GetError();
+    INFO(message);
+    REQUIRE(message.find("SY/530") != std::string::npos);
+    REQUIRE(message.find("Invalid filter on property Foo") != std::string::npos);
+}
+
 // ----------------------------------------------------------------------
 // What we put on the wire
 

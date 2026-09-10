@@ -145,9 +145,17 @@ std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataConten
     ERPL_TRACE_DEBUG("ODATA_CONTENT", "Content size: " + std::to_string(content.length()) + " bytes");
     
     if (ODataJsonContentMixin::IsJsonContentType(ContentType())) {
-        auto detected_version = ODataJsonContentMixin::DetectODataVersion(content);
-        ERPL_TRACE_DEBUG("ODATA_CONTENT", std::string("Detected OData version from response: ") + (detected_version == ODataVersion::V2 ? "V2" : "V4"));
-        ERPL_TRACE_DEBUG("ODATA_CONTENT", std::string("Metadata suggested version: ") + (odata_version == ODataVersion::V2 ? "V2" : "V4"));
+        // Detection order (GitHub #77): what the service declared in its response headers, then
+        // payload sniffing, then the version the metadata document implied - which is what the
+        // `odata_version` parameter carries. Guessing V4 is the last resort, not the first.
+        auto detected_version = ODataJsonContentMixin::DetectODataVersionFromHeaders(http_response->headers);
+        if (detected_version == ODataVersion::UNKNOWN) {
+            detected_version = ODataJsonContentMixin::DetectODataVersionFromPayload(content);
+        }
+        if (detected_version == ODataVersion::UNKNOWN) {
+            detected_version = (odata_version != ODataVersion::UNKNOWN) ? odata_version : ODataVersion::V4;
+        }
+        ERPL_TRACE_DEBUG("ODATA_CONTENT", std::string("Resolved OData version for response: ") + (detected_version == ODataVersion::V2 ? "V2" : "V4"));
         auto content_obj = std::make_shared<ODataEntitySetJsonContent>(content);
         content_obj->SetODataVersion(detected_version);
         return content_obj;
@@ -206,7 +214,7 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
     if (odata_version == ODataVersion::UNKNOWN) {
         auto content_str = http_response->Content();
         if (ODataJsonContentMixin::IsJsonContentType(http_response->ContentType())) {
-            auto detected_version = ODataJsonContentMixin::DetectODataVersion(content_str);
+            auto detected_version = ODataJsonContentMixin::DetectODataVersion(content_str, http_response->headers);
             odata_version = detected_version;
             std::string version_str = (odata_version == ODataVersion::V2 ? "V2" : "V4");
             ERPL_TRACE_INFO("ODATA_CLIENT", "Detected OData version from response: " + version_str);
