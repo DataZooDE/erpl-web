@@ -346,9 +346,10 @@ public:
     std::string name;
     std::string type;
     bool nullable = true;
-    int max_length;
-    int precision;
-    int scale;
+    // -1 means "attribute absent from the CSDL"; see the note on Property. (GitHub #73)
+    int max_length = -1;
+    int precision = -1;
+    int scale = -1;
     int SRID = 0;
     bool unicode = true;
     std::string default_value;
@@ -943,10 +944,13 @@ public:
     std::string type_name;
     bool nullable = true;
     std::string default_value;
-    int max_length;
-    int fixed_length;
-    int precision;
-    int scale;
+    // -1 means "attribute absent from the CSDL". Without these initializers every
+    // <Property/> that omits MaxLength/FixedLength/Precision/Scale carried indeterminate
+    // values into BuildLogicalTypeForProperty(). (GitHub #73)
+    int max_length = -1;
+    int fixed_length = -1;
+    int precision = -1;
+    int scale = -1;
     int SRID = 0;
     bool unicode = true;
     std::string sorting;
@@ -2070,7 +2074,11 @@ class DuckTypeConverter
                 return duckdb::LogicalTypeId::BLOB;
             } else if (type_name == "Edm.Boolean") {
                 return duckdb::LogicalTypeId::BOOLEAN;
-            } else if (type_name == "Edm.Byte" || type_name == "Edm.SByte") {
+            } else if (type_name == "Edm.Byte") {
+                // Edm.Byte is an UNSIGNED 8-bit integer (0..255); Edm.SByte is the signed
+                // one (-128..127). Mapping both to TINYINT silently NULLed 128..255. (GitHub #68)
+                return duckdb::LogicalTypeId::UTINYINT;
+            } else if (type_name == "Edm.SByte") {
                 return duckdb::LogicalTypeId::TINYINT;
             } else if (type_name == "Edm.Date") {
                 return duckdb::LogicalTypeId::DATE;
@@ -2106,6 +2114,31 @@ class DuckTypeConverter
             }
         }
 
+        // Build the DuckDB type for an Edm.Decimal property from its CSDL facets.
+        //
+        // CSDL says an absent Scale defaults to 0, so DECIMAL(p,0) is technically conformant --
+        // but Dataverse and SAP CDS routinely publish money columns as Precision-only, and
+        // DECIMAL(p,0) silently rounds 19.99 to 20. Losing the cents is a worse failure than
+        // losing exactness, so an absent (or "variable") Scale maps to DOUBLE instead; an
+        // explicitly declared Scale -- including Scale="0" -- still yields DECIMAL(p,s).
+        // Property::scale defaults to -1 ("absent"), which is what makes the two
+        // distinguishable at all. (GitHub #80, relies on GitHub #73)
+        static duckdb::LogicalType BuildDecimalLogicalType(const Property &property) {
+            if (property.scale < 0) {
+                return duckdb::LogicalTypeId::DOUBLE;
+            }
+
+            int32_t precision = property.precision > 0 ? property.precision : 18;
+            if (precision > 38) {
+                precision = 38;
+            }
+            int32_t scale = property.scale;
+            if (scale > precision) {
+                scale = precision;
+            }
+            return duckdb::LogicalType::DECIMAL(static_cast<uint8_t>(precision), static_cast<uint8_t>(scale));
+        }
+
         // Central property-aware mapping (handles Decimal p/s and Collection(...))
         static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, Edmx &edmx) {
             // Detect Collection(T)
@@ -2120,13 +2153,7 @@ class DuckTypeConverter
 
             duckdb::LogicalType duck_type;
             if (type_name == "Edm.Decimal") {
-                int precision = property.precision > 0 ? property.precision : 18;
-                int scale = property.scale >= 0 ? property.scale : 0;
-                if (precision < 1) precision = 18;
-                if (precision > 38) precision = 38;
-                if (scale < 0) scale = 0;
-                if (scale > precision) scale = precision;
-                duck_type = duckdb::LogicalType::DECIMAL(precision, scale);
+                duck_type = BuildDecimalLogicalType(property);
             } else if (type_name.rfind("Edm.", 0) == 0) {
                 // Primitive
                 duck_type = ConvertEdmPrimitiveStringToLogicalType(type_name);
@@ -2149,7 +2176,9 @@ class DuckTypeConverter
                 return "BLOB";
             } else if (edm_type == "Edm.Boolean") {
                 return "BOOLEAN";
-            } else if (edm_type == "Edm.Byte" || edm_type == "Edm.SByte") {
+            } else if (edm_type == "Edm.Byte") {
+                return "UTINYINT"; // unsigned 0..255, unlike Edm.SByte (GitHub #68)
+            } else if (edm_type == "Edm.SByte") {
                 return "TINYINT";
             } else if (edm_type == "Edm.Date") {
                 return "DATE";
@@ -2194,7 +2223,7 @@ class DuckTypeConverter
             } else if (type == erpl_web::Boolean) {
                 return duckdb::LogicalTypeId::BOOLEAN;
             } else if (type == erpl_web::Byte) {
-                return duckdb::LogicalTypeId::TINYINT;
+                return duckdb::LogicalTypeId::UTINYINT; // unsigned 0..255 (GitHub #68)
             } else if (type == erpl_web::Date) {
                 return duckdb::LogicalTypeId::DATE;
             } else if (type == erpl_web::DateTime) {
@@ -2309,13 +2338,7 @@ class DuckTypeConverter
 
                 // Special-case Edm.Decimal to honor precision/scale metadata
                 if (type_name == "Edm.Decimal") {
-                    int precision = property.precision > 0 ? property.precision : 18;
-                    int scale = property.scale >= 0 ? property.scale : 0;
-                    if (precision < 1) precision = 18;
-                    if (precision > 38) precision = 38;
-                    if (scale < 0) scale = 0;
-                    if (scale > precision) scale = precision;
-                    duck_type = duckdb::LogicalType::DECIMAL(precision, scale);
+                    duck_type = BuildDecimalLogicalType(property);
                 } else {
                     auto field_type = edmx.FindType(type_name);
                     duck_type = std::visit(*this, field_type);
@@ -2398,48 +2421,11 @@ class DuckTypeConverter
             }
         }
 
+        // Thin alias for the single public mapping above; this used to be a verbatim copy
+        // of it, which is how Edm.Byte stayed wrong in three places at once. (GitHub #68)
         duckdb::LogicalType ConvertPrimitiveTypeString(const std::string& type_name) const
         {
-            if (type_name == "Edm.Binary") {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type_name == "Edm.Boolean") {
-                return duckdb::LogicalTypeId::BOOLEAN;
-            } else if (type_name == "Edm.Byte" || type_name == "Edm.SByte") {
-                return duckdb::LogicalTypeId::TINYINT;
-            } else if (type_name == "Edm.Date") {
-                return duckdb::LogicalTypeId::DATE;
-            } else if (type_name == "Edm.DateTime" || type_name == "Edm.DateTimeOffset") {
-                return duckdb::LogicalTypeId::TIMESTAMP;
-            } else if (type_name == "Edm.Decimal") {
-                return duckdb::LogicalTypeId::DECIMAL;
-            } else if (type_name == "Edm.Double") {
-                return duckdb::LogicalTypeId::DOUBLE;
-            } else if (type_name == "Edm.Duration") {
-                return duckdb::LogicalTypeId::INTERVAL;
-            } else if (type_name == "Edm.Guid") {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type_name == "Edm.Int16") {
-                return duckdb::LogicalTypeId::SMALLINT;
-            } else if (type_name == "Edm.Int32") {
-                return duckdb::LogicalTypeId::INTEGER;
-            } else if (type_name == "Edm.Int64") {
-                return duckdb::LogicalTypeId::BIGINT;
-            } else if (type_name == "Edm.Single") {
-                return duckdb::LogicalTypeId::FLOAT;
-            } else if (type_name == "Edm.Stream") {
-                return duckdb::LogicalTypeId::BLOB;
-            } else if (type_name == "Edm.String") {
-                return duckdb::LogicalTypeId::VARCHAR;
-            } else if (type_name == "Edm.Time") {
-                return duckdb::LogicalTypeId::TIME;
-            } else if (type_name == "Edm.TimeOfDay") {
-                return duckdb::LogicalTypeId::TIME;
-            } else if (type_name.find("Edm.Geography") == 0 || type_name.find("Edm.Geometry") == 0) {
-                return duckdb::LogicalTypeId::VARCHAR; // Geography/Geometry types as VARCHAR for now
-            } else {
-                // Fallback for unknown types - treat as VARCHAR
-                return duckdb::LogicalTypeId::VARCHAR;
-            }
+            return ConvertEdmPrimitiveStringToLogicalType(type_name);
         }
 
     
