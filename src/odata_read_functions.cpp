@@ -1220,9 +1220,19 @@ void ODataReadBindData::EmitSingleRowToOutput(
     
     auto null_value = duckdb::Value();
     
+    idx_t data_slot = 0;
     for (idx_t j = 0; j < output.ColumnCount(); j++) {
-        duckdb::idx_t original_column_index = GetOriginalColumnIndex(j);
-        
+        if (j < output_column_is_row_id.size() && output_column_is_row_id[j]) {
+            // A synthetic row id: monotonically increasing over the scan, which is all a
+            // row id has to be here. Emitting a data value would be a type mismatch.
+            output.SetValue(j, row_index,
+                            duckdb::Value::BIGINT(static_cast<int64_t>(emitted_row_index_)));
+            continue;
+        }
+
+        duckdb::idx_t original_column_index = GetOriginalColumnIndex(data_slot);
+        data_slot++;
+
         if (original_column_index < schema_info.all_result_names.size()) {
             auto value = GetColumnValue(original_column_index, row, schema_info);
             output.SetValue(j, row_index, value);
@@ -1361,11 +1371,18 @@ void ODataReadBindData::ActivateColumns(
                    duckdb::StringUtil::Format("Activating columns: %s",
                                               column_ids_str.str().c_str()));
     
-    // Filter out ROW_ID columns from activation
+    // Row ids are not data columns, so they take no part in $select - but they DO occupy a
+    // slot in the output chunk, so which slots they are must be remembered. COUNT(*) asks
+    // for nothing but a row id; forgetting that made the emit path fall back to "output
+    // slot j is data column j" and write the first column's string into a BIGINT row-id
+    // vector. See GitHub #132.
     std::vector<duckdb::column_t> visible_ids;
     visible_ids.reserve(column_ids.size());
-    for (auto &column_id : column_ids) {
+    output_column_is_row_id.assign(column_ids.size(), false);
+    for (size_t output_index = 0; output_index < column_ids.size(); ++output_index) {
+        const auto column_id = column_ids[output_index];
         if (duckdb::IsRowIdColumnId(column_id)) {
+            output_column_is_row_id[output_index] = true;
       ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                        "Skipping ROW_ID column from activation mapping");
             continue;

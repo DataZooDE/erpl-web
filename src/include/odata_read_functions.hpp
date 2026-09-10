@@ -165,6 +165,12 @@ private:
     // Projection, settled in ActivateColumns during global-state init.
     std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::column_t> activated_to_original_mapping;
+
+    // One entry per OUTPUT column, in output order, marking the slots DuckDB asked to be
+    // filled with row ids rather than data. Row ids are dropped from the data projection
+    // but they still occupy a position in the chunk, so the positional correspondence has
+    // to be recorded or every later slot reads the wrong column. See GitHub #132.
+    std::vector<bool> output_column_is_row_id;
     
     // Configuration
     std::map<std::string, std::string> input_parameters;
