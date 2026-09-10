@@ -30,6 +30,9 @@ endif()
 # matching files changes. See GitHub #115.
 file(GLOB ERPL_WEB_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 
+# The harness support file is not a test_*.cpp, so it is named explicitly.
+list(APPEND TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/odata_test_server.cpp)
+
 if(NOT ERPL_WEB_TEST_FILES)
     message(FATAL_ERROR "No test_*.cpp files found in ${CMAKE_CURRENT_SOURCE_DIR} - the test glob is broken")
 endif()
