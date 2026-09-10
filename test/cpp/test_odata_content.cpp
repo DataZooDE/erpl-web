@@ -789,13 +789,10 @@ TEST_CASE("Test OData v4 error payload is surfaced with code and message", "[oda
         content.ToRows(column_names, column_types);
         FAIL("expected the service error to be raised");
     } catch (const std::exception &e) {
-        // MSVC does not resolve Catch's INFO in this translation unit, so the message is
-        // carried into the failure through FAIL, which the same file already uses.
         const std::string message = e.what();
-        if (message.find("Request_ResourceNotFound") == std::string::npos ||
-            message.find("Resource 'Foo' does not exist.") == std::string::npos) {
-            FAIL("service error was not surfaced; got: " + message);
-        }
+        INFO(message);
+        REQUIRE(message.find("Request_ResourceNotFound") != std::string::npos);
+        REQUIRE(message.find("Resource 'Foo' does not exist.") != std::string::npos);
     }
 }
 
@@ -817,10 +814,9 @@ TEST_CASE("Test OData v2 error payload is surfaced with code and message", "[oda
         FAIL("expected the service error to be raised");
     } catch (const std::exception &e) {
         const std::string message = e.what();
-        if (message.find("SY/530") == std::string::npos ||
-            message.find("Invalid filter on property Foo") == std::string::npos) {
-            FAIL("service error was not surfaced; got: " + message);
-        }
+        INFO(message);
+        REQUIRE(message.find("SY/530") != std::string::npos);
+        REQUIRE(message.find("Invalid filter on property Foo") != std::string::npos);
     }
 }
 
