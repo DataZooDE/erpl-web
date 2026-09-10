@@ -1,4 +1,5 @@
 #include "odp_odata_read_bind_data.hpp"
+#include "odata_url_helpers.hpp"
 #include "secret_functions.hpp"
 #include "tracing.hpp"
 #include <algorithm>
@@ -6,6 +7,21 @@
 #include <regex>
 
 namespace erpl_web {
+
+namespace {
+
+// SAP ODP marks the END of a change-tracked extraction by returning the delta token on
+// "__next", not on "__delta". Following such a link as though it were another page walks
+// past the end of the extraction and loses the token, leaving the subscription in
+// initial-load mode so the next read re-extracts everything. A "__next" carrying a delta
+// sigil is therefore terminal, not a page. See GitHub #102.
+bool IsDeltaLink(const std::string &url)
+{
+    return !ODataDeltaLink::ExtractToken(url).empty();
+}
+
+} // namespace
+
 
 OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
                                          const std::string& entity_set_url,
@@ -298,7 +314,7 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         initial_load_preference_applied_ = result.preference_applied;
 
         auto first_next = result.response->NextUrl();
-        pending_next_url_ = (first_next.has_value() && !first_next->empty())
+        pending_next_url_ = (first_next.has_value() && !first_next->empty() && !IsDeltaLink(*first_next))
             ? first_next.value() : "";
 
         if (pending_next_url_.empty()) {
@@ -342,7 +358,7 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
         }
 
         auto first_next = result.response->NextUrl();
-        pending_next_url_ = (first_next.has_value() && !first_next->empty())
+        pending_next_url_ = (first_next.has_value() && !first_next->empty() && !IsDeltaLink(*first_next))
             ? first_next.value() : "";
 
         if (pending_next_url_.empty()) {
@@ -633,7 +649,7 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
 
     // Determine whether there is yet another page after this one.
     auto further_next = next_result.response->NextUrl();
-    pending_next_url_ = (further_next.has_value() && !further_next->empty())
+    pending_next_url_ = (further_next.has_value() && !further_next->empty() && !IsDeltaLink(*further_next))
         ? further_next.value() : "";
 
     // When this is the last page, perform the state transition that was deferred

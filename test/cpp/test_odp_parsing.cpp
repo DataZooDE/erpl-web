@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "odata_url_helpers.hpp"
 #include "odata_odp_functions.hpp"
 #include "datazoo/oauth2/http_client.hpp"
 #include "tracing.hpp"
@@ -130,4 +131,37 @@ TEST_CASE("ODP Entity Set Pattern Matching", "[odp]") {
         
         duckdb_yyjson::yyjson_doc_free(doc);
     }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub #102 - the delta token arrives on __next, not on __delta
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ODP recognises a delta token delivered on __next", "[odp_parsing]") {
+    // This is the shape SAP ODP actually returns to end a change-tracked extraction:
+    // the token rides on "__next" with a "!deltatoken=" sigil. The orchestrator used to
+    // read only "__delta", so extraction returned "", preference_applied went false, the
+    // subscription stayed in initial-load mode, and the NEXT read re-extracted the whole
+    // dataset instead of fetching deltas.
+    const std::string terminal_page = R"({"d":{"results":[],)"
+        R"("__next":"https://sap.example.com/sap/opu/odata/sap/X_SRV/EntityOfX?$format=json&!deltatoken=D20260910"}})";
+
+    const auto link = ODataDeltaLink::ExtractDeltaLink(terminal_page);
+    REQUIRE_FALSE(link.empty());
+    REQUIRE(ODataDeltaLink::ExtractToken(link) == "D20260910");
+}
+
+TEST_CASE("ODP does not mistake ordinary server-driven paging for a delta link", "[odp_parsing]") {
+    // The counterpart guard: a plain "__next" is a $skiptoken page and must keep paging.
+    // Treating it as terminal would truncate the extraction.
+    const std::string paging_page = R"({"d":{"results":[{"a":1}],)"
+        R"("__next":"https://sap.example.com/sap/opu/odata/sap/X_SRV/EntityOfX?$skiptoken=100"}})";
+
+    REQUIRE(ODataDeltaLink::ExtractDeltaLink(paging_page).empty());
+}
+
+TEST_CASE("A v2 __delta link still works", "[odp_parsing]") {
+    const std::string delta_page = R"({"d":{"results":[],)"
+        R"("__delta":"https://sap.example.com/sap/opu/odata/sap/X_SRV/EntityOfX?!deltatoken=D1"}})";
+    REQUIRE(ODataDeltaLink::ExtractToken(ODataDeltaLink::ExtractDeltaLink(delta_page)) == "D1");
 }
