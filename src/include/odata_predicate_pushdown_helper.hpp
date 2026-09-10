@@ -25,6 +25,15 @@ public:
     using ColumnNameResolver = std::function<std::string(duckdb::column_t)>;
     
     explicit ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names);
+    ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names,
+                                 const std::vector<duckdb::LogicalType> &all_column_types);
+
+    // Refresh the full-schema column names and types this helper reasons about.
+    // The types are needed to decide whether $select is safe (see
+    // IsNestedColumnType); they are optional and may be empty, in which case
+    // $select is built without the nested-column guard.
+    void SetColumnSchema(const std::vector<std::string> &names,
+                         const std::vector<duckdb::LogicalType> &types);
     
     // Set OData version for proper syntax generation
     void SetODataVersion(ODataVersion version);
@@ -36,10 +45,16 @@ public:
     // Consume DuckDB operations and convert to OData clauses
     void ConsumeColumnSelection(const std::vector<duckdb::column_t> &column_ids);
     void ConsumeFilters(duckdb::optional_ptr<duckdb::TableFilterSet> filters);
+    // NOTE (see GitHub #90): a SQL `LIMIT` is NOT pushed down to `$top`.
+    // DuckDB never hands a table function its result modifiers, so nothing in
+    // this extension observes `LIMIT`/`OFFSET`. `$top`/`$skip` are produced
+    // only from the explicit `top=`/`skip=` named parameters of odata_read()
+    // (and the equivalent Datasphere/SAC parameters). A query such as
+    // `SELECT * FROM odata_read(...) LIMIT 10` therefore still transfers every
+    // page the service is willing to give.
     void ConsumeLimit(duckdb::idx_t limit);
     void ConsumeOffset(duckdb::idx_t offset);
     void ConsumeExpand(const std::string& expand_clause);
-    void ConsumeResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers);
     
     // Get generated OData clauses
     std::string SelectClause() const;
@@ -61,8 +76,10 @@ private:
     // OData version for proper syntax generation
     ODataVersion odata_version = ODataVersion::V4; // Default to V4
     
-    // Column information
+    // Column information (full schema order, as produced by
+    // ODataReadBindData::GetResultNames(true) / GetResultTypes(true))
     std::vector<std::string> all_column_names;
+    std::vector<duckdb::LogicalType> all_column_types;
     ColumnNameResolver column_name_resolver;
     
     // Generated OData clauses
@@ -95,9 +112,12 @@ private:
     std::string TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const;
     
-    // Result modifier processing
-    void ProcessResultModifier(const duckdb::BoundResultModifier &modifier);
-    
+    // True when the column at the given full-schema index maps to a nested
+    // DuckDB type (LIST/STRUCT/MAP/ARRAY/UNION). Such columns come from OData
+    // collection or complex properties, which many services reject inside
+    // $select, so projection pushdown is skipped when one is requested.
+    bool IsNestedColumnType(duckdb::column_t schema_index) const;
+
     // Refactored helper methods for ApplyFiltersToUrl
     void LogCurrentClauses() const;
     std::map<std::string, std::string> ParseExistingQueryParameters(const std::string& existing_query) const;

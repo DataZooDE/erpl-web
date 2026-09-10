@@ -118,13 +118,47 @@ static void SanitizeExpandParam(std::map<std::string, std::string>& params);
 static void EnsureJsonFormat(std::map<std::string, std::string>& params);
 
 ODataPredicatePushdownHelper::ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names)
+    : ODataPredicatePushdownHelper(all_column_names, std::vector<duckdb::LogicalType>())
+{ }
+
+ODataPredicatePushdownHelper::ODataPredicatePushdownHelper(const std::vector<std::string> &all_column_names,
+                                                           const std::vector<duckdb::LogicalType> &all_column_types)
     : all_column_names(all_column_names)
+    , all_column_types(all_column_types)
 {
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Created predicate pushdown helper with " + std::to_string(all_column_names.size()) + " columns");
     
     // Log all available column names for debugging
     for (size_t i = 0; i < all_column_names.size(); ++i) {
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Column " + std::to_string(i) + ": " + all_column_names[i]);
+    }
+}
+
+void ODataPredicatePushdownHelper::SetColumnSchema(const std::vector<std::string> &names,
+                                                   const std::vector<duckdb::LogicalType> &types)
+{
+    all_column_names = names;
+    all_column_types = types;
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                     "Column schema refreshed: " + std::to_string(all_column_names.size()) + " names, " +
+                         std::to_string(all_column_types.size()) + " types");
+}
+
+bool ODataPredicatePushdownHelper::IsNestedColumnType(duckdb::column_t schema_index) const
+{
+    if (schema_index >= all_column_types.size()) {
+        return false;
+    }
+
+    switch (all_column_types[schema_index].id()) {
+    case duckdb::LogicalTypeId::LIST:
+    case duckdb::LogicalTypeId::STRUCT:
+    case duckdb::LogicalTypeId::MAP:
+    case duckdb::LogicalTypeId::ARRAY:
+    case duckdb::LogicalTypeId::UNION:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -191,20 +225,6 @@ void ODataPredicatePushdownHelper::ConsumeExpand(const std::string& expand_claus
     } else {
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "No expand clause to consume");
         this->expand_clause = "";
-    }
-}
-
-void ODataPredicatePushdownHelper::ConsumeResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers)
-{
-    if (modifiers.empty()) {
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "No result modifiers to consume");
-        return;
-    }
-    
-    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Consuming " + std::to_string(modifiers.size()) + " result modifiers");
-    
-    for (const auto &modifier : modifiers) {
-        ProcessResultModifier(*modifier);
     }
 }
 
@@ -547,48 +567,36 @@ std::string ODataPredicatePushdownHelper::BuildSelectClause(const std::vector<du
         return "";
     }
 
-    // Check if any of the selected columns are complex fields that might cause OData errors
-    // Complex fields like Emails, AddressInfo, HomeAddress, Features are arrays or complex objects
-    // that the OData service might not handle properly in $select
-    std::vector<std::string> complex_fields = {"Emails", "AddressInfo", "HomeAddress", "Features"};
-    
-    // Track output position separately (skip rowid entries)
-    size_t output_pos = 0;
+    // Skip $select entirely when any requested column is a nested (collection or
+    // complex) property. Many services reject such properties inside $select, and
+    // OData v2 in particular has no portable syntax for projecting into them.
+    //
+    // This used to be a hard-coded list of TripPin demo property names
+    // ("Emails", "AddressInfo", "HomeAddress", "Features") matched by PREFIX,
+    // which silently disabled projection pushdown for any real service with a
+    // scalar column merely starting with one of those words (GitHub #86).
+    // The DuckDB LogicalType is the accurate signal the name match approximated.
     for (size_t i = 0; i < column_ids.size(); ++i) {
         if (duckdb::IsRowIdColumnId(column_ids[i])) {
             continue;
         }
 
-        // Use column name resolver if available, otherwise fall back to direct indexing.
-        // Resolver expects the OUTPUT position (not schema index) so that it can map
-        // through activated_to_original_mapping to the correct column name.
-        std::string field_name;
-        if (column_name_resolver) {
-            field_name = column_name_resolver(output_pos);
-            if (field_name.empty()) {
-                ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for output pos " + std::to_string(output_pos));
-                output_pos++;
-                continue;
-            }
-        } else {
-            field_name = all_column_names[column_ids[i]];
+        if (IsNestedColumnType(column_ids[i])) {
+            const std::string field_name = (column_ids[i] < all_column_names.size())
+                                               ? all_column_names[column_ids[i]]
+                                               : std::string("<unknown>");
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                             "Nested column type detected: " + field_name + " (" +
+                                 all_column_types[column_ids[i]].ToString() +
+                                 "), skipping $select to avoid OData errors");
+            return "";
         }
-
-        // Check if this is a complex field
-        for (const auto& complex_field : complex_fields) {
-            if (field_name == complex_field || field_name.find(complex_field) == 0) {
-                // Complex field detected, skip $select to avoid OData errors
-                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Complex field detected: " + field_name + ", skipping $select to avoid OData errors");
-                return "";
-            }
-        }
-        output_pos++;
     }
 
     std::stringstream select_clause;
     std::set<std::string> unique_fields; // Use set to avoid duplicates
 
-    output_pos = 0;
+    size_t output_pos = 0;
     for (size_t i = 0; i < column_ids.size(); ++i) {
         if (duckdb::IsRowIdColumnId(column_ids[i])) {
             continue;
@@ -745,42 +753,6 @@ std::string ODataPredicatePushdownHelper::BuildSkipClause(duckdb::idx_t offset) 
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Built skip clause: " + result);
     return result;
 }
-
-void ODataPredicatePushdownHelper::ProcessResultModifier(const duckdb::BoundResultModifier &modifier)
-{
-    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Processing result modifier of type: " + std::to_string(static_cast<int>(modifier.type)));
-    
-    switch (modifier.type) {
-        case duckdb::ResultModifierType::LIMIT_MODIFIER: {
-            const auto &limit_modifier = modifier.Cast<duckdb::BoundLimitModifier>();
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Processing LIMIT modifier");
-            
-            // Handle LIMIT
-            if (limit_modifier.limit_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE) {
-                auto limit_value = limit_modifier.limit_val.GetConstantValue();
-                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "LIMIT constant value: " + std::to_string(limit_value));
-                ConsumeLimit(limit_value);
-            }
-            
-            // Handle OFFSET
-            if (limit_modifier.offset_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE) {
-                auto offset_value = limit_modifier.offset_val.GetConstantValue();
-                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "OFFSET constant value: " + std::to_string(offset_value));
-                ConsumeOffset(offset_value);
-            }
-            break;
-        }
-        case duckdb::ResultModifierType::ORDER_MODIFIER: {
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "ORDER BY modifier not yet supported");
-            break;
-        }
-        default:
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Unsupported result modifier type: " + std::to_string(static_cast<int>(modifier.type)));
-            break;
-    }
-}
-
-
 
 std::string ODataPredicatePushdownHelper::InlineCountClause() const {
     if (!inline_count_enabled) {

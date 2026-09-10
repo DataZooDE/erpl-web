@@ -76,6 +76,15 @@ public:
     // DuckDB lifecycle methods
     void ActivateColumns(const std::vector<duckdb::column_t> &column_ids);
     void AddFilters(const duckdb::optional_ptr<duckdb::TableFilterSet> &filters);
+    // NOTE (GitHub #90): SQL `LIMIT`/`OFFSET` are NOT translated into `$top`/`$skip`.
+    // DuckDB never hands a table function its bound result modifiers, so this
+    // entry point has no caller in a real plan; the only remaining caller is
+    // OdpODataReadBindData::AddResultModifiers, which is itself uncalled. The
+    // machinery that used to walk the modifiers and synthesise $top/$skip has
+    // been deleted because it made the code read as though LIMIT were pushed
+    // down when it never was. `$top`/`$skip` come exclusively from the explicit
+    // `top=`/`skip=` named parameters. Kept only so the ODP compilation unit
+    // still links; delete together with the two ODP stubs.
     void AddResultModifiers(const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>> &modifiers);
     void UpdateUrlFromPredicatePushdown();
     void PrefetchFirstPage();
@@ -113,6 +122,20 @@ public:
     std::shared_ptr<ConversionFailureLog> GetConversionFailureLog() const;
     // Emit the accumulated per-column failure summary once, at end of scan.
     void ReportConversionFailures();
+    // Produce an independent scan instance for one execution of a bound plan.
+    // See ODataReadGlobalState below and GitHub #75: all mutable scan state
+    // (row buffer, paging cursor, progress, emitted-row counter, request
+    // client) lives on the returned copy, so the bind data itself stays
+    // immutable after bind and a plan can be executed more than once.
+    duckdb::unique_ptr<ODataReadBindData> CloneForScan() const;
+
+    // Reconcile the schema column order. EDMX/metadata order is authoritative
+    // because that is the order the DuckDB catalog (ODataTableEntry) declares
+    // its columns in; JSON key order may only contribute names metadata does
+    // not know about, which are appended at the end. See GitHub #88.
+    static std::vector<std::string> ReconcileSchemaOrder(
+        const std::vector<std::string> &metadata_names,
+        const std::vector<std::string> &json_names);
 
 private:
     // Core components
@@ -126,11 +149,21 @@ private:
     // buffer, both of which are replaced during pagination.
     std::shared_ptr<ConversionFailureLog> conversion_failure_log;
 
-    // State management
+    // Schema, settled during bind and read-only afterwards.
+    // all_result_names / all_result_types are the EDMX (metadata) schema, in
+    // metadata order. extracted_column_names holds the JSON key order observed
+    // in the first data page (V2 / Datasphere only); it is used for type
+    // inference and as a fallback when metadata is unavailable, never to
+    // define column order (GitHub #88).
     std::vector<std::string> all_result_names;
-    std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::LogicalType> all_result_types;
     std::vector<std::string> extracted_column_names;
+    std::vector<std::string> base_result_names;
+    std::vector<duckdb::LogicalType> base_result_types;
+    bool base_schema_resolved_ = false;
+
+    // Projection, settled in ActivateColumns during global-state init.
+    std::vector<duckdb::column_t> active_column_ids;
     std::vector<duckdb::column_t> activated_to_original_mapping;
     
     // Configuration
@@ -138,7 +171,12 @@ private:
     std::string expand_clause;
     bool has_expanded_data = false;
     
-    // State tracking
+    // Mutable scan state. On the instance held as bind data these only ever
+    // carry what bind itself produced (a pre-fetched first page, if any); the
+    // scan mutates the per-execution clone returned by CloneForScan, never the
+    // bind data (GitHub #75). Together with row_buffer, progress_tracker,
+    // data_extractor's row cache and odata_client's paging cursor, this is the
+    // complete set of fields the clone must own.
     bool first_page_cached_ = false;
     // Tracks how many rows have been emitted so far to align expanded cache row-wise
     size_t emitted_row_index_ = 0;
@@ -147,6 +185,19 @@ private:
 
     // Helper methods
     void InitializeComponents(bool service_root_mode = false);
+
+    // (Re-)install the column-name resolver on the predicate pushdown helper,
+    // capturing this instance. Must be called on every object that owns a
+    // helper, including scan clones.
+    void BindPredicateColumnResolver();
+
+    // Metadata (EDMX) schema, fetched once and cached.
+    const std::vector<std::string> &MetadataColumnNames();
+    const std::vector<duckdb::LogicalType> &MetadataColumnTypes();
+
+    // Base (non-expanded) schema in authoritative metadata order, with the
+    // per-name types resolved from metadata. Computed once, then cached.
+    void EnsureBaseSchemaResolved();
 
     // Buffer the rows of an already-fetched first page into row_buffer and
     // mark first_page_cached_. Shared by PrefetchFirstPage (response from
@@ -374,6 +425,9 @@ public:
     std::vector<duckdb::Value> GetNextRow();
     bool HasMoreRows() const;
     size_t Size() const;
+    // Snapshot of the still-buffered rows, used to seed a per-scan clone with
+    // rows that were buffered during bind (see ODataReadBindData::CloneForScan).
+    std::vector<std::vector<duckdb::Value>> CopyRows() const;
     void Clear();
     
     // Page management
@@ -383,6 +437,40 @@ public:
 private:
     std::deque<std::vector<duckdb::Value>> row_buffer_;
     bool has_next_page_ = false;
+};
+
+// ============================================================================
+// Scan State - one instance per execution of a bound plan
+// ============================================================================
+
+/**
+ * @brief Owns all mutable scan state for a single execution of an OData scan.
+ *
+ * Historically the row buffer, paging cursor, progress tracker and
+ * emitted-row counter lived directly on ODataReadBindData behind a bare
+ * GlobalTableFunctionState. Bind data outlives a single execution, so a
+ * re-executed bound plan (PREPARE then EXECUTE twice) found the buffer already
+ * drained and returned zero rows, and a self-join of one odata_read() call had
+ * two scans sharing one cursor (GitHub #75).
+ *
+ * ODataReadTableInitGlobalState now clones the bind data into this object and
+ * runs projection/filter pushdown and the first-page prefetch against the
+ * clone, leaving the bind data untouched by the scan.
+ */
+class ODataReadGlobalState : public duckdb::GlobalTableFunctionState {
+public:
+    explicit ODataReadGlobalState(duckdb::unique_ptr<ODataReadBindData> scan_state);
+
+    // The OData scan is inherently sequential: pagination is server-driven via
+    // @odata.nextLink / __next, so page N+1 is unknowable until page N has been
+    // read. There is no partitioning scheme to hand to a second thread.
+    duckdb::idx_t MaxThreads() const override { return 1; }
+
+    ODataReadBindData &Scan() { return *scan_state; }
+    const ODataReadBindData &Scan() const { return *scan_state; }
+
+private:
+    duckdb::unique_ptr<ODataReadBindData> scan_state;
 };
 
 // ============================================================================
