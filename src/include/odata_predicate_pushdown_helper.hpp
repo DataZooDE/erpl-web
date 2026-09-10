@@ -5,6 +5,7 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 
@@ -84,6 +85,7 @@ private:
     // Filter translation methods
     std::string TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const;
     std::string TranslateConstantComparison(const duckdb::ConstantFilter &filter, const std::string &column_name) const;
+    std::string TranslateInFilter(const duckdb::InFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const;
     

@@ -6,6 +6,112 @@
 
 namespace erpl_web {
 
+namespace {
+
+// OData escapes a single quote inside a string literal by doubling it, in both
+// V2 and V4. See OData ABNF: SQUOTE-in-string = SQUOTE SQUOTE.
+std::string EscapeODataStringLiteral(const std::string &value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const auto c : value) {
+        if (c == '\'') {
+            escaped += "''";
+        } else {
+            escaped += c;
+        }
+    }
+    return escaped;
+}
+
+// Renders a DuckDB constant as an OData literal for the given protocol version,
+// or nullopt when the type has no literal form we can emit safely.
+//
+// Returning nullopt drops the filter rather than guessing. That is safe for a
+// ConstantFilter: DuckDB keeps it as a residual filter above the scan, so the
+// rows are still filtered locally - we merely transfer more of them. Emitting a
+// wrongly-typed literal is not safe, because a lenient server silently returns a
+// different row set that no residual filter can repair.
+std::optional<std::string> FormatODataLiteral(const duckdb::Value &value, ODataVersion version)
+{
+    if (value.IsNull()) {
+        return std::nullopt;
+    }
+
+    switch (value.type().id()) {
+    case duckdb::LogicalTypeId::BOOLEAN:
+        return value.GetValue<bool>() ? std::string("true") : std::string("false");
+
+    // Numeric literals are emitted bare in both versions. V2 strictly wants type
+    // suffixes (L for Int64, M for Decimal, f for Single); SAP Gateway accepts
+    // the bare form, so they are deliberately not emitted until validated
+    // against a real Gateway system. See GitHub #64.
+    case duckdb::LogicalTypeId::TINYINT:
+    case duckdb::LogicalTypeId::SMALLINT:
+    case duckdb::LogicalTypeId::INTEGER:
+    case duckdb::LogicalTypeId::BIGINT:
+    case duckdb::LogicalTypeId::HUGEINT:
+    case duckdb::LogicalTypeId::UTINYINT:
+    case duckdb::LogicalTypeId::USMALLINT:
+    case duckdb::LogicalTypeId::UINTEGER:
+    case duckdb::LogicalTypeId::UBIGINT:
+    case duckdb::LogicalTypeId::UHUGEINT:
+    case duckdb::LogicalTypeId::FLOAT:
+    case duckdb::LogicalTypeId::DOUBLE:
+    case duckdb::LogicalTypeId::DECIMAL:
+        return value.ToString();
+
+    case duckdb::LogicalTypeId::VARCHAR:
+    case duckdb::LogicalTypeId::CHAR:
+        return "'" + EscapeODataStringLiteral(value.ToString()) + "'";
+
+    case duckdb::LogicalTypeId::DATE: {
+        const auto rendered = value.ToString();
+        if (version == ODataVersion::V2) {
+            return "datetime'" + rendered + "T00:00:00'";
+        }
+        return rendered;
+    }
+
+    case duckdb::LogicalTypeId::TIMESTAMP: {
+        // DuckDB renders "2020-01-02 03:04:05"; OData requires the ISO-8601 "T".
+        auto rendered = value.ToString();
+        const auto space_pos = rendered.find(' ');
+        if (space_pos != std::string::npos) {
+            rendered[space_pos] = 'T';
+        }
+        if (version == ODataVersion::V2) {
+            return "datetime'" + rendered + "'";
+        }
+        return rendered + "Z";
+    }
+
+    case duckdb::LogicalTypeId::TIME: {
+        if (version == ODataVersion::V2) {
+            // V2 spells time as the duration form time'PT3H4M5S'; not emitted
+            // until it can be validated against a real service.
+            return std::nullopt;
+        }
+        return value.ToString();
+    }
+
+    case duckdb::LogicalTypeId::UUID: {
+        const auto rendered = value.ToString();
+        if (version == ODataVersion::V2) {
+            return "guid'" + rendered + "'";
+        }
+        return rendered;
+    }
+
+    default:
+        // TIMESTAMP_TZ, BLOB, INTERVAL, nested types: no literal form is emitted
+        // rather than risking a wrongly-typed one. The filter stays local.
+        return std::nullopt;
+    }
+}
+
+} // namespace
+
 // Forward declarations for local sanitization helpers
 static void SanitizeFilterParam(std::map<std::string, std::string>& params);
 static void SanitizeExpandParam(std::map<std::string, std::string>& params);
@@ -718,9 +824,27 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
             // Optional filters wrap another filter - delegate to the child filter
             result = TranslateFilter(*filter.Cast<duckdb::OptionalFilter>().child_filter, column_name);
             break;
-        case duckdb::TableFilterType::DYNAMIC_FILTER:
-            // Dynamic filters wrap a ConstantFilter - delegate to the underlying filter
-            result = TranslateConstantComparison(*filter.Cast<duckdb::DynamicFilter>().filter_data->filter, column_name);
+        case duckdb::TableFilterType::DYNAMIC_FILTER: {
+            // A dynamic filter is filled in by the Top-N optimizer only once the
+            // first rows have been seen. Until then filter_data->filter holds a
+            // placeholder sentinel (INT32_MIN and friends) that must never reach
+            // the server: pushing it returns zero rows, and because the filter
+            // was pushed there is no residual filter left to restore them.
+            // See GitHub #59.
+            auto &filter_data = *filter.Cast<duckdb::DynamicFilter>().filter_data;
+            duckdb::lock_guard<duckdb::mutex> filter_guard(filter_data.lock);
+            if (!filter_data.initialized || !filter_data.filter) {
+                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                                 "Dynamic filter for column '" + column_name +
+                                 "' is not initialized yet; not pushing it down");
+                result = "";
+                break;
+            }
+            result = TranslateConstantComparison(*filter_data.filter, column_name);
+            break;
+        }
+        case duckdb::TableFilterType::IN_FILTER:
+            result = TranslateInFilter(filter.Cast<duckdb::InFilter>(), column_name);
             break;
         default:
             std::stringstream error;
@@ -729,7 +853,10 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
             error << "Unsupported filter type for OData translation: '" << filter_str << "'"
                   << " (" << filter_type_name << ")";
             ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Unsupported filter type: " + std::string(filter_type_name));
-            throw std::runtime_error(error.str());
+            // Deliberately loud: DuckDB prunes some pushed filters from the
+            // residual plan, so silently dropping one can lose rows. Failing the
+            // query is preferable to returning a wrong answer.
+            throw duckdb::NotImplementedException(error.str());
     }
     
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Translated filter result: '" + result + "'");
@@ -788,89 +915,119 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
     result << comparison_operator;
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Using comparison operator: " + comparison_operator);
 
-    // Handle different data types properly for OData V2 vs V4
-    if (filter.constant.type().id() == duckdb::LogicalTypeId::VARCHAR || 
-        filter.constant.type().id() == duckdb::LogicalTypeId::CHAR) {
-        // String values need proper quoting based on OData version
-        if (odata_version == ODataVersion::V2) {
-            // OData V2: Use single quotes and escape internal single quotes
-            std::string escaped_value = constant_value;
-            // Replace single quotes with double single quotes for OData V2
-            size_t pos = 0;
-            while ((pos = escaped_value.find("'", pos)) != std::string::npos) {
-                escaped_value.replace(pos, 1, "''");
-                pos += 2;
-            }
-            result << " '" << escaped_value << "'";
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V2 string value with escaped quotes: '" + escaped_value + "'");
-        } else {
-            // OData V4: Use single quotes (standard)
-            result << " '" << constant_value << "'";
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V4 string value with quotes: '" + constant_value + "'");
-        }
-    } else if (filter.constant.type().id() == duckdb::LogicalTypeId::INTEGER ||
-               filter.constant.type().id() == duckdb::LogicalTypeId::BIGINT ||
-               filter.constant.type().id() == duckdb::LogicalTypeId::DOUBLE ||
-               filter.constant.type().id() == duckdb::LogicalTypeId::DECIMAL) {
-        // Numeric values don't need quotes
-        result << " " << constant_value;
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added numeric value without quotes: " + constant_value);
-    } else if (filter.constant.type().id() == duckdb::LogicalTypeId::BOOLEAN) {
-        // Boolean values in OData are lowercase
-        std::string bool_value = (constant_value == "true" ? "true" : "false");
-        result << " " << bool_value;
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added boolean value: " + bool_value);
-    } else {
-        // For other types, try to convert to string but be cautious
-        if (odata_version == ODataVersion::V2) {
-            // OData V2: Use single quotes and escape internal single quotes
-            std::string escaped_value = constant_value;
-            size_t pos = 0;
-            while ((pos = escaped_value.find("'", pos)) != std::string::npos) {
-                escaped_value.replace(pos, 1, "''");
-                pos += 2;
-            }
-            result << " '" << escaped_value << "'";
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V2 other type value with escaped quotes: '" + escaped_value + "'");
-        } else {
-            result << " '" << constant_value << "'";
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added OData V4 other type value with quotes: '" + constant_value + "'");
-        }
+    // Render the constant as a version-appropriate OData literal. A type with no
+    // safe literal form drops the whole comparison rather than emitting a
+    // wrongly-typed one; DuckDB still applies it as a residual filter.
+    const auto literal = FormatODataLiteral(filter.constant, odata_version);
+    if (!literal.has_value()) {
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                         "No OData literal form for type " + filter.constant.type().ToString() +
+                         " on column " + column_name + "; leaving the filter to DuckDB");
+        return "";
     }
-    
+    result << " " << *literal;
+    ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added literal: " + *literal);
+
     std::string final_result = result.str();
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Final constant comparison: '" + final_result + "'");
     return final_result;
 }
 
-std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const {
+std::string ODataPredicatePushdownHelper::TranslateInFilter(const duckdb::InFilter &filter, const std::string &column_name) const {
+    // OData has no IN operator, so an IN list becomes a parenthesised or-chain.
+    // Every value must translate: dropping one would narrow the disjunction and
+    // silently lose rows, and DuckDB prunes a pushed IN filter from the residual
+    // plan, so nothing downstream would bring them back.
+    if (filter.values.empty()) {
+        return "";
+    }
+
+    constexpr idx_t MAX_IN_LIST_SIZE = 100;
+    if (filter.values.size() > MAX_IN_LIST_SIZE) {
+        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                         "IN list on column '" + column_name + "' has " +
+                         std::to_string(filter.values.size()) + " values; too long for a URL, filtering locally");
+        return "";
+    }
+
     std::stringstream result;
     result << "(";
+    for (idx_t i = 0; i < filter.values.size(); ++i) {
+        const auto literal = FormatODataLiteral(filter.values[i], odata_version);
+        if (!literal.has_value()) {
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                             "IN list on column '" + column_name +
+                             "' holds a value with no OData literal form; filtering locally");
+            return "";
+        }
+        if (i > 0) {
+            result << " or ";
+        }
+        result << column_name << " eq " << *literal;
+    }
+    result << ")";
 
-    for (size_t i = 0; i < filter.child_filters.size(); ++i) {
+    return result.str();
+}
+
+std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const {
+    // Children that cannot be translated are dropped. That widens the result
+    // set, and DuckDB's residual filter removes the surplus rows, so the answer
+    // stays correct.
+    std::vector<std::string> translated;
+    translated.reserve(filter.child_filters.size());
+    for (const auto &child : filter.child_filters) {
+        auto child_filter = TranslateFilter(*child, column_name);
+        if (!child_filter.empty()) {
+            translated.push_back(std::move(child_filter));
+        }
+    }
+
+    if (translated.empty()) {
+        return "";
+    }
+
+    std::stringstream result;
+    result << "(";
+    for (idx_t i = 0; i < translated.size(); ++i) {
         if (i > 0) {
             result << " and ";
         }
-        
-        result << TranslateFilter(*filter.child_filters[i], column_name);
+        result << translated[i];
     }
-
     result << ")";
     return result.str();
 }
 
 std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const {
+    // An OR is all-or-nothing: dropping a branch would NARROW the disjunction
+    // and withhold rows the server would otherwise return, which no residual
+    // filter can recover. So if any child fails to translate, push nothing.
+    std::vector<std::string> translated;
+    translated.reserve(filter.child_filters.size());
+    for (const auto &child : filter.child_filters) {
+        auto child_filter = TranslateFilter(*child, column_name);
+        if (child_filter.empty()) {
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                             "Disjunction on column '" + column_name +
+                             "' has an untranslatable branch; not pushing any of it down");
+            return "";
+        }
+        translated.push_back(std::move(child_filter));
+    }
+
+    if (translated.empty()) {
+        return "";
+    }
+
     std::stringstream result;
     result << "(";
-
-    for (size_t i = 0; i < filter.child_filters.size(); ++i) {
+    for (idx_t i = 0; i < translated.size(); ++i) {
         if (i > 0) {
             result << " or ";
         }
-        
-        result << TranslateFilter(*filter.child_filters[i], column_name);
+        result << translated[i];
     }
-
     result << ")";
     return result.str();
 }
