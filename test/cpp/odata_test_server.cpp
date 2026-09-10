@@ -52,21 +52,23 @@ int HexValue(char c)
     return -1;
 }
 
-// Decodes a query-string value the way it was encoded, which for everything this
-// extension sends is application/x-www-form-urlencoded -- percent escapes plus
-// '+' for a space.
+// Decodes a query-string value tolerantly: percent escapes, plus '+' read as a
+// space.
 //
-// That is not a choice the extension makes, it is httplib's. The extension hands
-// the client a fully prepared query (spaces already written as %20 by
-// ODataUrlCodec::encodeFilterExpression), but ClientImpl::write_request
-// unconditionally round-trips it: parse_query_text() decodes every value with
-// decode_query_component(..., plus_as_space = true) and params_to_query_str()
-// re-encodes it with encode_query_component(..., space_as_plus = true). So a
-// %20 the extension wrote leaves the socket as '+', while a literal '+' in a
-// value leaves it as %2B. Decoding '+' back to a space is therefore lossless and
-// is the only way to recover the value the caller actually asked for.
+// Which of the two spellings arrives depends on the request. Requests sent with
+// url_encode = false -- every OData path -- now reach the socket byte for byte
+// as the extension composed them, spaces already written as %20 by
+// ODataUrlCodec::encodeFilterExpression (GitHub #126). Requests sent with the
+// default url_encode = true still go through httplib's
+// application/x-www-form-urlencoded round trip in ClientImpl::write_request,
+// where parse_query_text() decodes with plus_as_space = true and
+// params_to_query_str() re-encodes with space_as_plus = true, so a space shows
+// up as '+'. Accepting both keeps this read-back usable for either kind of
+// request; the cost is that a value containing a genuine literal '+' reads back
+// as a space.
 //
 // Callers that want the untouched wire bytes use QueryParam(), which is raw.
+// Assertions about the encoding itself must use the raw form.
 std::string FormDecode(const std::string &value)
 {
     std::string result;

@@ -183,6 +183,14 @@ public:
     std::string Url() const { return url.ToString(); }
     std::shared_ptr<HttpClient> GetHttpClient() const { return http_client->GetHttpClient(); }
     std::shared_ptr<HttpAuthParams> AuthParams() const { return auth_params; }
+
+    // Server-driven paging follows whatever @odata.nextLink / __next the service
+    // hands back, so the number of requests is bounded by the service and not by
+    // us. A service that repeats a link (SAP ODP is known to echo the same
+    // $skiptoken on a "!deltatoken" response) would otherwise spin forever.
+    // This is the hard stop on how many pages one client will ever fetch.
+    static constexpr idx_t MAX_PAGE_REQUESTS = 10000;
+
 protected:
     std::shared_ptr<CachingHttpClient> http_client;
     HttpUrl url;
@@ -190,6 +198,7 @@ protected:
     std::shared_ptr<TResponse> current_response;
     ODataVersion odata_version;
     std::string metadata_context_url; // For Datasphere dual-URL pattern
+    idx_t page_requests = 0;          // Pages fetched via a next link on this client
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         // Create a copy of the URL to modify with input parameters
