@@ -320,10 +320,17 @@ protected:
                                                 + " failed: No response received");
             }
 
-            // Only transient failures are worth repeating; a 4xx (401/403/404) is answered by the
-            // server on purpose and retrying it only multiplies the damage (SAP lockouts).
-            const bool is_retryable = (metadata_response == nullptr) || ShouldRetryStatus(metadata_response->Code());
-            if (!is_retryable) {
+            // Three outcomes, and they are not the same thing:
+            //  - transient (429/5xx, or no response at all): repeat the same request after a wait;
+            //  - 404: the URL is wrong rather than the service being unwell, so fall back to the
+            //    popped, service-root-ward URL below. That is a *different* request, not a repeat;
+            //  - any other 4xx (401/403/...): the server answered deliberately. Repeating it cannot
+            //    help and does harm - every retried 401 increments the SAP failed-logon counter.
+            const bool no_response = (metadata_response == nullptr);
+            const bool is_transient = no_response || ShouldRetryStatus(metadata_response->Code());
+            const bool can_pop_path = !no_response && metadata_response->Code() == 404;
+
+            if (!is_transient && !can_pop_path) {
                 ERPL_TRACE_ERROR("ODATA_CLIENT", "Metadata request failed with non-retryable status "
                                                  + std::to_string(metadata_response->Code()) + ", not retrying");
                 break;
@@ -333,7 +340,11 @@ protected:
                 break;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(METADATA_RETRY_BASE_WAIT_MS * attempt));
+            // Back off only when repeating the same request; a 404 fallback targets a different
+            // URL, so there is nothing to wait for.
+            if (is_transient) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(METADATA_RETRY_BASE_WAIT_MS * attempt));
+            }
 
             // Pop one level and retry toward service-root $metadata
             current_svc_url = current_svc_url.PopPath();
