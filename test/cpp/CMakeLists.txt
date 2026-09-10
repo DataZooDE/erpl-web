@@ -32,6 +32,7 @@ list(APPEND TEST_SOURCES
     test_odata_content.cpp
     test_odata_row_buffer.cpp
     test_odata_from_entity_set_buffering.cpp
+    test_odata_data_extractor.cpp
     test_odata_url_helpers.cpp
     test_odata_filter_translation.cpp
     test_odp_parsing.cpp
