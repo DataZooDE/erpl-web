@@ -1,0 +1,73 @@
+# name: test/sql/tls_enforcement.test
+# description: Proves TLS certificate verification is actually enforced, not merely configured
+# group: [erpl_web]
+#
+# tls_settings.test asserts the settings EXIST and validate their input. That is not the
+# same as proving a handshake is refused, and the difference matters: when TLS verification
+# was first enabled, the settings were registered and every unit test passed while the
+# escape hatch did not work at all. Only exercising a real handshake caught it.
+#
+# These cases need outbound network access to badssl.com, so they are opt-in rather than
+# part of the default run.
+
+require erpl_web
+
+require-env ERPL_TEST_TLS_ENFORCEMENT
+
+statement ok
+SET erpl_trace_enabled=false;
+
+# ============================================================================
+# Verification is on by default and actually refuses bad certificates
+# ============================================================================
+
+statement error
+SELECT status FROM http_get('https://expired.badssl.com/');
+----
+SSL server verification failed
+
+statement error
+SELECT status FROM http_get('https://self-signed.badssl.com/');
+----
+SSL server verification failed
+
+statement error
+SELECT status FROM http_get('https://wrong.host.badssl.com/');
+----
+SSL server hostname verification failed
+
+# A publicly trusted certificate must still work - the point is to reject the bad ones,
+# not to reject everything.
+query I
+SELECT status FROM http_get('https://httpbin.org/ip');
+----
+200
+
+# ============================================================================
+# GitHub #138 - a policy change takes effect on clients that already exist
+# ============================================================================
+
+# The opt-out is engaged AFTER a request has already been made, which is the ordering
+# docs/TLS.md tells users to follow (ATTACH, then SET, then query). The policy used to be
+# snapshotted when HttpParams was constructed, so a client built beforehand kept the old
+# policy forever and this silently did nothing.
+statement ok
+SELECT status FROM http_get('https://httpbin.org/ip');
+
+statement ok
+SET erpl_unsafe_disable_server_cert_verification = 'I_UNDERSTAND_THIS_IS_INSECURE';
+
+query I
+SELECT status FROM http_get('https://expired.badssl.com/');
+----
+200
+
+# ...and re-enabling mid-session must start refusing again, or the opt-out would be a
+# one-way door for the rest of the session.
+statement ok
+SET erpl_unsafe_disable_server_cert_verification = '';
+
+statement error
+SELECT status FROM http_get('https://expired.badssl.com/');
+----
+SSL server verification failed
