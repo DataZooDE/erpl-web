@@ -25,14 +25,17 @@ endif()
 list(APPEND TEST_SOURCES
     test_charset_converter.cpp
     test_http_client.cpp
+    test_odata_catalog.cpp
     test_odata_edm.cpp
     test_odata_edm_builder.cpp
     test_odata_client.cpp
     test_odata_content.cpp
     test_odata_row_buffer.cpp
     test_odata_from_entity_set_buffering.cpp
+    test_odata_data_extractor.cpp
     test_odata_url_helpers.cpp
     test_odata_expand_parser.cpp
+    test_odata_filter_translation.cpp
     test_odp_parsing.cpp
     test_odp_http_request_factory.cpp
     test_odp_subscription_repository.cpp

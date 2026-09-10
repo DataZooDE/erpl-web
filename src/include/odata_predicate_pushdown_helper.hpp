@@ -5,6 +5,7 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 
@@ -69,6 +70,12 @@ private:
     std::string filter_clause;
     std::string top_clause;
     std::string skip_clause;
+
+    // Set when at least one filter could not be translated into $filter and was
+    // therefore left for DuckDB to apply locally. $top and $skip must not be pushed
+    // in that state: the server would apply them to the UNFILTERED result and return
+    // a short page, so the query would silently produce fewer rows than asked for.
+    bool has_untranslated_filter = false;
     std::string expand_clause;
     
     // Additional features
@@ -77,13 +84,14 @@ private:
     
     // Helper methods for building clauses
     std::string BuildSelectClause(const std::vector<duckdb::column_t> &column_ids) const;
-    std::string BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters) const;
+    std::string BuildFilterClause(duckdb::optional_ptr<duckdb::TableFilterSet> filters);
     std::string BuildTopClause(duckdb::idx_t limit) const;
     std::string BuildSkipClause(duckdb::idx_t offset) const;
     
     // Filter translation methods
     std::string TranslateFilter(const duckdb::TableFilter &filter, const std::string &column_name) const;
     std::string TranslateConstantComparison(const duckdb::ConstantFilter &filter, const std::string &column_name) const;
+    std::string TranslateInFilter(const duckdb::InFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const;
     std::string TranslateConjunction(const duckdb::ConjunctionOrFilter &filter, const std::string &column_name) const;
     

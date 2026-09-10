@@ -32,6 +32,8 @@
 
 #include <unordered_map>
 #include <mutex>
+#include <optional>
+#include <string>
 
 using namespace duckdb;
 
@@ -130,10 +132,26 @@ public:
                       std::vector<duckdb::unique_ptr<duckdb::Constraint>> &constraints);
     ODataServiceClient& GetServiceClient();
 
+    // Returns the service metadata document, fetching it at most once per catalog instance.
+    // Throws duckdb::IOException carrying the underlying cause and the service URL when the
+    // $metadata request fails, so that authentication, TLS or connectivity problems are not
+    // reported to the user as "table does not exist".
+    Edmx &GetCachedMetadata();
+
+    // True when the entity set is excluded by the IGNORE option of the ATTACH statement.
+    bool IsIgnored(const std::string &entity_set_name) const;
+
+    // Glob match used to evaluate the ATTACH ... (IGNORE '<pattern>') option. An empty pattern
+    // never matches, i.e. no entity set is hidden when no IGNORE option was given.
+    static bool MatchesIgnorePattern(const std::string &entity_set_name, const std::string &ignore_pattern);
+
 protected:
     ODataServiceClient service_client;
     const std::string ignore_pattern;
     std::unique_ptr<ODataSchemaEntry> main_schema;
+
+    mutable std::mutex metadata_mutex;
+    std::optional<Edmx> cached_metadata;
 
 private:
     duckdb::string path_;

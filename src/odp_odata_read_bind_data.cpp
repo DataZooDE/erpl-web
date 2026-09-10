@@ -104,6 +104,12 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
             rows_fetched = odata_bind_data_->FetchNextResult(output);
         }
 
+        // Every row has now been handed to DuckDB and no further page is pending, so the
+        // delta package has actually been delivered and its token may safely be advanced.
+        if (rows_fetched == 0 && pending_next_url_.empty()) {
+            CommitStagedDeltaToken();
+        }
+
         ERPL_TRACE_DEBUG("ODP_BIND_DATA", duckdb::StringUtil::Format("Fetched %u rows", rows_fetched));
 
         if (current_audit_id_ > 0 && rows_fetched > 0) {
@@ -379,20 +385,55 @@ void OdpODataReadBindData::ProcessRequestResult(const OdpRequestOrchestrator::Od
                                        result.response_size_bytes, result.extracted_delta_token);
     }
     
-    // Handle state transitions based on operation type
+    // Stage the token rather than committing it here. At this point the response has
+    // merely been parsed - not a single row has been handed to DuckDB yet. Because SAP's
+    // ODQ discards a delta package once its token is acknowledged, committing now means a
+    // cancelled query, a failed page or a crash during the scan skips that package
+    // permanently. CommitStagedDeltaToken() writes it once the scan has drained.
+    // See GitHub #62.
     if (operation_type == "initial_load") {
         if (!result.extracted_delta_token.empty() && result.preference_applied) {
-            // Successful initial load with change tracking
-            state_manager_->TransitionToDeltaFetch(result.extracted_delta_token, result.preference_applied);
+            staged_delta_token_ = result.extracted_delta_token;
+            staged_operation_type_ = operation_type;
+            staged_preference_applied_ = result.preference_applied;
+            has_staged_delta_token_ = true;
+            ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Staged delta token from initial load, pending scan completion");
         } else {
             // Initial load without change tracking - stay in initial load mode
             ERPL_TRACE_WARN("ODP_BIND_DATA", "Initial load completed but change tracking not established");
         }
     } else if (operation_type == "delta_fetch") {
         if (!result.extracted_delta_token.empty()) {
-            // Update delta token for next fetch
-            state_manager_->UpdateDeltaToken(result.extracted_delta_token);
+            staged_delta_token_ = result.extracted_delta_token;
+            staged_operation_type_ = operation_type;
+            staged_preference_applied_ = false;
+            has_staged_delta_token_ = true;
+            ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Staged delta token from delta fetch, pending scan completion");
         }
+    }
+}
+
+void OdpODataReadBindData::CommitStagedDeltaToken() {
+    if (!has_staged_delta_token_) {
+        return;
+    }
+
+    ERPL_TRACE_INFO("ODP_BIND_DATA",
+                    "Scan drained; committing staged delta token for " + staged_operation_type_);
+
+    // Clear the staging flag first, so a failure to persist cannot be retried in a loop
+    // and cannot be committed twice if the scan is drained more than once.
+    has_staged_delta_token_ = false;
+    const auto token = staged_delta_token_;
+    const auto operation_type = staged_operation_type_;
+    const auto preference_applied = staged_preference_applied_;
+    staged_delta_token_.clear();
+    staged_operation_type_.clear();
+
+    if (operation_type == "initial_load") {
+        state_manager_->TransitionToDeltaFetch(token, preference_applied);
+    } else {
+        state_manager_->UpdateDeltaToken(token);
     }
 }
 
@@ -546,9 +587,16 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
 
     auto next_result = request_orchestrator_->ExecuteNextPage(url_to_fetch);
     if (!next_result.response) {
-        ERPL_TRACE_WARN("ODP_BIND_DATA", "Next page request returned no response — stopping pagination");
+        // Ending pagination here would hand the user a partial extraction presented as a
+        // complete one, and the staged delta token would then be committed over rows that
+        // were never delivered. Fail loudly instead. See GitHub #93.
         pending_next_url_ = "";
-        return;
+        has_staged_delta_token_ = false;
+        staged_delta_token_.clear();
+        throw duckdb::IOException(
+            "ODP pagination failed: no response for next page '" + url_to_fetch +
+            "'. The extraction is incomplete and the delta token has not been advanced, "
+            "so re-running the query will retry from the same position.");
     }
 
     // Determine whether there is yet another page after this one.

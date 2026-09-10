@@ -207,6 +207,25 @@ private:
     // across all pages.
     std::vector<duckdb::column_t> active_column_ids_;
 
+    // Delta token staging. SAP's ODQ discards a delta package once its token has been
+    // acknowledged, so advancing the subscription before the rows have actually reached
+    // DuckDB loses them permanently: a cancelled query, a failed page or a crash between
+    // the two would skip that package forever. The token extracted from the final page is
+    // therefore held here and only written to the repository once the scan has drained.
+    // See GitHub #62.
+    std::string staged_delta_token_;
+    std::string staged_operation_type_;
+    bool staged_preference_applied_ = false;
+    bool has_staged_delta_token_ = false;
+
+    /**
+     * @brief Commit a staged delta token once every row has been handed to DuckDB.
+     *
+     * Called when the scan reports exhaustion. A no-op when nothing is staged, so it is
+     * safe to call on every drained fetch.
+     */
+    void CommitStagedDeltaToken();
+
     // ========================================================================
     // Initialization and Setup
     // ========================================================================
