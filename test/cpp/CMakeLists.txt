@@ -25,6 +25,7 @@ endif()
 list(APPEND TEST_SOURCES
     test_charset_converter.cpp
     test_http_client.cpp
+    test_odata_catalog.cpp
     test_odata_edm.cpp
     test_odata_edm_builder.cpp
     test_odata_client.cpp
