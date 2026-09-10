@@ -1,8 +1,11 @@
 #pragma once
 
 #include "odata_edm.hpp"
+#include "conversion_failure_log.hpp"
 #include "datazoo/oauth2/http_client.hpp"
 #include "yyjson.hpp"
+
+#include <memory>
 
 using namespace duckdb_yyjson;
 
@@ -26,6 +29,11 @@ public:
                                                            std::vector<duckdb::LogicalType> &column_types) = 0;
     // Optional total row count for OData v4 when $count=true is used
     virtual std::optional<uint64_t> TotalCount() { return std::nullopt; }
+
+    // Attach the scan-wide log that collects per-cell conversion failures.
+    // Content objects are replaced on every page, the log is not - it is owned
+    // by the bind data so the summary spans the whole scan.
+    virtual void SetConversionFailureLog(std::shared_ptr<ConversionFailureLog> log) { (void)log; }
 };
 
 struct ODataEntitySetReference {
@@ -58,6 +66,17 @@ public:
 
 protected:
     std::shared_ptr<yyjson_doc> doc;
+
+    // Scan-wide failure log (may be null when the content is used standalone)
+    // and the column currently being deserialized, used to attribute failures.
+    std::shared_ptr<ConversionFailureLog> conversion_failure_log;
+    std::string current_column_context;
+
+    // Record one failed value conversion against the current column. Throws
+    // StrictTypingViolation when strict typing is enabled.
+    void RecordConversionFailure(const std::string &offending_value, const std::string &error_message);
+    // Compact JSON rendering of a value, for inclusion in the failure report.
+    std::string JsonValueToDisplayString(yyjson_val *json_value) const;
     ODataVersion odata_version = ODataVersion::V4; // Default to v4 for backward compatibility
 
     void ThrowTypeError(yyjson_val *json_value, const std::string &expected);
@@ -113,6 +132,10 @@ public:
                                                    std::vector<duckdb::LogicalType> &column_types) override;
 
     std::optional<uint64_t> TotalCount() override;
+
+    void SetConversionFailureLog(std::shared_ptr<ConversionFailureLog> log) override {
+        conversion_failure_log = std::move(log);
+    }
 };
 
 class ODataServiceJsonContent : public ODataServiceContent, public ODataJsonContentMixin {

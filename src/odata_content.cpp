@@ -3,6 +3,8 @@
 
 #include <cpptrace/cpptrace.hpp>
 
+#include <cstdlib>
+
 namespace erpl_web {
 
 
@@ -100,6 +102,32 @@ void ODataJsonContentMixin::ThrowTypeError(yyjson_val* json_value, const std::st
     std::ostringstream ss;
     ss << "Expected JSON type '" << expected << "', but got type: '" << actual << "'";
     throw duckdb::ParserException(ss.str());
+}
+
+std::string ODataJsonContentMixin::JsonValueToDisplayString(yyjson_val* json_value) const
+{
+    if (!json_value) {
+        return "<missing>";
+    }
+
+    size_t written_length = 0;
+    auto raw = yyjson_val_write(json_value, 0, &written_length);
+    if (!raw) {
+        return "<unprintable>";
+    }
+
+    std::string result(raw, written_length);
+    free(raw);
+    return result;
+}
+
+void ODataJsonContentMixin::RecordConversionFailure(const std::string& offending_value,
+                                                    const std::string& error_message)
+{
+    if (!conversion_failure_log) {
+        return;
+    }
+    conversion_failure_log->RecordFailure(current_column_context, offending_value, error_message);
 }
 
 void ODataJsonContentMixin::PrettyPrint()
@@ -761,9 +789,16 @@ duckdb::Value ODataJsonContentMixin::DeserializeJsonArray(yyjson_val* json_value
         try {
             auto child_value = DeserializeJsonValue(json_child_val, child_type);
             list_values.push_back(child_value);
+        } catch (const StrictTypingViolation&) {
+            throw;
         } catch (const std::exception& e) {
             ERPL_TRACE_ERROR("ODATA_CONTENT", "Failed to deserialize array element " + std::to_string(idx) + ": " + std::string(e.what()));
-            // Continue with other elements
+            // A failed element becomes a NULL element IN PLACE. Dropping it
+            // would shorten the list and silently re-index every element after
+            // it, so element N would be served to the user as element N-1.
+            RecordConversionFailure(JsonValueToDisplayString(json_child_val),
+                                    "array element " + std::to_string(idx) + ": " + std::string(e.what()));
+            list_values.push_back(duckdb::Value(child_type));
         }
     }
     
@@ -1135,6 +1170,13 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
     auto duck_rows = std::vector<std::vector<duckdb::Value>>();
     duck_rows.reserve(yyjson_arr_size(json_values));
 
+    // Callers that drive pagination attach a scan-wide log before calling us.
+    // When nobody did, own one for this call so failures are still surfaced.
+    const bool owns_failure_log = !conversion_failure_log;
+    if (owns_failure_log) {
+        conversion_failure_log = std::make_shared<ConversionFailureLog>();
+    }
+
     size_t i_row, max_row;
     yyjson_val *json_row;
     yyjson_arr_foreach(json_values, i_row, max_row, json_row) 
@@ -1152,15 +1194,30 @@ std::vector<std::vector<duckdb::Value>> ODataEntitySetJsonContent::ToRows(std::v
                 continue;
             }
 
+            current_column_context = column_name;
             try {
                 duck_row.push_back(DeserializeJsonValue(json_value, column_type));
+            } catch (const StrictTypingViolation&) {
+                // Already recorded (and refused) by the failure log; let it out
+                // so strict_typing actually fails the query.
+                throw;
             } catch (const std::exception& e) {
                 ERPL_TRACE_ERROR("ODATA_TO_ROWS", duckdb::StringUtil::Format("Failed to deserialize %s: %s", column_name, e.what()));
+                // Row-level resilience is kept - one bad cell must not abort a
+                // 10,000 row scan - but the failure is counted and surfaced
+                // once per scan instead of vanishing into a NULL.
+                RecordConversionFailure(JsonValueToDisplayString(json_value), e.what());
                 duck_row.emplace_back();  // null on error
             }
         }
 
         duck_rows.push_back(std::move(duck_row));
+    }
+
+    if (owns_failure_log) {
+        auto owned_log = conversion_failure_log;
+        conversion_failure_log.reset();
+        owned_log->ReportAndDrain("OData response");
     }
 
     ERPL_TRACE_DEBUG("ODATA_TO_ROWS", duckdb::StringUtil::Format("Total rows processed: %d", duck_rows.size()));

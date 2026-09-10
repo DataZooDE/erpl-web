@@ -267,6 +267,9 @@ void ODataDataExtractor::ExtractExpandedDataFromResponse(
                 }
             }
         }
+  } catch (const StrictTypingViolation &) {
+    // strict_typing must fail the query, not be downgraded to a warning.
+    throw;
   } catch (const std::exception &e) {
     ERPL_TRACE_WARN("DATA_EXTRACTOR",
                     "Error processing expanded data: " + std::string(e.what()));
@@ -333,6 +336,7 @@ void ODataDataExtractor::ProcessExpandedDataRows(
           continue;
         }
 
+        current_column_context_ = expand_path;
         try {
           auto parsed_value = ParseExpandedDataRecursively(
               expand_data, expand_path, GetExpandedTargetType(expand_path));
@@ -340,10 +344,20 @@ void ODataDataExtractor::ProcessExpandedDataRows(
           ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
                            "Extracted expanded data for path '" + expand_path +
                                "' at row " + std::to_string(row_index));
+        } catch (const StrictTypingViolation &) {
+          // strict_typing fails the whole query, so cache alignment no longer
+          // matters - let it out.
+          throw;
         } catch (const std::exception &e) {
           ERPL_TRACE_WARN("DATA_EXTRACTOR",
                           "Failed to parse expand data for path '" +
                               expand_path + "': " + e.what());
+          // The exception MUST stop here: expanded_data_cache is indexed by
+          // row position, so skipping the push_back would leave this page's
+          // cache short and misalign every later page onto the wrong rows.
+          // Alignment is preserved by pushing a NULL in place; visibility is
+          // preserved by recording the failure for the end-of-scan report.
+          RecordConversionFailure(expand_path, "<expanded payload>", e.what());
           expanded_data_cache[expand_path].push_back(duckdb::Value());
         }
       }
@@ -477,10 +491,12 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
     default:
       return ConvertFallbackAsString(value, target_type);
     }
+  } catch (const StrictTypingViolation &) {
+    throw;
   } catch (const std::exception &e) {
     LogError("JSON_PARSING",
              "Unexpected error parsing JSON value: " + std::string(e.what()));
-    return CreateFallbackValue(target_type);
+    return CreateFallbackValue(target_type, e.what());
   }
 }
 
@@ -533,7 +549,11 @@ duckdb::Value ODataDataExtractor::ConvertInteger(
     if (uint_value <= static_cast<uint64_t>(INT32_MAX)) {
       return duckdb::Value(static_cast<int32_t>(uint_value));
     }
-    return CreateFallbackValue(target_type);
+    const auto range_message = "value " + std::to_string(uint_value) +
+                               " is out of range for " + target_type.ToString();
+    LogError("INTEGER_CONVERSION", range_message);
+    return CreateFallbackValue(target_type, range_message,
+                               std::to_string(uint_value));
   }
   if (duckdb_yyjson::yyjson_is_str(value)) {
     try {
@@ -558,7 +578,12 @@ ODataDataExtractor::ConvertBigint(duckdb_yyjson::yyjson_val *value) {
     if (uint_value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
       return duckdb::Value(static_cast<int64_t>(uint_value));
     }
-    return CreateFallbackValue(duckdb::LogicalType(duckdb::LogicalTypeId::BIGINT));
+    const auto range_message =
+        "value " + std::to_string(uint_value) + " is out of range for BIGINT";
+    LogError("BIGINT_CONVERSION", range_message);
+    return CreateFallbackValue(
+        duckdb::LogicalType(duckdb::LogicalTypeId::BIGINT), range_message,
+        std::to_string(uint_value));
   }
   if (duckdb_yyjson::yyjson_is_str(value)) {
     try {
@@ -931,33 +956,34 @@ bool ODataDataExtractor::ShouldRetryAfterError(
     return it == error_counts_.end() || it->second < 3; // Retry up to 3 times
 }
 
+void ODataDataExtractor::SetConversionFailureLog(
+    std::shared_ptr<ConversionFailureLog> log) {
+  conversion_failure_log_ = std::move(log);
+}
+
+void ODataDataExtractor::RecordConversionFailure(
+    const std::string &column_name, const std::string &offending_value,
+    const std::string &error_message) const {
+  if (!conversion_failure_log_) {
+    return;
+  }
+  conversion_failure_log_->RecordFailure(column_name, offending_value,
+                                         error_message);
+}
+
+// A value we could not build becomes a NULL, never a fabricated 0 / "" / false.
+// Substituting a zero into a numeric column makes a conversion failure
+// indistinguishable from a real zero the server sent, which is exactly the
+// silent substitution the rest of this file refuses to do.
 duckdb::Value ODataDataExtractor::CreateFallbackValue(
-    const duckdb::LogicalType &target_type) const {
-    switch (target_type.id()) {
-        case duckdb::LogicalTypeId::VARCHAR:
-            return duckdb::Value("");
-        case duckdb::LogicalTypeId::INTEGER:
-            return duckdb::Value(0);
-        case duckdb::LogicalTypeId::BIGINT:
-            return duckdb::Value(static_cast<int64_t>(0));
-        case duckdb::LogicalTypeId::FLOAT:
-        case duckdb::LogicalTypeId::DOUBLE:
-            return duckdb::Value(0.0);
-        case duckdb::LogicalTypeId::BOOLEAN:
-            return duckdb::Value(false);
-        case duckdb::LogicalTypeId::LIST:
-            return duckdb::Value::LIST(duckdb::ListType::GetChildType(target_type), {});
-  case duckdb::LogicalTypeId::STRUCT: {
-    auto &struct_types = duckdb::StructType::GetChildTypes(target_type);
-            duckdb::vector<duckdb::Value> null_values;
-            for (size_t i = 0; i < struct_types.size(); ++i) {
-                null_values.push_back(duckdb::Value());
-            }
-            return duckdb::Value::STRUCT(target_type, null_values);
-        }
-        default:
-            return duckdb::Value(); // NULL for unknown types
-    }
+    const duckdb::LogicalType &target_type, const std::string &reason,
+    const std::string &offending_value) const {
+  const auto message =
+      reason.empty()
+          ? "value could not be converted to " + target_type.ToString()
+          : reason;
+  RecordConversionFailure(current_column_context_, offending_value, message);
+  return duckdb::Value(target_type);
 }
 
 // Performance and memory management methods

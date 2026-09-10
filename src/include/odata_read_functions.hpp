@@ -16,6 +16,7 @@
 #include "odata_client.hpp"
 #include "odata_edm.hpp"
 #include "odata_predicate_pushdown_helper.hpp"
+#include "conversion_failure_log.hpp"
 
 using namespace duckdb;
 
@@ -61,7 +62,7 @@ public:
 public:
     ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client);
     ODataReadBindData(std::shared_ptr<ODataEntitySetClient> odata_client, bool defer_initialization);
-    ~ODataReadBindData() = default;
+    ~ODataReadBindData();
 
     // Service-root mode (list resources from service document)
     void EnableServiceRootMode() { service_root_mode_ = true; }
@@ -107,6 +108,12 @@ public:
     // Predicate pushdown helper access (made public for ODataReadBind)
     std::shared_ptr<ODataPredicatePushdownHelper> PredicatePushdownHelper();
 
+    // Conversion failure reporting
+    void SetStrictTyping(bool strict);
+    std::shared_ptr<ConversionFailureLog> GetConversionFailureLog() const;
+    // Emit the accumulated per-column failure summary once, at end of scan.
+    void ReportConversionFailures();
+
 private:
     // Core components
     std::shared_ptr<ODataEntitySetClient> odata_client;
@@ -115,6 +122,9 @@ private:
     std::shared_ptr<ODataTypeResolver> type_resolver;
     std::shared_ptr<ODataProgressTracker> progress_tracker;
     std::shared_ptr<ODataRowBuffer> row_buffer;
+    // Owned by the bind data so it survives the page responses and the row
+    // buffer, both of which are replaced during pagination.
+    std::shared_ptr<ConversionFailureLog> conversion_failure_log;
 
     // State management
     std::vector<std::string> all_result_names;
@@ -133,6 +143,7 @@ private:
     // Tracks how many rows have been emitted so far to align expanded cache row-wise
     size_t emitted_row_index_ = 0;
     bool service_root_mode_ = false;
+    bool conversion_failures_reported_ = false;
 
     // Helper methods
     void InitializeComponents(bool service_root_mode = false);
@@ -210,6 +221,9 @@ public:
     std::string GetLastError() const;
     void ResetErrorState();
 
+    // Scan-wide conversion failure reporting (shared with the bind data)
+    void SetConversionFailureLog(std::shared_ptr<ConversionFailureLog> log);
+
 private:
     // Modular helpers for JSON -> DuckDB conversions
     duckdb::Value ConvertList(duckdb_yyjson::yyjson_val* value, const duckdb::LogicalType& target_type);
@@ -242,6 +256,11 @@ private:
     mutable std::string last_error_;
     mutable std::map<std::string, size_t> error_counts_;
     mutable std::mutex error_mutex_;
+
+    // Scan-wide failure log (may be null) and the expand path currently being
+    // parsed, used to attribute a failure to a column.
+    std::shared_ptr<ConversionFailureLog> conversion_failure_log_;
+    std::string current_column_context_;
     
     // Processing methods
     void ProcessODataV4ExpandedData(duckdb_yyjson::yyjson_val* value_arr);
@@ -268,7 +287,14 @@ private:
     // Error handling helpers
     void LogError(const std::string& context, const std::string& error_msg) const;
     bool ShouldRetryAfterError(const std::string& context) const;
-    duckdb::Value CreateFallbackValue(const duckdb::LogicalType& target_type) const;
+    // Returns a typed NULL - never a fabricated 0/""/false - and records the
+    // failure against the current column so it is reported at end of scan.
+    duckdb::Value CreateFallbackValue(const duckdb::LogicalType& target_type,
+                                      const std::string& reason = "",
+                                      const std::string& offending_value = "") const;
+    void RecordConversionFailure(const std::string& column_name,
+                                 const std::string& offending_value,
+                                 const std::string& error_message) const;
     
     // Memory optimization
     void OptimizeCacheMemory();
