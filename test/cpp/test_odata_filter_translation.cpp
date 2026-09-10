@@ -7,6 +7,8 @@
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
+#include "duckdb/planner/filter/struct_filter.hpp"
+#include "duckdb/planner/filter/bloom_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -229,4 +231,38 @@ TEST_CASE("Comparison operators map to their OData spellings", "[odata_filter]")
 	REQUIRE(translate(duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO) == "Col le 1");
 	REQUIRE(translate(duckdb::ExpressionType::COMPARE_GREATERTHAN) == "Col gt 1");
 	REQUIRE(translate(duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO) == "Col ge 1");
+}
+
+// ---------------------------------------------------------------------------
+// An optional filter must never fail the query
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An optional filter wrapping an untranslatable child is skipped, not thrown", "[odata_filter]") {
+	// DuckDB documents OPTIONAL_FILTER as "executing filter is not required for query
+	// correctness". A hash join pushes an optional filter wrapping a bloom filter, so
+	// translating the child eagerly and letting it reach the default: arm would make an
+	// ordinary join fail outright.
+	duckdb::BloomFilter bloom;
+	auto bf_filter = duckdb::make_uniq<duckdb::BFTableFilter>(bloom, false, "Col",
+	                                                          duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER));
+	auto optional_filter = duckdb::make_uniq<duckdb::OptionalFilter>(std::move(bf_filter));
+
+	REQUIRE(TranslateOne(std::move(optional_filter), ODataVersion::V4) == "");
+}
+
+TEST_CASE("A bare bloom filter is skipped rather than throwing", "[odata_filter]") {
+	duckdb::BloomFilter bloom;
+	auto bf_filter = duckdb::make_uniq<duckdb::BFTableFilter>(bloom, false, "Col",
+	                                                          duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER));
+	REQUIRE(TranslateOne(std::move(bf_filter), ODataVersion::V4) == "");
+}
+
+TEST_CASE("A filter kind that is required for correctness still fails loudly", "[odata_filter]") {
+	// The contrast case: unlike an optional filter, a struct-extract filter IS required
+	// for correctness, so silently dropping it could lose rows. Failing is the safe answer.
+	auto child = duckdb::make_uniq<duckdb::ConstantFilter>(duckdb::ExpressionType::COMPARE_EQUAL,
+	                                                       Value::INTEGER(1));
+	auto struct_filter = duckdb::make_uniq<duckdb::StructFilter>(0, "field", std::move(child));
+	REQUIRE_THROWS_AS(TranslateOne(std::move(struct_filter), ODataVersion::V4),
+	                  duckdb::NotImplementedException);
 }

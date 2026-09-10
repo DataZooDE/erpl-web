@@ -821,8 +821,26 @@ std::string ODataPredicatePushdownHelper::TranslateFilter(const duckdb::TableFil
             result = TranslateConjunction(filter.Cast<duckdb::ConjunctionOrFilter>(), column_name);
             break;
         case duckdb::TableFilterType::OPTIONAL_FILTER:
-            // Optional filters wrap another filter - delegate to the child filter
-            result = TranslateFilter(*filter.Cast<duckdb::OptionalFilter>().child_filter, column_name);
+            // DuckDB documents this kind as "executing filter is not required for query
+            // correctness" (duckdb/planner/table_filter.hpp), so it is always safe to skip
+            // and must never fail the query. A hash join pushes an optional filter wrapping
+            // a bloom filter into this slot; translating the child eagerly would reach the
+            // default: arm below and throw on an ordinary join.
+            try {
+                result = TranslateFilter(*filter.Cast<duckdb::OptionalFilter>().child_filter, column_name);
+            } catch (const duckdb::NotImplementedException &) {
+                ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                                 "Optional filter on column '" + column_name +
+                                 "' has no OData translation; skipping it (it is not required for correctness)");
+                result = "";
+            }
+            break;
+        case duckdb::TableFilterType::BLOOM_FILTER:
+            // A probabilistic join pre-filter: dropping it costs only the rows it would
+            // have skipped early, never correctness.
+            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+                             "Bloom filter on column '" + column_name + "' is not pushed down");
+            result = "";
             break;
         case duckdb::TableFilterType::DYNAMIC_FILTER: {
             // A dynamic filter is filled in by the Top-N optimizer only once the
