@@ -134,12 +134,6 @@ public:
     void ForceInitialLoad();
 
     /**
-     * @brief Terminate the subscription
-     * This will mark the subscription as terminated and clean up resources
-     */
-    void TerminateSubscription();
-
-    /**
      * @brief Get audit history for this subscription
      * @param days_back Number of days to look back (default: 30)
      * @return Vector of audit entries
@@ -212,6 +206,12 @@ private:
     std::string pending_next_url_;
     bool initial_load_in_progress_;
     bool delta_fetch_in_progress_;
+    /// Whether the FIRST response of the current initial load carried
+    /// `Preference-Applied: odata.track-changes`. Only that response answers the `Prefer` header we
+    /// sent; the follow-on `__next` page requests do not carry the preference and so cannot
+    /// re-confirm it. Captured here so the deferred multi-page state transition uses the server's
+    /// actual answer rather than re-inferring it. See GitHub #97.
+    bool initial_load_preference_applied_ = false;
 
     // Column projection: saved in ActivateColumns and re-applied to each replacement
     // odata_bind_data_ created by FetchAndLoadNextPage, so column mapping is consistent
