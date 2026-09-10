@@ -40,11 +40,11 @@ struct RecordedRequest {
     // sigil differently.
     //
     // QueryParam() returns the bytes exactly as they arrived. DecodedQueryParam()
-    // undoes the application/x-www-form-urlencoded encoding httplib's client puts
-    // on every query value on its way out -- percent escapes AND '+' for a space
-    // -- and so returns the value the extension asked for. Prefer the decoded form
-    // for assertions about a clause; use the raw form only when the encoding
-    // itself is what is under test.
+    // undoes percent escapes and also reads '+' as a space, so it recovers the
+    // value the extension asked for whether the request went out verbatim
+    // (url_encode = false) or through httplib's form-urlencoded round trip
+    // (url_encode = true). Prefer the decoded form for assertions about a clause;
+    // use the raw form only when the encoding itself is what is under test.
     bool HasQueryParam(const std::string &name) const;
     std::string QueryParam(const std::string &name) const;         // raw wire bytes
     std::string DecodedQueryParam(const std::string &name) const;  // form-decoded
