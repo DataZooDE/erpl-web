@@ -2,7 +2,6 @@
 #include "odata_read_functions.hpp"
 #include "odata_client.hpp"
 #include "datazoo/oauth2/http_client.hpp"
-#include "http_auth.hpp"
 
 using namespace erpl_web;
 
@@ -37,12 +36,16 @@ TEST_CASE("OData Read Functions - Expand Basic Functionality") {
         
         ODataReadBindData bind_data(odata_client);
         
-        // Test processing expand paths
+        // This section originally called ProcessExpandedData(vector<string>), which does
+        // not exist on ODataReadBindData - the file was never compiled, so the drift went
+        // unnoticed (GitHub #115). Rewritten against the real API, preserving the intent:
+        // the expand clause round-trips, and the expanded-data schema tracks its paths.
         std::vector<std::string> expand_paths = {"Category", "Orders", "Products"};
-        bind_data.ProcessExpandedData(expand_paths);
-        
-        // Verify that expand paths are stored
+        bind_data.SetExpandClause("Category,Orders,Products");
+        bind_data.SetExpandedDataSchema(expand_paths);
+
         REQUIRE(bind_data.GetExpandClause() == "Category,Orders,Products");
+        REQUIRE(bind_data.HasExpandedData());
     }
 }
 
@@ -194,7 +197,7 @@ TEST_CASE("OData Read Functions - Expand OData Version Support") {
         
         auto predicate_helper = bind_data.PredicatePushdownHelper();
         predicate_helper->SetODataVersion(ODataVersion::V2);
-        predicate_helper->SetInlineCount(true);
+        predicate_helper->EnableInlineCount(true);
         
         HttpUrl base_url("http://host/service/Customers");
         auto result_url = predicate_helper->ApplyFiltersToUrl(base_url);

@@ -103,7 +103,7 @@ TEST_CASE("OData Predicate Pushdown Helper - Expand with OData Versions") {
     
     SECTION("Expand clause with OData V2 and inline count") {
         helper.SetODataVersion(ODataVersion::V2);
-        helper.SetInlineCount(true);
+        helper.EnableInlineCount(true);
         helper.ConsumeExpand("Category,Orders");
         
         HttpUrl base_url("http://host/service/Customers");
