@@ -11,6 +11,30 @@
 namespace erpl_web {
 
 /**
+ * @brief An ODP request that came back with an HTTP error status
+ *
+ * Carries the status code and the SAP error code from the response body, so a
+ * caller can decide what to do without pattern-matching the message text. The
+ * body itself is truncated; a full SAP error body is large and carries request
+ * context that should not end up in a log or an audit row (#100, #105).
+ */
+class OdpHttpException : public std::runtime_error {
+public:
+    OdpHttpException(int http_status_code, std::string sap_error_code, const std::string& message)
+        : std::runtime_error(message)
+        , http_status_code_(http_status_code)
+        , sap_error_code_(std::move(sap_error_code))
+    {}
+
+    int HttpStatusCode() const { return http_status_code_; }
+    const std::string& SapErrorCode() const { return sap_error_code_; }
+
+private:
+    int http_status_code_;
+    std::string sap_error_code_;
+};
+
+/**
  * @brief Orchestrates ODP-specific HTTP requests and response processing
  * 
  * This class coordinates between the ODP HTTP factory, OData client, and response
@@ -101,6 +125,26 @@ public:
      * @return Complete delta URL
      */
     static std::string BuildDeltaUrl(const std::string& base_url, const std::string& delta_token);
+
+    /**
+     * @brief True when two URLs share scheme, host and effective port
+     *
+     * Server-supplied next/delta links are followed with the caller's bearer
+     * token; a link pointing elsewhere must not carry it (#101). This mirrors
+     * the cross-origin rule HttpClient already applies to redirects.
+     */
+    static bool IsSameOrigin(const std::string& reference_url, const std::string& candidate_url);
+
+    /**
+     * @brief Percent-encode a delta token for use in a URL query string
+     */
+    static std::string EncodeDeltaToken(const std::string& delta_token);
+
+    /**
+     * @brief Extract the SAP/OData error code from an error response body
+     * @return The code (e.g. "SY/530"), or an empty string when absent
+     */
+    static std::string ExtractErrorCode(const std::string& response_content);
     /**
      * @brief Normalize delta URL (remove quoted token patterns, ensure $format=json)
      */
@@ -124,6 +168,10 @@ private:
     std::shared_ptr<HttpClient> http_client_;
     std::shared_ptr<HttpAuthParams> auth_params_;
     uint32_t default_page_size_;
+    // Origin of the service this orchestrator was pointed at; every
+    // server-supplied follow-up URL is checked against it before credentials
+    // are attached.
+    std::string service_origin_url_;
 
     // Helper methods
     OdpRequestResult ExecuteRequest(const HttpRequest& request, const std::string& operation_type);

@@ -67,8 +67,9 @@ public:
     void TransitionToTerminated();
     void TransitionToError(const std::string& error_msg);
 
-    // Persistence operations
-    void PersistSubscription();
+    // Persistence operations. The delta token advance is a compare-and-swap
+    // against the token this session last saw; a concurrent reader that moved
+    // the stream on first makes it throw rather than silently split the stream.
     void UpdateDeltaToken(const std::string& token);
     void UpdateSubscriptionStatus(const std::string& status);
 
@@ -84,6 +85,9 @@ public:
 
     // Utility methods
     static std::string PhaseToString(SubscriptionPhase phase);
+    // Throws unless the token consists only of characters SAP uses in delta
+    // tokens and is of a plausible length.
+    static void ValidateDeltaTokenShape(const std::string& token);
     void LogCurrentState() const;
 
 private:

@@ -1,4 +1,5 @@
 #include "odp_http_request_factory.hpp"
+#include "odp_trace_redaction.hpp"
 #include "tracing.hpp"
 #include <sstream>
 
@@ -81,15 +82,14 @@ HttpRequest OdpHttpRequestFactory::CreateRequest(HttpMethod method, const std::s
         ERPL_TRACE_DEBUG("ODP_HTTP_FACTORY", "Applied authentication headers");
     }
     
-    // Log final request configuration
+    // Log final request configuration. Header values are redacted: an
+    // Authorization header written verbatim puts the SAP password or the Entra
+    // bearer token into the trace file (#100).
     std::stringstream trace_msg;
     trace_msg << "Created ODP HTTP request:" << std::endl;
     trace_msg << "  Method: " << method.ToString() << std::endl;
     trace_msg << "  URL: " << url << std::endl;
-    trace_msg << "  Headers:";
-    for (const auto& header : request.headers) {
-        trace_msg << std::endl << "    " << header.first << ": " << header.second;
-    }
+    trace_msg << "  Headers:" << odp_trace::FormatHeaders(request.headers);
     ERPL_TRACE_DEBUG("ODP_HTTP_FACTORY", trace_msg.str());
     
     return request;

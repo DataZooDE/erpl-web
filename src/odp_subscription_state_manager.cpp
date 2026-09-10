@@ -41,7 +41,12 @@ void OdpSubscriptionStateManager::TransitionToInitialLoad() {
     ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Transitioning to INITIAL_LOAD phase");
     
     current_phase_ = SubscriptionPhase::INITIAL_LOAD;
-    current_subscription_.delta_token = ""; // Clear any existing delta token
+    // Clear the token in the database as well, not just in memory: the next
+    // advance compares against the stored value, and an in-memory-only clear
+    // would make that comparison fail against a token nobody changed.
+    if (!current_subscription_.delta_token.empty()) {
+        UpdateDeltaToken("");
+    }
     current_subscription_.preference_applied = false;
     
     UpdateSubscriptionStatus("active");
@@ -83,36 +88,18 @@ void OdpSubscriptionStateManager::TransitionToError(const std::string& error_msg
     LogCurrentState();
 }
 
-void OdpSubscriptionStateManager::PersistSubscription() {
-    ERPL_TRACE_DEBUG("ODP_STATE_MANAGER", "Persisting subscription: " + current_subscription_.subscription_id);
-    
-    try {
-        bool success = repository_->UpdateSubscription(current_subscription_);
-        if (!success) {
-            ERPL_TRACE_WARN("ODP_STATE_MANAGER", "Failed to persist subscription, may need to recreate");
-        }
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_STATE_MANAGER", "Error persisting subscription: " + std::string(e.what()));
-        throw;
-    }
-}
-
 void OdpSubscriptionStateManager::UpdateDeltaToken(const std::string& token) {
-    ERPL_TRACE_DEBUG("ODP_STATE_MANAGER", duckdb::StringUtil::Format(
-        "Updating delta token from '%s' to '%s'", current_subscription_.delta_token, token));
-    
+    const std::string expected_token = current_subscription_.delta_token;
+    ERPL_TRACE_DEBUG("ODP_STATE_MANAGER", "Advancing delta token for subscription " +
+                                          current_subscription_.subscription_id);
+
+    // Compare-and-swap: the stored token must still be the one this session read,
+    // otherwise another session is reading the same delta stream and advancing
+    // here would split the changes between the two readers.
+    repository_->AdvanceDeltaToken(current_subscription_.subscription_id, expected_token, token);
+
     current_subscription_.delta_token = token;
     UpdateLastModified();
-    
-    try {
-        bool success = repository_->UpdateDeltaToken(current_subscription_.subscription_id, token);
-        if (!success) {
-            throw duckdb::InternalException("Failed to update delta token in database");
-        }
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_STATE_MANAGER", "Error updating delta token: " + std::string(e.what()));
-        throw;
-    }
 }
 
 void OdpSubscriptionStateManager::UpdateSubscriptionStatus(const std::string& status) {
@@ -250,8 +237,9 @@ void OdpSubscriptionStateManager::LoadExistingSubscription() {
         
         // Handle imported delta token
         if (!import_delta_token_.empty()) {
-            ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Importing delta token: " + import_delta_token_);
-            current_subscription_.delta_token = import_delta_token_;
+            ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Importing delta token for existing subscription");
+            // UpdateDeltaToken compares against the token currently held, so the
+            // in-memory copy must not be overwritten before the swap.
             UpdateDeltaToken(import_delta_token_);
         }
     } else {
@@ -275,8 +263,7 @@ void OdpSubscriptionStateManager::CreateNewSubscription() {
         
         // Handle imported delta token for new subscription
         if (!import_delta_token_.empty()) {
-            ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Setting imported delta token on new subscription: " + import_delta_token_);
-            current_subscription_.delta_token = import_delta_token_;
+            ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Setting imported delta token on new subscription");
             UpdateDeltaToken(import_delta_token_);
         }
         
@@ -312,8 +299,43 @@ void OdpSubscriptionStateManager::ValidateSubscriptionData() const {
         throw duckdb::InvalidInputException("Entity set name cannot be empty");
     }
     
+    // The EntityOf*/FactsOf*/AttrOf* naming is a convention, not a guarantee --
+    // an unexpected name is worth a warning, not a refusal to read (#105).
     if (!OdpSubscriptionRepository::IsValidOdpUrl(service_url_)) {
-        throw duckdb::InvalidInputException("Invalid ODP URL: " + service_url_);
+        ERPL_TRACE_WARN("ODP_STATE_MANAGER",
+            "Service URL does not look like an ODP entity set (expected EntityOf*/FactsOf*/AttrOf*): " + service_url_);
+    }
+
+    if (!import_delta_token_.empty()) {
+        if (force_full_load_) {
+            // Silently discarding the token here left the caller believing they
+            // had resumed a delta stream when they had restarted it (#105).
+            throw duckdb::InvalidInputException(
+                "force_full_load and import_delta_token cannot be combined: a full load starts a new change stream "
+                "and would discard the imported token. Pass one or the other.");
+        }
+        ValidateDeltaTokenShape(import_delta_token_);
+    }
+}
+
+void OdpSubscriptionStateManager::ValidateDeltaTokenShape(const std::string& token) {
+    constexpr size_t MAX_DELTA_TOKEN_LENGTH = 512;
+
+    if (token.length() > MAX_DELTA_TOKEN_LENGTH) {
+        throw duckdb::InvalidInputException(duckdb::StringUtil::Format(
+            "import_delta_token is %zu characters long; ODP delta tokens are at most %zu.",
+            token.length(), MAX_DELTA_TOKEN_LENGTH));
+    }
+
+    for (const char c : token) {
+        const bool is_allowed = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                                c == '_' || c == '-' || c == '.' || c == ':' || c == '+' || c == '/' ||
+                                c == '=' || c == '~';
+        if (!is_allowed) {
+            throw duckdb::InvalidInputException(
+                "import_delta_token contains characters that are not valid in an ODP delta token. Expected only "
+                "letters, digits and _-.:+/=~ ; pass the token exactly as odp_list_subscriptions() reports it.");
+        }
     }
 }
 

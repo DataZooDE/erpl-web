@@ -1,18 +1,82 @@
 #include "odp_subscription_repository.hpp"
 #include "tracing.hpp"
-#include <sstream>
+
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/exception/transaction_exception.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database_manager.hpp"
+
+#include <algorithm>
+#include <ctime>
 #include <iomanip>
 #include <regex>
-#include <algorithm>
+#include <sstream>
 
 namespace erpl_web {
+
+namespace {
+
+constexpr const char* SCHEMA_NAME = "erpl_web";
+constexpr const char* SUBSCRIPTIONS_TABLE = "odp_subscriptions";
+constexpr const char* AUDIT_TABLE = "odp_subscription_audit";
+constexpr const char* AUDIT_SEQUENCE = "odp_audit_id_seq";
+
+// The full projection of a subscription row; every read uses it so the column
+// indices below stay in one place.
+constexpr const char* SUBSCRIPTION_COLUMNS =
+    "subscription_id, service_url, entity_set_name, secret_name, delta_token, "
+    "created_at, last_updated, subscription_status, preference_applied, schema_version";
+
+enum SubscriptionColumn : duckdb::idx_t {
+    COL_SUBSCRIPTION_ID = 0,
+    COL_SERVICE_URL = 1,
+    COL_ENTITY_SET_NAME = 2,
+    COL_SECRET_NAME = 3,
+    COL_DELTA_TOKEN = 4,
+    COL_CREATED_AT = 5,
+    COL_LAST_UPDATED = 6,
+    COL_SUBSCRIPTION_STATUS = 7,
+    COL_PREFERENCE_APPLIED = 8,
+    COL_SCHEMA_VERSION = 9
+};
+
+std::string QuoteIdentifier(const std::string& name) {
+    return "\"" + duckdb::StringUtil::Replace(name, "\"", "\"\"") + "\"";
+}
+
+// nextval() needs a constant sequence name, so it cannot take a bound
+// parameter; the qualified name goes into a SQL string literal instead.
+std::string QuoteStringLiteral(const std::string& value) {
+    return "'" + duckdb::StringUtil::Replace(value, "'", "''") + "'";
+}
+
+// std::localtime is not reentrant and this runs on DuckDB worker threads.
+std::tm ToLocalTm(std::time_t value) {
+    std::tm out {};
+#ifdef _WIN32
+    localtime_s(&out, &value);
+#else
+    localtime_r(&value, &out);
+#endif
+    return out;
+}
+
+bool IsUsableStateCatalog(duckdb::AttachedDatabase& database) {
+    if (database.IsSystem() || database.IsTemporary()) {
+        return false;
+    }
+    auto& catalog = database.GetCatalog();
+    return catalog.IsDuckCatalog() && !catalog.InMemory();
+}
+
+} // namespace
 
 // ============================================================================
 // OdpSubscription Implementation
 // ============================================================================
 
-OdpSubscription::OdpSubscription(const std::string& service_url, 
-                               const std::string& entity_set_name, 
+OdpSubscription::OdpSubscription(const std::string& service_url,
+                               const std::string& entity_set_name,
                                const std::string& secret_name)
     : service_url(service_url)
     , entity_set_name(entity_set_name)
@@ -30,7 +94,7 @@ OdpSubscription::OdpSubscription(const std::string& service_url,
 // ============================================================================
 
 OdpAuditEntry::OdpAuditEntry(const std::string& subscription_id, const std::string& operation_type)
-    : audit_id(0) // Will be set by database auto-increment
+    : audit_id(0) // Allocated from the audit sequence on insert
     , subscription_id(subscription_id)
     , operation_type(operation_type)
     , request_timestamp(std::chrono::system_clock::now())
@@ -51,404 +115,328 @@ OdpSubscriptionRepository::OdpSubscriptionRepository(duckdb::ClientContext& cont
     ERPL_TRACE_INFO("ODP_REPOSITORY", "OdpSubscriptionRepository initialized");
 }
 
+const std::string& OdpSubscriptionRepository::GetStateCatalog() {
+    ResolveStateCatalog();
+    return state_catalog;
+}
+
+void OdpSubscriptionRepository::ResolveStateCatalog() {
+    if (!state_catalog.empty()) {
+        return;
+    }
+
+    auto& database_manager = duckdb::DatabaseManager::Get(context);
+
+    // Prefer the catalog that is currently default, so an explicit USE keeps
+    // working -- but only when it can actually hold the state durably.
+    const std::string default_name = duckdb::DatabaseManager::GetDefaultDatabase(context);
+    auto default_database = database_manager.GetDatabase(context, default_name);
+    if (default_database && IsUsableStateCatalog(*default_database)) {
+        state_catalog = default_database->GetName();
+    } else {
+        // Otherwise take the first persistent DuckDB catalog, by name, so the
+        // choice does not depend on hash-map iteration order.
+        std::vector<std::string> candidates;
+        for (auto& database : database_manager.GetDatabases(context)) {
+            if (database && IsUsableStateCatalog(*database)) {
+                candidates.push_back(database->GetName());
+            }
+        }
+        std::sort(candidates.begin(), candidates.end());
+        if (!candidates.empty()) {
+            state_catalog = candidates.front();
+        }
+    }
+
+    if (state_catalog.empty()) {
+        throw duckdb::InvalidInputException(
+            "ODP delta state requires a persistent DuckDB database, but this session has none "
+            "attached (the current catalog '" + default_name + "' is in-memory or not a DuckDB "
+            "catalog). Delta tokens stored there are discarded when the session ends, so every "
+            "read would silently become a full extraction. Start DuckDB with a database file "
+            "(for example `duckdb odp_state.db`), or ATTACH one before reading ODP sources "
+            "(for example ATTACH 'odp_state.db' AS odp_state).");
+    }
+
+    qualified_schema = QuoteIdentifier(state_catalog) + "." + QuoteIdentifier(SCHEMA_NAME);
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "Resolved ODP state catalog: " + state_catalog);
+}
+
+std::string OdpSubscriptionRepository::QualifiedTable(const std::string& table_name) const {
+    return qualified_schema + "." + QuoteIdentifier(table_name);
+}
+
 void OdpSubscriptionRepository::EnsureSchemaExists() {
     if (schema_initialized) {
         return;
     }
-    
-    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Ensuring erpl_web schema exists");
-    
-    try {
-        InitializeSchema();
-        schema_initialized = true;
-        ERPL_TRACE_INFO("ODP_REPOSITORY", "Schema erpl_web initialized successfully");
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Failed to initialize schema: " + std::string(e.what()));
-        throw;
-    }
+
+    ResolveStateCatalog();
+    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Ensuring erpl_web schema exists in catalog " + state_catalog);
+
+    InitializeSchema();
+    schema_initialized = true;
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "Schema erpl_web initialized successfully");
 }
 
 void OdpSubscriptionRepository::EnsureTablesExist() {
     if (tables_initialized) {
         return;
     }
-    
-    EnsureSchemaExists(); // Ensure schema exists first
-    
+
+    EnsureSchemaExists();
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Ensuring ODP tables exist");
-    
-    try {
-        InitializeTables();
-        tables_initialized = true;
-        ERPL_TRACE_INFO("ODP_REPOSITORY", "ODP tables initialized successfully");
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Failed to initialize tables: " + std::string(e.what()));
-        throw;
-    }
+
+    InitializeTables();
+    VerifySchemaVersion();
+    tables_initialized = true;
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "ODP tables initialized successfully");
 }
 
 std::string OdpSubscriptionRepository::CreateSubscription(const std::string& service_url,
                                                         const std::string& entity_set_name,
                                                         const std::string& secret_name) {
     ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format(
-        "Creating subscription for URL: %s, Entity: %s, Secret: %s", 
+        "Creating subscription for URL: %s, Entity: %s, Secret: %s",
         service_url, entity_set_name, secret_name));
-    
+
     EnsureTablesExist();
-    
-    // Validate URL
+
     if (!IsValidOdpUrl(service_url)) {
-        throw duckdb::InvalidInputException("Invalid ODP URL: " + service_url);
+        // A URL that does not look like an ODP entity set is suspicious but not
+        // provably wrong -- the naming convention is a convention, not a rule.
+        ERPL_TRACE_WARN("ODP_REPOSITORY",
+            "Service URL does not look like an ODP entity set (expected EntityOf*/FactsOf*/AttrOf*): " + service_url);
     }
-    
-    // Check if subscription already exists
-    auto existing = FindActiveSubscription(service_url, entity_set_name);
-    if (existing.has_value()) {
-        ERPL_TRACE_WARN("ODP_REPOSITORY", "Active subscription already exists: " + existing->subscription_id);
-        return existing->subscription_id;
-    }
-    
-    // Create new subscription
-    OdpSubscription subscription(service_url, entity_set_name, secret_name);
-    
-    try {
-        auto query = BuildInsertSubscriptionQuery(subscription);
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Executing insert query: " + query);
-        
-        auto result = ExecuteQuery(query);
-        if (!result->HasError()) {
-            ERPL_TRACE_INFO("ODP_REPOSITORY", "Subscription created successfully: " + subscription.subscription_id);
+
+    // (service_url, entity_set_name) is unique, so a stale non-active row for
+    // the same pair is revived rather than duplicated.
+    auto existing = Execute(
+        "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+        " WHERE service_url = ? AND entity_set_name = ?",
+        {duckdb::Value(service_url), duckdb::Value(entity_set_name)});
+
+    if (existing->RowCount() > 0) {
+        auto subscription = RowToSubscription(*existing, 0);
+        if (subscription.subscription_status == "active") {
+            ERPL_TRACE_WARN("ODP_REPOSITORY", "Active subscription already exists: " + subscription.subscription_id);
             return subscription.subscription_id;
-        } else {
-            throw duckdb::InternalException("Failed to create subscription: " + result->GetError());
         }
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error creating subscription: " + std::string(e.what()));
-        throw;
+
+        ERPL_TRACE_INFO("ODP_REPOSITORY", "Reactivating subscription: " + subscription.subscription_id);
+        Execute("UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+                " SET subscription_status = 'active', delta_token = '', preference_applied = FALSE, "
+                "secret_name = ?, last_updated = ? WHERE subscription_id = ?",
+                {duckdb::Value(secret_name.empty() ? "default" : secret_name),
+                 TimePointToValue(std::chrono::system_clock::now()),
+                 duckdb::Value(subscription.subscription_id)});
+        return subscription.subscription_id;
     }
+
+    OdpSubscription subscription(service_url, entity_set_name, secret_name);
+    Execute("INSERT INTO " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " (" + SUBSCRIPTION_COLUMNS + ") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            {duckdb::Value(subscription.subscription_id),
+             duckdb::Value(subscription.service_url),
+             duckdb::Value(subscription.entity_set_name),
+             duckdb::Value(subscription.secret_name),
+             duckdb::Value(subscription.delta_token),
+             TimePointToValue(subscription.created_at),
+             TimePointToValue(subscription.last_updated),
+             duckdb::Value(subscription.subscription_status),
+             duckdb::Value::BOOLEAN(subscription.preference_applied),
+             duckdb::Value::INTEGER(SCHEMA_VERSION)});
+
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "Subscription created successfully: " + subscription.subscription_id);
+    return subscription.subscription_id;
 }
 
 std::optional<OdpSubscription> OdpSubscriptionRepository::GetSubscription(const std::string& subscription_id) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Getting subscription: " + subscription_id);
-    
+
     EnsureTablesExist();
-    
-    std::string query = duckdb::StringUtil::Format(
-        "SELECT subscription_id, service_url, entity_set_name, secret_name, delta_token, "
-        "created_at, last_updated, subscription_status, preference_applied "
-        "FROM erpl_web.odp_subscriptions WHERE subscription_id = '%s'",
-        subscription_id);
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Query error: " + result->GetError());
-            return std::nullopt;
-        }
-        
-        if (result->RowCount() == 0) {
-            ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription not found: " + subscription_id);
-            return std::nullopt;
-        }
-        
-        // Parse result into OdpSubscription
-        OdpSubscription subscription;
-        subscription.subscription_id = result->GetValue(0, 0).ToString();
-        subscription.service_url = result->GetValue(1, 0).ToString();
-        subscription.entity_set_name = result->GetValue(2, 0).ToString();
-        subscription.secret_name = result->GetValue(3, 0).ToString();
-        subscription.delta_token = result->GetValue(4, 0).ToString();
-        ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format(
-            "Loaded subscription %s with token: %s",
-            subscription_id,
-            subscription.delta_token.empty() ? "<EMPTY>" : subscription.delta_token.substr(0, 64)));
-        subscription.created_at = StringToTimestamp(result->GetValue(5, 0).ToString());
-        subscription.last_updated = StringToTimestamp(result->GetValue(6, 0).ToString());
-        subscription.subscription_status = result->GetValue(7, 0).ToString();
-        subscription.preference_applied = result->GetValue(8, 0).GetValue<bool>();
-        
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription found: " + subscription_id);
-        return subscription;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error getting subscription: " + std::string(e.what()));
+
+    auto result = Execute(
+        "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+        " WHERE subscription_id = ?",
+        {duckdb::Value(subscription_id)});
+
+    if (result->RowCount() == 0) {
+        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription not found: " + subscription_id);
         return std::nullopt;
     }
+
+    return RowToSubscription(*result, 0);
 }
 
 std::optional<OdpSubscription> OdpSubscriptionRepository::FindActiveSubscription(
     const std::string& service_url, const std::string& entity_set_name) {
-    
+
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
         "Finding active subscription for URL: %s, Entity: %s", service_url, entity_set_name));
-    
+
     EnsureTablesExist();
-    
-    std::string query = duckdb::StringUtil::Format(
-        "SELECT subscription_id, service_url, entity_set_name, secret_name, delta_token, "
-        "created_at, last_updated, subscription_status, preference_applied "
-        "FROM erpl_web.odp_subscriptions "
-        "WHERE service_url = '%s' AND entity_set_name = '%s' AND subscription_status = 'active' "
+
+    // Note the absence of a try/catch: a failing query must surface, not be
+    // reported as "no subscription" -- that answer silently restarts the whole
+    // extraction from scratch (#96).
+    auto result = Execute(
+        "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+        " WHERE service_url = ? AND entity_set_name = ? AND subscription_status = 'active' "
         "ORDER BY created_at DESC LIMIT 1",
-        service_url, entity_set_name);
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError() || result->RowCount() == 0) {
-            return std::nullopt;
-        }
-        
-        // Parse result into OdpSubscription (same logic as GetSubscription)
-        OdpSubscription subscription;
-        subscription.subscription_id = result->GetValue(0, 0).ToString();
-        subscription.service_url = result->GetValue(1, 0).ToString();
-        subscription.entity_set_name = result->GetValue(2, 0).ToString();
-        subscription.secret_name = result->GetValue(3, 0).ToString();
-        subscription.delta_token = result->GetValue(4, 0).ToString();
-        subscription.created_at = StringToTimestamp(result->GetValue(5, 0).ToString());
-        subscription.last_updated = StringToTimestamp(result->GetValue(6, 0).ToString());
-        subscription.subscription_status = result->GetValue(7, 0).ToString();
-        subscription.preference_applied = result->GetValue(8, 0).GetValue<bool>();
-        
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Active subscription found: " + subscription.subscription_id);
-        return subscription;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error finding active subscription: " + std::string(e.what()));
+        {duckdb::Value(service_url), duckdb::Value(entity_set_name)});
+
+    if (result->RowCount() == 0) {
         return std::nullopt;
     }
+
+    auto subscription = RowToSubscription(*result, 0);
+    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Active subscription found: " + subscription.subscription_id);
+    return subscription;
 }
 
 std::vector<OdpSubscription> OdpSubscriptionRepository::ListAllSubscriptions() {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Listing all subscriptions");
-    
+
     EnsureTablesExist();
-    
-    std::string query = 
-        "SELECT subscription_id, service_url, entity_set_name, secret_name, delta_token, "
-        "created_at, last_updated, subscription_status, preference_applied "
-        "FROM erpl_web.odp_subscriptions "
-        "ORDER BY created_at DESC";
-    
+
+    auto result = Execute(
+        "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+        " ORDER BY created_at DESC", {});
+
     std::vector<OdpSubscription> subscriptions;
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Query error: " + result->GetError());
-            return subscriptions;
-        }
-        
-        for (duckdb::idx_t i = 0; i < result->RowCount(); i++) {
-            OdpSubscription subscription;
-            subscription.subscription_id = result->GetValue(0, i).ToString();
-            subscription.service_url = result->GetValue(1, i).ToString();
-            subscription.entity_set_name = result->GetValue(2, i).ToString();
-            subscription.secret_name = result->GetValue(3, i).ToString();
-            subscription.delta_token = result->GetValue(4, i).ToString();
-            subscription.created_at = StringToTimestamp(result->GetValue(5, i).ToString());
-            subscription.last_updated = StringToTimestamp(result->GetValue(6, i).ToString());
-            subscription.subscription_status = result->GetValue(7, i).ToString();
-            subscription.preference_applied = result->GetValue(8, i).GetValue<bool>();
-            
-            subscriptions.push_back(subscription);
-        }
-        
-        ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format("Found %d subscriptions", subscriptions.size()));
-        return subscriptions;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error listing subscriptions: " + std::string(e.what()));
-        return subscriptions;
+    subscriptions.reserve(result->RowCount());
+    for (duckdb::idx_t i = 0; i < result->RowCount(); i++) {
+        subscriptions.push_back(RowToSubscription(*result, i));
     }
+
+    ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format("Found %d subscriptions", subscriptions.size()));
+    return subscriptions;
 }
 
-bool OdpSubscriptionRepository::UpdateDeltaToken(const std::string& subscription_id, 
-                                                const std::string& delta_token) {
-    ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
-        "Updating delta token for subscription %s: %s", subscription_id, delta_token));
-    
+void OdpSubscriptionRepository::AdvanceDeltaToken(const std::string& subscription_id,
+                                                  const std::string& expected_delta_token,
+                                                  const std::string& new_delta_token) {
+    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Advancing delta token for subscription " + subscription_id);
+
     EnsureTablesExist();
-    
-    // First check if subscription exists
-    auto existing = GetSubscription(subscription_id);
-    if (!existing.has_value()) {
-        ERPL_TRACE_WARN("ODP_REPOSITORY", "No subscription found with ID: " + subscription_id);
-        return false;
+
+    auto result = Execute(
+        "UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+        " SET delta_token = ?, last_updated = ? "
+        "WHERE subscription_id = ? AND delta_token IS NOT DISTINCT FROM ?",
+        {duckdb::Value(new_delta_token),
+         TimePointToValue(std::chrono::system_clock::now()),
+         duckdb::Value(subscription_id),
+         duckdb::Value(expected_delta_token)});
+
+    if (RowsChanged(*result) > 0) {
+        ERPL_TRACE_INFO("ODP_REPOSITORY", "Delta token advanced for subscription " + subscription_id);
+        return;
     }
-    
-    // Escape single quotes in delta token to prevent SQL injection
-    auto escape_sql = [](const std::string &s) {
-        std::string out;
-        out.reserve(s.size() + 8);
-        for (char c : s) {
-            if (c == '\'') {
-                out += "''";
-            } else {
-                out += c;
-            }
-        }
-        return out;
-    };
-    
-    std::string query = duckdb::StringUtil::Format(
-        "UPDATE erpl_web.odp_subscriptions "
-        "SET delta_token = '%s', last_updated = NOW() "
-        "WHERE subscription_id = '%s'",
-        escape_sql(delta_token), escape_sql(subscription_id));
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Update error: " + result->GetError());
-            return false;
-        }
-        
-        ERPL_TRACE_INFO("ODP_REPOSITORY", "Delta token updated successfully");
-        return true;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error updating delta token: " + std::string(e.what()));
-        return false;
+
+    // Nothing changed: either the subscription is gone, or another session
+    // advanced the same delta stream while this one was fetching.
+    auto current = Execute(
+        "SELECT delta_token FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " WHERE subscription_id = ?",
+        {duckdb::Value(subscription_id)});
+
+    if (current->RowCount() == 0) {
+        throw duckdb::InvalidInputException(
+            "ODP subscription '" + subscription_id + "' no longer exists; its delta token could not be advanced.");
     }
+
+    throw duckdb::TransactionException(
+        "Concurrent modification of ODP subscription '" + subscription_id + "': the stored delta token changed "
+        "while this read was running, so another session is reading the same delta stream. Continuing would split "
+        "the change stream between the two readers. Re-run the query once the other reader has finished.");
 }
 
-bool OdpSubscriptionRepository::UpdateSubscription(const OdpSubscription& subscription) {
-    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Updating subscription: " + subscription.subscription_id);
-    
-    EnsureTablesExist();
-    
-    std::string query = duckdb::StringUtil::Format(
-        "UPDATE erpl_web.odp_subscriptions "
-        "SET service_url = '%s', entity_set_name = '%s', secret_name = '%s', "
-        "delta_token = '%s', subscription_status = '%s', preference_applied = %s, "
-        "last_updated = NOW() "
-        "WHERE subscription_id = '%s'",
-        subscription.service_url, subscription.entity_set_name, subscription.secret_name,
-        subscription.delta_token, subscription.subscription_status, 
-        subscription.preference_applied ? "true" : "false",
-        subscription.subscription_id);
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Update error: " + result->GetError());
-            return false;
-        }
-        
-        // Check if any rows were affected
-        if (result->RowCount() == 0) {
-            ERPL_TRACE_WARN("ODP_REPOSITORY", "No subscription found with ID: " + subscription.subscription_id);
-            return false;
-        }
-        
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription updated successfully");
-        return true;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error updating subscription: " + std::string(e.what()));
-        return false;
-    }
-}
-
-bool OdpSubscriptionRepository::UpdateSubscriptionStatus(const std::string& subscription_id, 
+bool OdpSubscriptionRepository::UpdateSubscriptionStatus(const std::string& subscription_id,
                                                        const std::string& status) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
         "Updating subscription status for %s: %s", subscription_id, status));
-    
+
     EnsureTablesExist();
-    
-    // First check if subscription exists
-    auto existing = GetSubscription(subscription_id);
-    if (!existing.has_value()) {
+
+    auto result = Execute(
+        "UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " SET subscription_status = ?, last_updated = ? "
+        "WHERE subscription_id = ?",
+        {duckdb::Value(status),
+         TimePointToValue(std::chrono::system_clock::now()),
+         duckdb::Value(subscription_id)});
+
+    if (RowsChanged(*result) == 0) {
         ERPL_TRACE_WARN("ODP_REPOSITORY", "No subscription found with ID: " + subscription_id);
         return false;
     }
-    
-    std::string query = duckdb::StringUtil::Format(
-        "UPDATE erpl_web.odp_subscriptions "
-        "SET subscription_status = '%s', last_updated = NOW() "
-        "WHERE subscription_id = '%s'",
-        status, subscription_id);
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Update error: " + result->GetError());
-            return false;
-        }
-        
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription status updated successfully");
-        return true;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error updating subscription status: " + std::string(e.what()));
-        return false;
-    }
+
+    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Subscription status updated successfully");
+    return true;
 }
 
 bool OdpSubscriptionRepository::RemoveSubscription(const std::string& subscription_id) {
     ERPL_TRACE_INFO("ODP_REPOSITORY", "Removing subscription: " + subscription_id);
-    
+
     EnsureTablesExist();
-    
-    // First check if subscription exists
-    auto existing = GetSubscription(subscription_id);
-    if (!existing.has_value()) {
+
+    auto result = Execute(
+        "DELETE FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " WHERE subscription_id = ?",
+        {duckdb::Value(subscription_id)});
+
+    if (RowsChanged(*result) == 0) {
         ERPL_TRACE_WARN("ODP_REPOSITORY", "No subscription found with ID: " + subscription_id);
         return false;
     }
-    
-    std::string query = duckdb::StringUtil::Format(
-        "DELETE FROM erpl_web.odp_subscriptions WHERE subscription_id = '%s'",
-        subscription_id);
-    
-    try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Delete error: " + result->GetError());
-            return false;
-        }
-        
-        ERPL_TRACE_INFO("ODP_REPOSITORY", "Subscription removed successfully");
-        return true;
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error removing subscription: " + std::string(e.what()));
-        return false;
-    }
+
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "Subscription removed successfully");
+    return true;
 }
 
 int64_t OdpSubscriptionRepository::CreateAuditEntry(const OdpAuditEntry& entry) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
-        "Creating audit entry for subscription %s, operation: %s", 
+        "Creating audit entry for subscription %s, operation: %s",
         entry.subscription_id, entry.operation_type));
-    
+
     EnsureTablesExist();
-    
+
     try {
-        // Generate a unique audit_id using timestamp + random component
-        auto now = std::chrono::system_clock::now();
-        auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-        int64_t audit_id = timestamp;
-        
-        // Create a copy of the entry with the generated ID
-        OdpAuditEntry entry_with_id = entry;
-        entry_with_id.audit_id = audit_id;
-        
-        auto query = BuildInsertAuditQuery(entry_with_id);
-        ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Executing audit insert query: " + query);
-        
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Audit insert error: " + result->GetError());
+        // The id comes from a sequence: a max(audit_id)+1 read-modify-write hands
+        // the same id to two concurrent readers (#95).
+        auto result = Execute(
+            "INSERT INTO " + QualifiedTable(AUDIT_TABLE) +
+            " (audit_id, subscription_id, operation_type, request_timestamp, response_timestamp, "
+            "request_url, http_status_code, rows_fetched, package_size_bytes, "
+            "delta_token_before, delta_token_after, error_message, duration_ms) "
+            "VALUES (nextval(" + QuoteStringLiteral(qualified_schema + "." + QuoteIdentifier(AUDIT_SEQUENCE)) + "), "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING audit_id",
+            {duckdb::Value(entry.subscription_id),
+             duckdb::Value(entry.operation_type),
+             TimePointToValue(entry.request_timestamp),
+             entry.response_timestamp.has_value() ? TimePointToValue(entry.response_timestamp.value())
+                                                  : duckdb::Value(duckdb::LogicalType::TIMESTAMP),
+             duckdb::Value(entry.request_url),
+             entry.http_status_code.has_value() ? duckdb::Value::INTEGER(entry.http_status_code.value())
+                                                : duckdb::Value(duckdb::LogicalType::INTEGER),
+             duckdb::Value::BIGINT(entry.rows_fetched),
+             duckdb::Value::BIGINT(entry.package_size_bytes),
+             duckdb::Value(entry.delta_token_before),
+             duckdb::Value(entry.delta_token_after),
+             duckdb::Value(TruncateForAudit(entry.error_message)),
+             entry.duration_ms.has_value() ? duckdb::Value::BIGINT(entry.duration_ms.value())
+                                           : duckdb::Value(duckdb::LogicalType::BIGINT)});
+
+        if (result->RowCount() == 0) {
+            ERPL_TRACE_WARN("ODP_REPOSITORY", "Audit insert returned no id");
             return -1;
         }
-        
+
+        int64_t audit_id = result->GetValue(0, 0).GetValue<int64_t>();
         ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format("Audit entry created with ID: %lld", audit_id));
         return audit_id;
-        
+
     } catch (const std::exception& e) {
+        // Audit is a side channel: losing a row must not fail the read.
         ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error creating audit entry: " + std::string(e.what()));
         return -1;
     }
@@ -456,53 +444,30 @@ int64_t OdpSubscriptionRepository::CreateAuditEntry(const OdpAuditEntry& entry) 
 
 bool OdpSubscriptionRepository::UpdateAuditEntry(const OdpAuditEntry& entry) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
-        "Updating audit entry %lld for subscription %s", 
+        "Updating audit entry %lld for subscription %s",
         entry.audit_id, entry.subscription_id));
-    
+
     EnsureTablesExist();
-    
-    // Escape single quotes in string fields to prevent SQL injection
-    auto escape_sql = [](const std::string &s) {
-        std::string out;
-        out.reserve(s.size() + 8);
-        for (char c : s) {
-            if (c == '\'') {
-                out += "''";
-            } else {
-                out += c;
-            }
-        }
-        return out;
-    };
-    
-    std::string query = duckdb::StringUtil::Format(
-        "UPDATE erpl_web.odp_subscription_audit "
-        "SET response_timestamp = NOW(), "
-        "http_status_code = %s, "
-        "rows_fetched = %lld, "
-        "package_size_bytes = %lld, "
-        "delta_token_after = '%s', "
-        "error_message = '%s', "
-        "duration_ms = %s "
-        "WHERE audit_id = %lld",
-        entry.http_status_code.has_value() ? std::to_string(entry.http_status_code.value()) : "NULL",
-        entry.rows_fetched,
-        entry.package_size_bytes,
-        escape_sql(entry.delta_token_after),
-        escape_sql(entry.error_message),
-        entry.duration_ms.has_value() ? std::to_string(entry.duration_ms.value()) : "NULL",
-        entry.audit_id);
-    
+
     try {
-        auto result = ExecuteQuery(query);
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("ODP_REPOSITORY", "Audit update error: " + result->GetError());
-            return false;
-        }
-        
+        auto result = Execute(
+            "UPDATE " + QualifiedTable(AUDIT_TABLE) + " SET response_timestamp = ?, http_status_code = ?, "
+            "rows_fetched = ?, package_size_bytes = ?, delta_token_after = ?, error_message = ?, duration_ms = ? "
+            "WHERE audit_id = ?",
+            {TimePointToValue(std::chrono::system_clock::now()),
+             entry.http_status_code.has_value() ? duckdb::Value::INTEGER(entry.http_status_code.value())
+                                                : duckdb::Value(duckdb::LogicalType::INTEGER),
+             duckdb::Value::BIGINT(entry.rows_fetched),
+             duckdb::Value::BIGINT(entry.package_size_bytes),
+             duckdb::Value(entry.delta_token_after),
+             duckdb::Value(TruncateForAudit(entry.error_message)),
+             entry.duration_ms.has_value() ? duckdb::Value::BIGINT(entry.duration_ms.value())
+                                           : duckdb::Value(duckdb::LogicalType::BIGINT),
+             duckdb::Value::BIGINT(entry.audit_id)});
+
         ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Audit entry updated successfully");
-        return true;
-        
+        return RowsChanged(*result) > 0;
+
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_REPOSITORY", "Error updating audit entry: " + std::string(e.what()));
         return false;
@@ -517,18 +482,17 @@ std::string OdpSubscriptionRepository::GenerateSubscriptionId(const std::string&
                                                              const std::string& entity_set_name) {
     // Generate timestamp prefix: YYYYMMDD_HHMMSS
     auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    auto tm = *std::localtime(&time_t);
-    
+    auto now_time = std::chrono::system_clock::to_time_t(now);
+    auto local_tm = ToLocalTm(now_time);
+
     std::ostringstream timestamp_stream;
-    timestamp_stream << std::put_time(&tm, "%Y%m%d_%H%M%S");
-    
-    // Clean and combine URL and entity set name
+    timestamp_stream << std::put_time(&local_tm, "%Y%m%d_%H%M%S");
+
     std::string cleaned_url = CleanUrlForId(service_url);
     std::string cleaned_entity = CleanUrlForId(entity_set_name);
-    
+
     std::string subscription_id = timestamp_stream.str() + "_" + cleaned_url + "_" + cleaned_entity;
-    
+
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Generated subscription ID: " + subscription_id);
     return subscription_id;
 }
@@ -536,44 +500,60 @@ std::string OdpSubscriptionRepository::GenerateSubscriptionId(const std::string&
 std::string OdpSubscriptionRepository::CleanUrlForId(const std::string& url) {
     // Remove protocol, replace special characters with underscores
     std::string cleaned = url;
-    
-    // Remove http:// or https://
+
     std::regex protocol_regex("^https?://");
     cleaned = std::regex_replace(cleaned, protocol_regex, "");
-    
-    // Replace special characters with underscores
+
     std::regex special_chars_regex("[^a-zA-Z0-9_]");
     cleaned = std::regex_replace(cleaned, special_chars_regex, "_");
-    
-    // Remove multiple consecutive underscores
+
     std::regex multiple_underscores_regex("_{2,}");
     cleaned = std::regex_replace(cleaned, multiple_underscores_regex, "_");
-    
-    // Remove leading/trailing underscores
+
     if (!cleaned.empty() && cleaned.front() == '_') {
         cleaned = cleaned.substr(1);
     }
     if (!cleaned.empty() && cleaned.back() == '_') {
         cleaned = cleaned.substr(0, cleaned.length() - 1);
     }
-    
-    // Limit length to reasonable size
+
     if (cleaned.length() > 100) {
         cleaned = cleaned.substr(0, 100);
     }
-    
+
     return cleaned;
 }
 
 bool OdpSubscriptionRepository::IsValidOdpUrl(const std::string& url) {
-    // Check for ODP naming patterns: EntityOf* or FactsOf* or AttrOf*
+    // Match on the path only. Matching the whole URL made every service URL that
+    // already carried a query string (?$format=json, ?$select=...) fail (#105).
+    std::string path = url;
+    auto fragment_pos = path.find('#');
+    if (fragment_pos != std::string::npos) {
+        path = path.substr(0, fragment_pos);
+    }
+    auto query_pos = path.find('?');
+    if (query_pos != std::string::npos) {
+        path = path.substr(0, query_pos);
+    }
+    while (!path.empty() && path.back() == '/') {
+        path.pop_back();
+    }
+
     std::regex odp_pattern(".*/(EntityOf|FactsOf|AttrOf)[^/]*$", std::regex_constants::icase);
-    bool is_odp = std::regex_search(url, odp_pattern);
-    
+    bool is_odp = std::regex_search(path, odp_pattern);
+
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
         "URL validation for %s: %s", url, is_odp ? "VALID" : "INVALID"));
-    
+
     return is_odp;
+}
+
+std::string OdpSubscriptionRepository::TruncateForAudit(const std::string& message) {
+    if (message.length() <= MAX_AUDIT_ERROR_LENGTH) {
+        return message;
+    }
+    return message.substr(0, MAX_AUDIT_ERROR_LENGTH) + "... [truncated]";
 }
 
 // ============================================================================
@@ -581,171 +561,138 @@ bool OdpSubscriptionRepository::IsValidOdpUrl(const std::string& url) {
 // ============================================================================
 
 void OdpSubscriptionRepository::InitializeSchema() {
-    std::string query = "CREATE SCHEMA IF NOT EXISTS erpl_web";
-    auto result = ExecuteQuery(query);
-    if (result->HasError()) {
-        throw duckdb::InternalException("Failed to create schema: " + result->GetError());
-    }
+    Execute("CREATE SCHEMA IF NOT EXISTS " + qualified_schema, {});
 }
 
 void OdpSubscriptionRepository::InitializeTables() {
-    // Create subscriptions table
-    std::string subscriptions_query = R"(
-        CREATE TABLE IF NOT EXISTS erpl_web.odp_subscriptions (
-            subscription_id VARCHAR PRIMARY KEY,
-            service_url VARCHAR NOT NULL,
-            entity_set_name VARCHAR NOT NULL,
-            secret_name VARCHAR,
-            delta_token VARCHAR,
-            created_at TIMESTAMP DEFAULT NOW(),
-            last_updated TIMESTAMP DEFAULT NOW(),
-            subscription_status VARCHAR DEFAULT 'active',
-            preference_applied BOOLEAN DEFAULT FALSE
-        )
-    )";
-    
-    auto result = ExecuteQuery(subscriptions_query);
-    if (result->HasError()) {
-        throw duckdb::InternalException("Failed to create subscriptions table: " + result->GetError());
-    }
-    
-    // Create audit table
-    std::string audit_query = R"(
-        CREATE TABLE IF NOT EXISTS erpl_web.odp_subscription_audit (
-            audit_id BIGINT PRIMARY KEY,
-            subscription_id VARCHAR NOT NULL,
-            operation_type VARCHAR NOT NULL,
-            request_timestamp TIMESTAMP DEFAULT NOW(),
-            response_timestamp TIMESTAMP,
-            request_url VARCHAR,
-            http_status_code INTEGER,
-            rows_fetched BIGINT DEFAULT 0,
-            package_size_bytes BIGINT DEFAULT 0,
-            delta_token_before VARCHAR,
-            delta_token_after VARCHAR,
-            error_message VARCHAR,
-            duration_ms BIGINT
-        )
-    )";
-    
-    result = ExecuteQuery(audit_query);
-    if (result->HasError()) {
-        throw duckdb::InternalException("Failed to create audit table: " + result->GetError());
+    Execute("CREATE TABLE IF NOT EXISTS " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " ("
+            "subscription_id VARCHAR PRIMARY KEY, "
+            "service_url VARCHAR NOT NULL, "
+            "entity_set_name VARCHAR NOT NULL, "
+            "secret_name VARCHAR, "
+            "delta_token VARCHAR, "
+            "created_at TIMESTAMP DEFAULT NOW(), "
+            "last_updated TIMESTAMP DEFAULT NOW(), "
+            "subscription_status VARCHAR DEFAULT 'active', "
+            "preference_applied BOOLEAN DEFAULT FALSE, "
+            "schema_version INTEGER NOT NULL DEFAULT 1, "
+            // One subscription per source: without it two sessions racing on the
+            // first read each insert their own row and split the delta stream.
+            "UNIQUE (service_url, entity_set_name))", {});
+
+    Execute("CREATE SEQUENCE IF NOT EXISTS " + qualified_schema + "." + QuoteIdentifier(AUDIT_SEQUENCE) +
+            " START 1", {});
+
+    Execute("CREATE TABLE IF NOT EXISTS " + QualifiedTable(AUDIT_TABLE) + " ("
+            "audit_id BIGINT PRIMARY KEY, "
+            "subscription_id VARCHAR NOT NULL, "
+            "operation_type VARCHAR NOT NULL, "
+            "request_timestamp TIMESTAMP DEFAULT NOW(), "
+            "response_timestamp TIMESTAMP, "
+            "request_url VARCHAR, "
+            "http_status_code INTEGER, "
+            "rows_fetched BIGINT DEFAULT 0, "
+            "package_size_bytes BIGINT DEFAULT 0, "
+            "delta_token_before VARCHAR, "
+            "delta_token_after VARCHAR, "
+            "error_message VARCHAR, "
+            "duration_ms BIGINT)", {});
+}
+
+void OdpSubscriptionRepository::VerifySchemaVersion() {
+    // CREATE TABLE IF NOT EXISTS silently accepts a pre-existing table with an
+    // older layout. Detect that here instead of misreading its rows (#96).
+    auto result = Execute(
+        "SELECT count(*) FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? "
+        "AND table_name = ? AND column_name = 'schema_version'",
+        {duckdb::Value(state_catalog), duckdb::Value(SCHEMA_NAME), duckdb::Value(SUBSCRIPTIONS_TABLE)});
+
+    const int64_t column_count = result->RowCount() > 0 ? result->GetValue(0, 0).GetValue<int64_t>() : 0;
+    if (column_count == 0) {
+        throw duckdb::InvalidInputException(
+            "The ODP state table " + state_catalog + ".erpl_web." + SUBSCRIPTIONS_TABLE + " was written by an "
+            "older version of erpl_web and has no schema_version column. Its delta tokens cannot be read safely. "
+            "Drop the erpl_web schema in that database (DROP SCHEMA " + state_catalog + ".erpl_web CASCADE) and "
+            "re-subscribe, or point ODP at a different database.");
     }
 }
 
-duckdb::unique_ptr<duckdb::MaterializedQueryResult> OdpSubscriptionRepository::ExecuteQuery(const std::string& query) {
-    ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Executing query: " + query);
+duckdb::unique_ptr<duckdb::MaterializedQueryResult> OdpSubscriptionRepository::Execute(
+    const std::string& sql, duckdb::vector<duckdb::Value> params) {
+    // Only the statement label is traced: the SQL carries no caller data now
+    // that every value is bound, and the values themselves may be credentials.
+    ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
+        "Executing ODP state statement (%zu bound parameters)", params.size()));
+
     duckdb::Connection connection(context.db->GetDatabase(context));
-    auto result = connection.Query(query);
-    if (!result) {
-        throw duckdb::InternalException("Failed to execute query: no result returned");
+    auto prepared = connection.Prepare(sql);
+    if (!prepared || prepared->HasError()) {
+        throw duckdb::InternalException("Failed to prepare ODP state statement: " +
+                                        (prepared ? prepared->GetError() : std::string("no statement returned")));
     }
+
+    auto result = prepared->Execute(params, false);
+    if (!result) {
+        throw duckdb::InternalException("Failed to execute ODP state statement: no result returned");
+    }
+    if (result->HasError()) {
+        throw duckdb::InternalException("Failed to execute ODP state statement: " + result->GetError());
+    }
+
     auto* materialized = dynamic_cast<duckdb::MaterializedQueryResult*>(result.get());
     if (!materialized) {
-        throw duckdb::InternalException("Failed to execute query: non-materialized result returned");
+        throw duckdb::InternalException("Failed to execute ODP state statement: non-materialized result returned");
     }
     result.release();
     return duckdb::unique_ptr<duckdb::MaterializedQueryResult>(materialized);
 }
 
-std::string OdpSubscriptionRepository::BuildInsertSubscriptionQuery(const OdpSubscription& subscription) {
-    // Escape single quotes in string fields to prevent SQL injection
-    auto escape_sql = [](const std::string &s) {
-        std::string out;
-        out.reserve(s.size() + 8);
-        for (char c : s) {
-            if (c == '\'') {
-                out += "''";
-            } else {
-                out += c;
-            }
-        }
-        return out;
-    };
-    
-    return duckdb::StringUtil::Format(
-        "INSERT INTO erpl_web.odp_subscriptions "
-        "(subscription_id, service_url, entity_set_name, secret_name, delta_token, "
-        "created_at, last_updated, subscription_status, preference_applied) "
-        "VALUES ('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', %s)",
-        escape_sql(subscription.subscription_id),
-        escape_sql(subscription.service_url),
-        escape_sql(subscription.entity_set_name),
-        escape_sql(subscription.secret_name),
-        escape_sql(subscription.delta_token),
-        TimestampToString(subscription.created_at),
-        TimestampToString(subscription.last_updated),
-        escape_sql(subscription.subscription_status),
-        subscription.preference_applied ? "TRUE" : "FALSE"
-    );
+int64_t OdpSubscriptionRepository::RowsChanged(duckdb::MaterializedQueryResult& result) {
+    if (result.RowCount() == 0 || result.ColumnCount() == 0) {
+        return 0;
+    }
+    auto value = result.GetValue(0, 0);
+    if (value.IsNull()) {
+        return 0;
+    }
+    return value.GetValue<int64_t>();
 }
 
-std::string OdpSubscriptionRepository::BuildInsertAuditQuery(const OdpAuditEntry& entry) {
-    // Escape single quotes in string fields to prevent SQL injection
-    auto escape_sql = [](const std::string &s) {
-        std::string out;
-        out.reserve(s.size() + 8);
-        for (char c : s) {
-            if (c == '\'') {
-                out += "''";
-            } else {
-                out += c;
-            }
-        }
-        return out;
-    };
-    
-    std::string response_ts = entry.response_timestamp.has_value() 
-        ? "'" + TimestampToString(entry.response_timestamp.value()) + "'"
-        : "NULL";
-    
-    std::string http_code = entry.http_status_code.has_value() 
-        ? std::to_string(entry.http_status_code.value())
-        : "NULL";
-    
-    std::string duration = entry.duration_ms.has_value() 
-        ? std::to_string(entry.duration_ms.value())
-        : "NULL";
-    
-    return duckdb::StringUtil::Format(
-        "INSERT INTO erpl_web.odp_subscription_audit "
-        "(audit_id, subscription_id, operation_type, request_timestamp, response_timestamp, "
-        "request_url, http_status_code, rows_fetched, package_size_bytes, "
-        "delta_token_before, delta_token_after, error_message, duration_ms) "
-        "VALUES (%lld, '%s', '%s', '%s', %s, '%s', %s, %lld, %lld, '%s', '%s', '%s', %s)",
-        entry.audit_id,
-        escape_sql(entry.subscription_id),
-        escape_sql(entry.operation_type),
-        TimestampToString(entry.request_timestamp),
-        response_ts,
-        escape_sql(entry.request_url),
-        http_code,
-        entry.rows_fetched,
-        entry.package_size_bytes,
-        escape_sql(entry.delta_token_before),
-        escape_sql(entry.delta_token_after),
-        escape_sql(entry.error_message),
-        duration
-    );
+duckdb::Value OdpSubscriptionRepository::TimePointToValue(const std::chrono::system_clock::time_point& tp) {
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch()).count();
+    return duckdb::Value::TIMESTAMP(duckdb::timestamp_t(micros));
 }
 
-std::string OdpSubscriptionRepository::TimestampToString(const std::chrono::system_clock::time_point& tp) {
-    auto time_t = std::chrono::system_clock::to_time_t(tp);
-    auto tm = *std::gmtime(&time_t);
-    
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return oss.str();
+std::chrono::system_clock::time_point OdpSubscriptionRepository::ValueToTimePoint(const duckdb::Value& value) {
+    if (value.IsNull()) {
+        return std::chrono::system_clock::time_point {};
+    }
+    const auto timestamp = value.GetValue<duckdb::timestamp_t>();
+    return std::chrono::system_clock::time_point(std::chrono::microseconds(timestamp.value));
 }
 
-std::chrono::system_clock::time_point OdpSubscriptionRepository::StringToTimestamp(const std::string& str) {
-    std::tm tm = {};
-    std::istringstream ss(str);
-    ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-    
-    auto time_t = std::mktime(&tm);
-    return std::chrono::system_clock::from_time_t(time_t);
+OdpSubscription OdpSubscriptionRepository::RowToSubscription(duckdb::MaterializedQueryResult& result,
+                                                             duckdb::idx_t row) {
+    const int32_t row_version = result.GetValue(COL_SCHEMA_VERSION, row).GetValue<int32_t>();
+    if (row_version != SCHEMA_VERSION) {
+        throw duckdb::InvalidInputException(duckdb::StringUtil::Format(
+            "ODP subscription row has schema version %d but this build understands version %d. "
+            "Its delta token cannot be interpreted safely; drop the erpl_web schema and re-subscribe.",
+            row_version, SCHEMA_VERSION));
+    }
+
+    OdpSubscription subscription;
+    subscription.subscription_id = result.GetValue(COL_SUBSCRIPTION_ID, row).ToString();
+    subscription.service_url = result.GetValue(COL_SERVICE_URL, row).ToString();
+    subscription.entity_set_name = result.GetValue(COL_ENTITY_SET_NAME, row).ToString();
+    subscription.secret_name = result.GetValue(COL_SECRET_NAME, row).ToString();
+    auto token_value = result.GetValue(COL_DELTA_TOKEN, row);
+    subscription.delta_token = token_value.IsNull() ? std::string() : token_value.ToString();
+    subscription.created_at = ValueToTimePoint(result.GetValue(COL_CREATED_AT, row));
+    subscription.last_updated = ValueToTimePoint(result.GetValue(COL_LAST_UPDATED, row));
+    subscription.subscription_status = result.GetValue(COL_SUBSCRIPTION_STATUS, row).ToString();
+    subscription.preference_applied = result.GetValue(COL_PREFERENCE_APPLIED, row).GetValue<bool>();
+    return subscription;
 }
 
 } // namespace erpl_web
