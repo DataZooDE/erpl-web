@@ -38,9 +38,16 @@ struct RecordedRequest {
     // sigil; both the literal and the percent-encoded ("%24...") spellings of a
     // '$'-prefixed name are recognised, because different code paths encode the
     // sigil differently.
+    //
+    // QueryParam() returns the bytes exactly as they arrived. DecodedQueryParam()
+    // undoes the application/x-www-form-urlencoded encoding httplib's client puts
+    // on every query value on its way out -- percent escapes AND '+' for a space
+    // -- and so returns the value the extension asked for. Prefer the decoded form
+    // for assertions about a clause; use the raw form only when the encoding
+    // itself is what is under test.
     bool HasQueryParam(const std::string &name) const;
-    std::string QueryParam(const std::string &name) const;         // raw value
-    std::string DecodedQueryParam(const std::string &name) const;  // percent-decoded
+    std::string QueryParam(const std::string &name) const;         // raw wire bytes
+    std::string DecodedQueryParam(const std::string &name) const;  // form-decoded
 
     // Case-insensitive header lookup; returns an empty string when absent.
     std::string Header(const std::string &name) const;

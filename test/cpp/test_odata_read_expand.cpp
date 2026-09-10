@@ -66,8 +66,16 @@ private:
 };
 
 // Decoded value of the $expand the extension sent for `path`, or an empty string
-// when it never sent one. Decoding is what lets a test state the expand it asked
-// for instead of restating the exact percent-encoding the sanitizer emits.
+// when it never sent one.
+//
+// Comparing the decoded value is deliberate. The raw bytes on the socket are not
+// the extension's own encoding: httplib's client re-encodes every query value as
+// application/x-www-form-urlencoded on its way out (see FormDecode() in
+// odata_test_server.cpp), so the %20 the OData URL codec wrote arrives as '+' and
+// a nested '=' arrives as %3D. Pinning a test to that spelling would pin it to a
+// third-party detail that a DuckDB bump can change. Decoding undoes exactly that
+// transport encoding and nothing else, so equality here still means "the service
+// receives the clause the caller asked for, byte for byte".
 std::string ExpandOnTheWire(const ODataTestServer &server, const std::string &path)
 {
     for (const auto &request : server.RequestsFor(path)) {

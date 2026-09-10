@@ -52,14 +52,30 @@ int HexValue(char c)
     return -1;
 }
 
-// Percent-decoding only. '+' is deliberately left alone: OData filter values may
-// legitimately contain it and no code path in this extension writes it as an
-// encoded space.
-std::string PercentDecode(const std::string &value)
+// Decodes a query-string value the way it was encoded, which for everything this
+// extension sends is application/x-www-form-urlencoded -- percent escapes plus
+// '+' for a space.
+//
+// That is not a choice the extension makes, it is httplib's. The extension hands
+// the client a fully prepared query (spaces already written as %20 by
+// ODataUrlCodec::encodeFilterExpression), but ClientImpl::write_request
+// unconditionally round-trips it: parse_query_text() decodes every value with
+// decode_query_component(..., plus_as_space = true) and params_to_query_str()
+// re-encodes it with encode_query_component(..., space_as_plus = true). So a
+// %20 the extension wrote leaves the socket as '+', while a literal '+' in a
+// value leaves it as %2B. Decoding '+' back to a space is therefore lossless and
+// is the only way to recover the value the caller actually asked for.
+//
+// Callers that want the untouched wire bytes use QueryParam(), which is raw.
+std::string FormDecode(const std::string &value)
 {
     std::string result;
     result.reserve(value.size());
     for (std::size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '+') {
+            result += ' ';
+            continue;
+        }
         if (value[i] == '%' && i + 2 < value.size()) {
             const int hi = HexValue(value[i + 1]);
             const int lo = HexValue(value[i + 2]);
@@ -166,7 +182,7 @@ std::string RecordedRequest::QueryParam(const std::string &name) const
 
 std::string RecordedRequest::DecodedQueryParam(const std::string &name) const
 {
-    return PercentDecode(QueryParam(name));
+    return FormDecode(QueryParam(name));
 }
 
 std::string RecordedRequest::Header(const std::string &name) const
