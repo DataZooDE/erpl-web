@@ -1,16 +1,14 @@
 #include "catch.hpp"
 #include "odp_subscription_state_manager.hpp"
+#include "odp_test_db.hpp"
 #include "duckdb.hpp"
 
 using namespace erpl_web;
 using namespace duckdb;
 
 TEST_CASE("OdpSubscriptionStateManager - Basic State Management", "[odp_state_manager]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest";
     std::string entity_set_name = "EntityOfTest";
@@ -45,7 +43,7 @@ TEST_CASE("OdpSubscriptionStateManager - Basic State Management", "[odp_state_ma
     }
     
     SECTION("Import delta token") {
-        std::string import_token = "imported_delta_token_456";
+        std::string import_token = "D20240101_120000_456";
         OdpSubscriptionStateManager manager(context, service_url + "2", "EntityOfTest2", secret_name, false, import_token);
         
         REQUIRE(manager.GetCurrentPhase() == OdpSubscriptionStateManager::SubscriptionPhase::DELTA_FETCH);
@@ -55,11 +53,8 @@ TEST_CASE("OdpSubscriptionStateManager - Basic State Management", "[odp_state_ma
 }
 
 TEST_CASE("OdpSubscriptionStateManager - State Transitions", "[odp_state_transitions]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTransition";
     std::string entity_set_name = "EntityOfTransition";
@@ -116,11 +111,8 @@ TEST_CASE("OdpSubscriptionStateManager - State Transitions", "[odp_state_transit
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Delta Token Management", "[odp_delta_tokens]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfDelta";
     std::string entity_set_name = "EntityOfDelta";
@@ -162,11 +154,8 @@ TEST_CASE("OdpSubscriptionStateManager - Delta Token Management", "[odp_delta_to
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Audit Operations", "[odp_audit]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfAudit";
     std::string entity_set_name = "EntityOfAudit";
@@ -220,11 +209,8 @@ TEST_CASE("OdpSubscriptionStateManager - Utility Methods", "[odp_state_utils]") 
     }
     
     SECTION("Log current state (should not throw)") {
-        DBConfig config;
-        config.SetOption("allocator_background_threads", Value(true));
-        DuckDB db(nullptr, &config);
-        Connection conn(db);
-        ClientContext& context = *conn.context;
+        odp_test::TempDatabase temp_db;
+        ClientContext& context = temp_db.Context();
         
         OdpSubscriptionStateManager manager(context, 
             "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfLog", "EntityOfLog");
@@ -241,11 +227,8 @@ TEST_CASE("OdpSubscriptionStateManager - Utility Methods", "[odp_state_utils]") 
 }
 
 TEST_CASE("OdpSubscriptionStateManager - Error Handling", "[odp_state_errors]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     SECTION("Invalid URL validation") {
         REQUIRE_THROWS_AS(
@@ -253,10 +236,10 @@ TEST_CASE("OdpSubscriptionStateManager - Error Handling", "[odp_state_errors]") 
             InvalidInputException
         );
         
-        REQUIRE_THROWS_AS(
-            OdpSubscriptionStateManager(context, "https://invalid.com/RegularEntity", "RegularEntity"),
-            InvalidInputException
-        );
+        // A URL that does not follow the ODP naming convention is accepted with
+        // a warning; refusing it blocked valid services (#105).
+        REQUIRE_NOTHROW(
+            OdpSubscriptionStateManager(context, "https://valid.com/RegularEntity", "RegularEntity"));
     }
     
     SECTION("Empty entity set name") {
@@ -265,4 +248,77 @@ TEST_CASE("OdpSubscriptionStateManager - Error Handling", "[odp_state_errors]") 
             InvalidInputException
         );
     }
+}
+
+
+// ============================================================================
+// GitHub #105 -- import_delta_token must be validated, not trusted
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionStateManager - imported delta token validation", "[odp_state_manager][odp_token_validation]") {
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
+
+    const std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfImport";
+    const std::string entity_set_name = "EntityOfImport";
+
+    SECTION("A well-formed token is accepted") {
+        REQUIRE_NOTHROW(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", false, "D20240101120000_000000000"));
+    }
+
+    SECTION("A token carrying URL syntax is rejected") {
+        // Pre-fix: anything at all was accepted and pasted into the delta URL,
+        // so a '&' or a space silently changed the request the service saw.
+        REQUIRE_THROWS_AS(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", false, "D2024&$top=1"), InvalidInputException);
+        REQUIRE_THROWS_AS(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", false, "token with spaces"), InvalidInputException);
+        REQUIRE_THROWS_AS(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", false, "tok\nen"), InvalidInputException);
+    }
+
+    SECTION("An implausibly long token is rejected") {
+        REQUIRE_THROWS_AS(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", false, std::string(4096, 'A')), InvalidInputException);
+    }
+
+    SECTION("force_full_load combined with import_delta_token is rejected") {
+        // Pre-fix: the token was accepted and then thrown away by the forced
+        // full load, leaving the caller believing they had resumed a stream.
+        REQUIRE_THROWS_AS(OdpSubscriptionStateManager(
+            context, service_url, entity_set_name, "", true, "D20240101120000_000000000"),
+            InvalidInputException);
+    }
+}
+
+// ============================================================================
+// GitHub #95 -- the delta token advance is a compare-and-swap
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionStateManager - two sessions on one subscription",
+          "[odp_state_manager][odp_concurrency]") {
+    odp_test::TempDatabase temp_db;
+    auto second_connection = temp_db.NewConnection();
+
+    const std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTwoSessions";
+    const std::string entity_set_name = "EntityOfTwoSessions";
+
+    OdpSubscriptionStateManager session_a(temp_db.Context(), service_url, entity_set_name);
+    OdpSubscriptionStateManager session_b(*second_connection->context, service_url, entity_set_name);
+
+    // Both sessions attached to the same subscription and see the same state.
+    REQUIRE(session_a.GetSubscriptionId() == session_b.GetSubscriptionId());
+    REQUIRE(session_a.GetCurrentDeltaToken() == session_b.GetCurrentDeltaToken());
+
+    // A finishes its read first and advances the stream.
+    session_a.TransitionToDeltaFetch("D20240101_AAA", true);
+    REQUIRE(session_a.GetCurrentDeltaToken() == "D20240101_AAA");
+
+    // Pre-fix: B's advance silently overwrote A's, and the two sessions each
+    // held half of the change stream with no error anywhere.
+    REQUIRE_THROWS(session_b.TransitionToDeltaFetch("D20240101_BBB", true));
+
+    OdpSubscriptionStateManager reader(temp_db.Context(), service_url, entity_set_name);
+    REQUIRE(reader.GetCurrentDeltaToken() == "D20240101_AAA");
 }
