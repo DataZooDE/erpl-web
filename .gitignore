@@ -31,3 +31,4 @@ debug.log
 *secret*.json
 !*_secret.cpp
 !*_secret.hpp
+.crew/

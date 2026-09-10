@@ -1,0 +1,410 @@
+// End-to-end tests for odata_read() against a local HTTP server.
+//
+// These exercise the real HTTP client, the real OData probe/metadata/parse path
+// and the real pagination loop -- nothing in the extension is stubbed. Only the
+// remote service is replaced, by ODataTestServer, so that OData and SAP ODP wire
+// behaviour can be tested without a live SAP system (GitHub #103).
+
+#include "catch.hpp"
+#include "duckdb.hpp"
+
+#include "odata_test_server.hpp"
+
+#include <string>
+#include <vector>
+
+using erpl_web::test_support::CannedResponse;
+using erpl_web::test_support::MakeOdpDeltaPage;
+using erpl_web::test_support::MakeV2Page;
+using erpl_web::test_support::MakeV4Page;
+using erpl_web::test_support::ODataTestServer;
+using erpl_web::test_support::RecordedRequest;
+
+namespace {
+
+// The jemalloc/background-thread option is mandatory: a bare DuckDB(nullptr)
+// crashes in DEBUG builds shortly after the first query (see CLAUDE.md).
+// DBConfig is neither copyable nor movable, hence the small RAII wrapper.
+class TestDatabase {
+public:
+    TestDatabase()
+    {
+        config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
+        database = duckdb::make_uniq<duckdb::DuckDB>(nullptr, &config);
+        connection = duckdb::make_uniq<duckdb::Connection>(*database);
+    }
+
+    duckdb::Connection &Con() const { return *connection; }
+
+private:
+    duckdb::DBConfig config;
+    duckdb::unique_ptr<duckdb::DuckDB> database;
+    duckdb::unique_ptr<duckdb::Connection> connection;
+};
+
+bool AnyRequestHasQueryParam(const std::vector<RecordedRequest> &requests, const std::string &name)
+{
+    for (const auto &request : requests) {
+        if (request.HasQueryParam(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AnyRequestQueryContains(const std::vector<RecordedRequest> &requests,
+                             const std::string &needle)
+{
+    for (const auto &request : requests) {
+        if (request.query.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *const AIRLINE_AA = R"({"AirlineCode":"AA","Name":"American Airlines"})";
+const char *const AIRLINE_FM = R"({"AirlineCode":"FM","Name":"Shanghai Airline"})";
+const char *const AIRLINE_MU = R"({"AirlineCode":"MU","Name":"China Eastern Airlines"})";
+const char *const AIRLINE_AF = R"({"AirlineCode":"AF","Name":"Air France"})";
+const char *const AIRLINE_KL = R"({"AirlineCode":"KL","Name":"KLM"})";
+
+}  // namespace
+
+// ----------------------------------------------------------------------
+// Harness self-checks
+
+TEST_CASE("ODataTestServer binds an ephemeral loopback port", "[odata_e2e][harness]") {
+    ODataTestServer first;
+    ODataTestServer second;
+
+    REQUIRE(first.Port() > 0);
+    REQUIRE(second.Port() > 0);
+    // Ephemeral ports guarantee parallel test runs do not collide.
+    REQUIRE(first.Port() != second.Port());
+    REQUIRE(first.BaseUrl() == std::string("http://127.0.0.1:") + std::to_string(first.Port()));
+}
+
+// ----------------------------------------------------------------------
+// Entity set reads
+
+// Catches: a regression in v4 page parsing, metadata resolution, or the shape of
+// the URL we put on the wire (the probe must ask for JSON and must hit exactly
+// the entity set the user named).
+TEST_CASE("odata_read reads an OData v4 entity set end to end", "[odata_e2e][v4]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/v4/$metadata", "edm_trippin.xml");
+    server.OnPath("/v4/Airlines",
+                  CannedResponse::Json(MakeV4Page(server.Url("/v4/$metadata") + "#Airlines",
+                                                  {AIRLINE_AA, AIRLINE_FM})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT AirlineCode, Name FROM odata_read('" +
+                            server.Url("/v4/Airlines") + "') ORDER BY AirlineCode");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 2);
+    REQUIRE(result->GetValue(0, 0).GetValue<std::string>() == "AA");
+    REQUIRE(result->GetValue(1, 0).GetValue<std::string>() == "American Airlines");
+    REQUIRE(result->GetValue(0, 1).GetValue<std::string>() == "FM");
+
+    // Assert on what was REQUESTED, not just on what came back.
+    REQUIRE(server.RequestsFor("/v4/$metadata").size() >= 1);
+    const auto data_requests = server.RequestsFor("/v4/Airlines");
+    REQUIRE(data_requests.size() >= 1);
+    REQUIRE(data_requests.front().method == "GET");
+    REQUIRE(data_requests.front().DecodedQueryParam("$format") == "json");
+}
+
+// Catches: v2 ("d"/"results") payload parsing regressions and v2 metadata
+// (EDMX 1.0) handling.
+TEST_CASE("odata_read reads an OData v2 entity set end to end", "[odata_e2e][v2]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/v2/$metadata", "edm_northwind_v2.xml");
+    server.OnPath("/v2/Regions",
+                  CannedResponse::Json(MakeV2Page({R"({"RegionID":1,"RegionDescription":"Eastern"})",
+                                                   R"({"RegionID":2,"RegionDescription":"Western"})"})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT RegionID, RegionDescription FROM odata_read('" +
+                            server.Url("/v2/Regions") + "') ORDER BY RegionID");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 2);
+    REQUIRE(result->GetValue(0, 0).GetValue<int32_t>() == 1);
+    REQUIRE(result->GetValue(1, 0).GetValue<std::string>() == "Eastern");
+    REQUIRE(result->GetValue(0, 1).GetValue<int32_t>() == 2);
+
+    REQUIRE(server.RequestsFor("/v2/$metadata").size() >= 1);
+    REQUIRE(server.RequestsFor("/v2/Regions").size() >= 1);
+}
+
+// ----------------------------------------------------------------------
+// Pagination
+
+// Catches: silent truncation -- a scan that stops after the first page, or that
+// never follows @odata.nextLink at all. Both are data-loss defects.
+TEST_CASE("odata_read follows every @odata.nextLink page", "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/pg/Airlines");
+    const std::string context = server.Url("/pg/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/pg/$metadata", "edm_trippin.xml");
+
+    // Route on the skiptoken rather than on call order, so the assertions hold
+    // no matter how often the first page is (re-)fetched during binding.
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/pg/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF},
+                                        entity_url + "?$format=json&$skiptoken=3")));
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/pg/Airlines" && request.QueryParam("$skiptoken") == "3";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_KL})));
+    server.OnPath("/pg/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT AirlineCode FROM odata_read('" + entity_url +
+                            "') ORDER BY AirlineCode");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 5);
+
+    const auto requests = server.RequestsFor("/pg/Airlines");
+    REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=2"));
+    REQUIRE(AnyRequestQueryContains(requests, "$skiptoken=3"));
+}
+
+// Catches GitHub #93: a follow-up page that errors must fail the scan. Swallowing
+// the error would hand the user a silently truncated result set, which is worse
+// than no result at all.
+TEST_CASE("odata_read fails loudly when a next-link page errors", "[odata_e2e][paging][error]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/err/Airlines");
+    const std::string context = server.Url("/err/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/err/$metadata", "edm_trippin.xml");
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/err/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Error(500, R"({"error":{"code":"boom","message":"page 2 exploded"}})"));
+    server.OnPath("/err/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT count(*) FROM odata_read('" + entity_url + "')");
+    REQUIRE(result->HasError());
+
+    // The second page really was attempted -- the failure is not a bind failure.
+    REQUIRE(AnyRequestQueryContains(server.RequestsFor("/err/Airlines"), "$skiptoken=2"));
+}
+
+// Catches: treating an empty page as end-of-stream. A server is allowed to return
+// an empty value array together with a next link; aborting there drops every row
+// on the pages that follow.
+TEST_CASE("odata_read keeps paging through an empty page that has a next link",
+          "[odata_e2e][paging]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/empty/Airlines");
+    const std::string context = server.Url("/empty/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/empty/$metadata", "edm_trippin.xml");
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/empty/Airlines" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(context, {}, entity_url + "?$format=json&$skiptoken=3")));
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/empty/Airlines" && request.QueryParam("$skiptoken") == "3";
+        },
+        CannedResponse::Json(MakeV4Page(context, {AIRLINE_MU, AIRLINE_AF})));
+    server.OnPath("/empty/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
+                                                  entity_url + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT count(*) FROM odata_read('" + entity_url + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 4);
+
+    REQUIRE(AnyRequestQueryContains(server.RequestsFor("/empty/Airlines"), "$skiptoken=3"));
+}
+
+// ----------------------------------------------------------------------
+// What we put on the wire
+
+// Catches: projection and filter pushdown silently regressing to "fetch
+// everything". Reading the whole entity set and filtering locally still returns
+// the right answer, so only an assertion on the REQUEST can detect it.
+TEST_CASE("odata_read pushes projection and filter into the request URL",
+          "[odata_e2e][pushdown]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/pd/$metadata", "edm_trippin.xml");
+    server.OnPath("/pd/Airlines",
+                  CannedResponse::Json(MakeV4Page(server.Url("/pd/$metadata") + "#Airlines",
+                                                  {AIRLINE_AA})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT AirlineCode FROM odata_read('" + server.Url("/pd/Airlines") +
+                            "') WHERE AirlineCode = 'AA'");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 1);
+
+    const auto requests = server.RequestsFor("/pd/Airlines");
+    REQUIRE(AnyRequestHasQueryParam(requests, "$select"));
+    REQUIRE(AnyRequestHasQueryParam(requests, "$filter"));
+
+    std::string select_value;
+    std::string filter_value;
+    for (const auto &request : requests) {
+        if (request.HasQueryParam("$select")) {
+            select_value = request.DecodedQueryParam("$select");
+        }
+        if (request.HasQueryParam("$filter")) {
+            filter_value = request.DecodedQueryParam("$filter");
+        }
+    }
+    REQUIRE(select_value.find("AirlineCode") != std::string::npos);
+    REQUIRE(select_value.find("Name") == std::string::npos);
+    REQUIRE(filter_value.find("AirlineCode") != std::string::npos);
+    REQUIRE(filter_value.find("eq") != std::string::npos);
+    REQUIRE(filter_value.find("AA") != std::string::npos);
+}
+
+// Catches: a $top named parameter that never reaches the service. The scan would
+// still look right locally while transferring the entire dataset.
+TEST_CASE("odata_read pushes the top named parameter into the request URL",
+          "[odata_e2e][pushdown]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/top/$metadata", "edm_trippin.xml");
+    server.OnPath("/top/Airlines",
+                  CannedResponse::Json(MakeV4Page(server.Url("/top/$metadata") + "#Airlines",
+                                                  {AIRLINE_AA})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT * FROM odata_read('" + server.Url("/top/Airlines") +
+                            "', top = 1)");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 1);
+
+    const auto requests = server.RequestsFor("/top/Airlines");
+    bool saw_top = false;
+    for (const auto &request : requests) {
+        if (request.DecodedQueryParam("$top") == "1") {
+            saw_top = true;
+        }
+    }
+    REQUIRE(saw_top);
+}
+
+// ----------------------------------------------------------------------
+// SAP ODP shapes
+//
+// The extension's ODP entry points need a subscription secret and repository, so
+// this covers the payload and header fidelity of the harness itself: the delta
+// page shape and the Preference-Applied header that ODP change tracking relies
+// on. It is the building block an end-to-end ODP test needs; the ODP read
+// function itself is not yet driven from here (see the report).
+
+TEST_CASE("ODataTestServer serves a SAP ODP delta page with a !deltatoken link",
+          "[odata_e2e][odp]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/odp/Entity");
+    const std::string delta_link = entity_url + "?$format=json&!deltatoken=D20240101120000";
+
+    server.ServeMetadataFixture("/odp/$metadata", "edm_sap_odp_bw_fact.xml");
+    server.OnPath("/odp/Entity",
+                  MakeOdpDeltaPage({R"({"KeyField":"1","ValueField":"10"})"}, delta_link));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // Drive the plain HTTP function so the assertion is about the wire shape and
+    // not about ODP subscription bookkeeping.
+    auto result = con.Query("SELECT status, content FROM http_get('" + entity_url + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 1);
+
+    const auto content = result->GetValue(1, 0).GetValue<std::string>();
+    REQUIRE(content.find("__delta") != std::string::npos);
+    REQUIRE(content.find("!deltatoken=D20240101120000") != std::string::npos);
+    REQUIRE(content.find("\"results\"") != std::string::npos);
+
+    REQUIRE(server.RequestsFor("/odp/Entity").size() == 1);
+}
+
+// Catches: a Prefer header that never leaves the client. Recording it server-side
+// is the only way to prove change tracking was actually requested.
+TEST_CASE("ODataTestServer records the Prefer header sent by the client",
+          "[odata_e2e][odp][harness]") {
+    ODataTestServer server;
+    server.OnPath("/odp/Entity", MakeOdpDeltaPage({}, server.Url("/odp/Entity") +
+                                                          "?$format=json&!deltatoken=D1"));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query(
+        "SELECT status FROM http_get('" + server.Url("/odp/Entity") +
+        "', headers = MAP {'Prefer': 'odata.track-changes,odata.maxpagesize=1000'})");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+
+    const auto requests = server.RequestsFor("/odp/Entity");
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests.front().Header("Prefer").find("odata.track-changes") != std::string::npos);
+    REQUIRE(requests.front().Header("Prefer").find("odata.maxpagesize=1000") != std::string::npos);
+}
+
+// ----------------------------------------------------------------------
+// Failure modes
+
+// Catches: a bind that treats an unreachable or erroring service as an empty
+// result set instead of an error.
+TEST_CASE("odata_read fails when the entity set itself errors", "[odata_e2e][error]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/bad/$metadata", "edm_trippin.xml");
+    server.OnPath("/bad/Airlines", CannedResponse::Error(500));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT * FROM odata_read('" + server.Url("/bad/Airlines") + "')");
+    REQUIRE(result->HasError());
+}

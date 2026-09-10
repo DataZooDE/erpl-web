@@ -22,42 +22,22 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/src/include/duckdb/main/extension_callback_manage
     list(APPEND TEST_SOURCES erpl_web_extension_loader.cpp)
 endif()
 
-list(APPEND TEST_SOURCES
-    test_charset_converter.cpp
-    test_http_client.cpp
-    test_odata_catalog.cpp
-    test_odata_edm.cpp
-    test_odata_edm_builder.cpp
-    test_odata_client.cpp
-    test_odata_content.cpp
-    test_odata_row_buffer.cpp
-    test_odata_from_entity_set_buffering.cpp
-    test_odata_data_extractor.cpp
-    test_odata_url_helpers.cpp
-    test_odata_expand_parser.cpp
-    test_odata_filter_translation.cpp
-    test_odp_parsing.cpp
-    test_odp_http_request_factory.cpp
-    test_odp_subscription_repository.cpp
-    test_odp_subscription_state_manager.cpp
-    test_odp_request_orchestrator.cpp
-    test_datasphere_integration.cpp
-    test_datasphere_oauth2_consolidated.cpp
-    test_datasphere_discovery.cpp
-    test_datasphere_asset_consumption.cpp
-    test_microsoft_entra_auth.cpp
-    test_business_central.cpp
-    test_dataverse.cpp
-    test_graph_client.cpp
-    test_graph_excel.cpp
-    test_graph_sharepoint.cpp
-    test_graph_planner.cpp
-    test_graph_outlook.cpp
-    test_graph_entra.cpp
-    test_graph_teams.cpp
+# Test sources are globbed rather than listed by hand. A hand-maintained list silently
+# drops any file someone forgets to add: three test files (test_odata_expand_parser,
+# test_odata_read_expand, test_odata_predicate_pushdown_expand) sat unregistered, and so
+# uncompiled and unrun, for their whole lifetime - one of them with nine already-failing
+# assertions nobody could see. CONFIGURE_DEPENDS makes the build re-glob when the set of
+# matching files changes. See GitHub #115.
+file(GLOB ERPL_WEB_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 
-    test_main.cpp
-)
+# The harness support file is not a test_*.cpp, so it is named explicitly.
+list(APPEND TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/odata_test_server.cpp)
+
+if(NOT ERPL_WEB_TEST_FILES)
+    message(FATAL_ERROR "No test_*.cpp files found in ${CMAKE_CURRENT_SOURCE_DIR} - the test glob is broken")
+endif()
+
+list(APPEND TEST_SOURCES ${ERPL_WEB_TEST_FILES})
 
 add_executable(erpl_web_tests ${TEST_SOURCES})
 if(EXISTS "${CMAKE_SOURCE_DIR}/src/include/duckdb/main/extension_callback_manager.hpp")
