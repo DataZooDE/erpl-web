@@ -7,6 +7,8 @@
 #include "odata_url_helpers.hpp"
 #include "yyjson.hpp"
 
+#include <unordered_set>
+
 #include "tracing.hpp"
 #include "telemetry.hpp"
 #include "erpl_web_banner.hpp"
@@ -229,6 +231,11 @@ std::vector<duckdb::Value> ODataRowBuffer::GetNextRow() {
 bool ODataRowBuffer::HasMoreRows() const { return !row_buffer_.empty(); }
 
 size_t ODataRowBuffer::Size() const { return row_buffer_.size(); }
+
+std::vector<std::vector<duckdb::Value>> ODataRowBuffer::CopyRows() const {
+    return std::vector<std::vector<duckdb::Value>>(row_buffer_.begin(),
+                                                   row_buffer_.end());
+}
 
 void ODataRowBuffer::Clear() { row_buffer_.clear(); }
 
@@ -911,248 +918,194 @@ void ODataReadBindData::ParseODataV2Response(
                   "Could not extract column names from OData v2 response");
 }
 
-std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns) {
-  ERPL_TRACE_INFO("ODATA_READ_BIND",
-                  std::string("GetResultNames called - service_root_mode: ") +
-                      (service_root_mode_ ? "true" : "false"));
+const std::vector<std::string> &ODataReadBindData::MetadataColumnNames() {
+  if (!all_result_names.empty() || service_root_mode_ || !odata_client) {
+    return all_result_names;
+  }
+  try {
+    ERPL_TRACE_INFO("ODATA_READ_BIND",
+                    "Calling odata_client->GetResultNames() for metadata");
+    all_result_names = odata_client->GetResultNames();
+  } catch (const std::exception &e) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    std::string("Metadata column names unavailable: ") + e.what());
+  }
+  return all_result_names;
+}
 
-    std::vector<std::string> base_names;
+const std::vector<duckdb::LogicalType> &ODataReadBindData::MetadataColumnTypes() {
+  if (!all_result_types.empty() || service_root_mode_ || !odata_client) {
+    return all_result_types;
+  }
+  try {
+    ERPL_TRACE_INFO("ODATA_READ_BIND",
+                    "Calling odata_client->GetResultTypes() for metadata");
+    all_result_types = odata_client->GetResultTypes();
+  } catch (const std::exception &e) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    std::string("Metadata column types unavailable: ") + e.what());
+  }
+  return all_result_types;
+}
 
-    // If we have extracted column names from the first data row, use those
-    if (!extracted_column_names.empty()) {
-        base_names = extracted_column_names;
-    ERPL_TRACE_INFO("ODATA_READ_BIND", "Using extracted column names, count: " +
-                                           std::to_string(base_names.size()));
-  } else if (service_root_mode_) {
-    // In service root mode, we should never reach here, but provide a fallback
-    ERPL_TRACE_WARN("ODATA_READ_BIND", "GetResultNames called in service root "
-                                       "mode without extracted column names!");
-    base_names = {"name", "kind", "url"};
-    } else {
-        // Fall back to getting names from the OData client (metadata)
-        if (all_result_names.empty()) {
-      ERPL_TRACE_INFO("ODATA_READ_BIND",
-                      "Calling odata_client->GetResultNames() for metadata");
-            all_result_names = odata_client->GetResultNames();
-        }
-        base_names = all_result_names;
+std::vector<std::string> ODataReadBindData::ReconcileSchemaOrder(
+    const std::vector<std::string> &metadata_names,
+    const std::vector<std::string> &json_names) {
+  // Metadata (EDMX) order wins: the DuckDB catalog entry for an ATTACHed
+  // service declares its columns from EDMX, and DuckDB indexes the scan's
+  // column_ids against that declaration. Deriving the scan schema from JSON
+  // key order instead put values under the wrong headers (GitHub #88).
+  if (metadata_names.empty()) {
+    return json_names;
+  }
+  if (json_names.empty()) {
+    return metadata_names;
+  }
+
+  std::vector<std::string> reconciled = metadata_names;
+  std::unordered_set<std::string> known(metadata_names.begin(),
+                                        metadata_names.end());
+  for (const auto &json_name : json_names) {
+    if (known.insert(json_name).second) {
+      // Present in the payload but not declared in EDMX. Keep it, but only
+      // after every declared column so the metadata prefix stays aligned with
+      // the catalog.
+      reconciled.push_back(json_name);
     }
-    
-    // Add expanded data columns if we have any, avoiding duplicates
-    if (HasExpandedData()) {
-    ERPL_TRACE_DEBUG(
-        "ODATA_READ_BIND",
-        "Adding expanded data columns. Schema size: " +
-            std::to_string(data_extractor->GetExpandedDataSchema().size()) +
-                        ", Base names size: " + std::to_string(base_names.size()));
-        
+  }
+  return reconciled;
+}
+
+void ODataReadBindData::EnsureBaseSchemaResolved() {
+  if (base_schema_resolved_) {
+    return;
+  }
+
+  if (service_root_mode_) {
+    base_result_names = extracted_column_names.empty()
+                            ? std::vector<std::string>{"name", "kind", "url"}
+                            : extracted_column_names;
+    base_result_types.assign(
+        base_result_names.size(),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+    base_schema_resolved_ = true;
+    return;
+  }
+
+  const auto metadata_names = MetadataColumnNames();
+  const auto metadata_types = MetadataColumnTypes();
+
+  base_result_names = ReconcileSchemaOrder(metadata_names, extracted_column_names);
+
+  base_result_types.clear();
+  base_result_types.reserve(base_result_names.size());
+  for (const auto &column_name : base_result_names) {
+    auto it = std::find(metadata_names.begin(), metadata_names.end(), column_name);
+    if (it != metadata_names.end()) {
+      const auto metadata_index =
+          static_cast<size_t>(std::distance(metadata_names.begin(), it));
+      if (metadata_index < metadata_types.size()) {
+        base_result_types.push_back(metadata_types[metadata_index]);
+        continue;
+      }
+    }
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    "Column '" + column_name +
+                        "' has no declared metadata type, using VARCHAR");
+    base_result_types.push_back(
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR));
+  }
+
+  ERPL_TRACE_INFO("ODATA_READ_BIND",
+                  duckdb::StringUtil::Format(
+                      "Resolved base schema: %d columns (%d from metadata)",
+                      (int)base_result_names.size(), (int)metadata_names.size()));
+
+  base_schema_resolved_ = true;
+}
+
+std::vector<std::string> ODataReadBindData::GetResultNames(bool all_columns) {
+  EnsureBaseSchemaResolved();
+
+  std::vector<std::string> base_names = base_result_names;
+
+  // Add expanded data columns if we have any, avoiding duplicates
+  if (HasExpandedData()) {
     for (const auto &expand_name : data_extractor->GetExpandedDataSchema()) {
-      // Check if this column name already exists in base_names to avoid
-      // duplicates
-            bool exists = false;
-      for (const auto &base_name : base_names) {
-                if (base_name == expand_name) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists) {
+      if (std::find(base_names.begin(), base_names.end(), expand_name) ==
+          base_names.end()) {
         ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                          "Adding expanded column: " + expand_name);
-                base_names.push_back(expand_name);
-            } else {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                         "Skipping duplicate expanded column: " + expand_name);
-            }
-        }
-        
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Final base names size: " +
-                                            std::to_string(base_names.size()));
+        base_names.push_back(expand_name);
+      }
     }
-    
-    // Ensure we always return the same size as GetResultTypes would return
-    // This is critical for DuckDB binding consistency
-    if (all_columns || active_column_ids.empty()) {
-        return base_names;
+  }
+
+  if (all_columns || active_column_ids.empty()) {
+    return base_names;
+  }
+
+  std::vector<std::string> active_result_names;
+  for (auto &column_id : active_column_ids) {
+    if (duckdb::IsRowIdColumnId(column_id)) {
+      continue;
     }
-
-    std::vector<std::string> active_result_names;
-    for (auto &column_id : active_column_ids) {
-        if (duckdb::IsRowIdColumnId(column_id)) {
-            continue;
-        }
-
-        if (column_id < base_names.size()) {
-            active_result_names.push_back(base_names[column_id]);
-        }
+    if (column_id < base_names.size()) {
+      active_result_names.push_back(base_names[column_id]);
     }
+  }
 
-    return active_result_names;
+  return active_result_names;
 }
 
 std::vector<duckdb::LogicalType>
 ODataReadBindData::GetResultTypes(bool all_columns) {
-  ERPL_TRACE_INFO("ODATA_READ_BIND",
-                  std::string("GetResultTypes called - service_root_mode: ") +
-                      (service_root_mode_ ? "true" : "false"));
+  EnsureBaseSchemaResolved();
 
-  // Only get types from the OData client (metadata) if we haven't mapped them
-  // yet
-    if (all_result_types.empty()) {
-    if (service_root_mode_) {
-      // In service root mode, use fixed VARCHAR types for the unified schema
-      ERPL_TRACE_INFO("ODATA_READ_BIND",
-                      "Using fixed VARCHAR types for service root mode");
-      all_result_types = {duckdb::LogicalTypeId::VARCHAR,
-                          duckdb::LogicalTypeId::VARCHAR,
-                          duckdb::LogicalTypeId::VARCHAR};
-    } else {
-      ERPL_TRACE_INFO("ODATA_READ_BIND",
-                      "Calling odata_client->GetResultTypes() for metadata");
-        all_result_types = odata_client->GetResultTypes();
-    }
-        
-        // If we have extracted column names, align types to those names
-    if (!extracted_column_names.empty() && !service_root_mode_) {
-            if (extracted_column_names.size() == all_result_types.size()) {
-                // Create a mapping from extracted column names to metadata types
-                std::vector<duckdb::LogicalType> mapped_types;
-                mapped_types.reserve(extracted_column_names.size());
-                
-                // Get the metadata column names to map them to extracted names
-                auto metadata_names = odata_client->GetResultNames();
-                
-        for (const auto &extracted_name : extracted_column_names) {
-                    // Find the index of this column in the metadata
-          auto it = std::find(metadata_names.begin(), metadata_names.end(),
-                              extracted_name);
-                    if (it != metadata_names.end()) {
-                        size_t metadata_index = std::distance(metadata_names.begin(), it);
-                        if (metadata_index < all_result_types.size()) {
-                            mapped_types.push_back(all_result_types[metadata_index]);
-              ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                               "Mapped column '" + extracted_name +
-                                   "' to type: " +
-                                   all_result_types[metadata_index].ToString());
-                        } else {
-                            // Fallback to VARCHAR if metadata index is out of bounds
-                            mapped_types.push_back(duckdb::LogicalTypeId::VARCHAR);
-              ERPL_TRACE_WARN(
-                  "ODATA_READ_BIND",
-                  "Column '" + extracted_name +
-                      "' not found in metadata, using VARCHAR fallback");
-                        }
-                    } else {
-                        // Fallback to VARCHAR if column not found in metadata
-                        mapped_types.push_back(duckdb::LogicalTypeId::VARCHAR);
-            ERPL_TRACE_WARN(
-                "ODATA_READ_BIND",
-                "Column '" + extracted_name +
-                    "' not found in metadata, using VARCHAR fallback");
-                    }
-                }
-                
-                // Replace all_result_types with the mapped types
-                all_result_types = mapped_types;
-            } else {
-        // Sizes mismatch (common in OData v2 when inferring from data) ->
-        // default all to VARCHAR
-        ERPL_TRACE_INFO(
-            "ODATA_READ_BIND",
-            duckdb::StringUtil::Format(
-                "Metadata column count (%d) does not match extracted column "
-                "count (%d); defaulting all types to VARCHAR",
-                    all_result_types.size(), extracted_column_names.size()));
-        all_result_types.assign(extracted_column_names.size(),
-                                duckdb::LogicalTypeId::VARCHAR);
-            }
-        }
-    }
-    
-    // Create a combined types vector that includes expanded data types
-    std::vector<duckdb::LogicalType> combined_types = all_result_types;
+  std::vector<duckdb::LogicalType> combined_types = base_result_types;
+  const auto &base_names_local = base_result_names;
 
-    // Compute the base column names to support duplicate detection
-    std::vector<std::string> base_names_local;
-    if (!extracted_column_names.empty()) {
-        base_names_local = extracted_column_names;
-    } else {
-        if (all_result_names.empty()) {
-            all_result_names = odata_client->GetResultNames();
-        }
-        base_names_local = all_result_names;
-    }
-    
-  // Add/merge expanded data types if we have any, ensuring alignment with
-  // schema
-    if (HasExpandedData()) {
-    ERPL_TRACE_DEBUG(
-        "ODATA_READ_BIND",
-        "Merging expanded data types. Schema size: " +
-            std::to_string(data_extractor->GetExpandedDataSchema().size()) +
-            ", Types size: " +
-            std::to_string(data_extractor->GetExpandedDataTypes().size()));
-        
-        // Ensure we have the same number of types as schema columns where appended
-        const auto &exp_schema = data_extractor->GetExpandedDataSchema();
+  // Add/merge expanded data types if we have any, keeping them aligned with the
+  // names GetResultNames() produces.
+  if (HasExpandedData()) {
+    const auto &exp_schema = data_extractor->GetExpandedDataSchema();
     const auto &exp_types = data_extractor->GetExpandedDataTypes();
-        for (size_t i = 0; i < exp_schema.size(); ++i) {
-            const auto &exp_name = exp_schema[i];
+    for (size_t i = 0; i < exp_schema.size(); ++i) {
+      const auto &exp_name = exp_schema[i];
       duckdb::LogicalType exp_type =
-          (i < exp_types.size()) ? exp_types[i] : duckdb::LogicalTypeId::VARCHAR;
-            
-      // Check if this type has been updated from the fallback LIST(VARCHAR) to
-      // a proper struct type
-            if (exp_type.id() == duckdb::LogicalTypeId::LIST && 
-          duckdb::ListType::GetChildType(exp_type).id() !=
-              duckdb::LogicalTypeId::VARCHAR) {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                         "Using updated inferred type for expanded column '" +
-                             exp_name + "': " + exp_type.ToString());
-      }
+          (i < exp_types.size())
+              ? exp_types[i]
+              : duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
       auto it =
           std::find(base_names_local.begin(), base_names_local.end(), exp_name);
-            if (it != base_names_local.end()) {
-                size_t idx = std::distance(base_names_local.begin(), it);
-                if (idx < combined_types.size()) {
-                    // Replace base type with expanded type
-                    combined_types[idx] = exp_type;
-          ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                           "Replaced base type for expanded column '" +
-                               exp_name + "' at index " + std::to_string(idx) +
-                               " with " + exp_type.ToString());
-                }
-            } else {
-                // Append new expanded column type
-                combined_types.push_back(exp_type);
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                         "Appended expanded type for new column '" + exp_name +
-                             "': " + exp_type.ToString());
-            }
+      if (it != base_names_local.end()) {
+        const auto idx =
+            static_cast<size_t>(std::distance(base_names_local.begin(), it));
+        if (idx < combined_types.size()) {
+          combined_types[idx] = exp_type;
         }
+      } else {
+        combined_types.push_back(exp_type);
+      }
     }
-    
-  ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                   "Final combined types size: " +
-                       std::to_string(combined_types.size()));
+  }
 
-    if (all_columns || active_column_ids.empty()) {
-        return combined_types;
+  if (all_columns || active_column_ids.empty()) {
+    return combined_types;
+  }
+
+  std::vector<duckdb::LogicalType> active_result_types;
+  for (auto &column_id : active_column_ids) {
+    if (duckdb::IsRowIdColumnId(column_id)) {
+      continue;
     }
-
-    std::vector<duckdb::LogicalType> active_result_types;
-    for (auto &column_id : active_column_ids) {
-        if (duckdb::IsRowIdColumnId(column_id)) {
-            continue;
-        }
-
-        if (column_id < combined_types.size()) {
-            active_result_types.push_back(combined_types[column_id]);
-        }
+    if (column_id < combined_types.size()) {
+      active_result_types.push_back(combined_types[column_id]);
     }
+  }
 
-    return active_result_types;
+  return active_result_types;
 }
 
 // ============================================================================
@@ -1440,6 +1393,11 @@ void ODataReadBindData::ActivateColumns(
                    std::string("ActivateColumns: service_root_mode_ = ") +
                        (service_root_mode_ ? "true" : "false"));
   if (!service_root_mode_) {
+    // Refresh the helper's view of the schema before it builds $select: the
+    // expand clause processed after helper creation can add columns, and the
+    // types decide whether $select is safe at all (GitHub #86).
+    PredicatePushdownHelper()->SetColumnSchema(GetResultNames(true),
+                                               GetResultTypes(true));
     PredicatePushdownHelper()->ConsumeColumnSelection(visible_ids);
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                      duckdb::StringUtil::Format(
@@ -1484,20 +1442,22 @@ void ODataReadBindData::AddFilters(
 void ODataReadBindData::AddResultModifiers(
     const std::vector<duckdb::unique_ptr<duckdb::BoundResultModifier>>
         &modifiers) {
-  if (service_root_mode_) {
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     "Service-root mode: ignoring result modifiers");
-    return;
-  }
-    if (!modifiers.empty()) {
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     duckdb::StringUtil::Format("Adding %d result modifiers",
-                                                modifiers.size()));
-        PredicatePushdownHelper()->ConsumeResultModifiers(modifiers);
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Result modifiers processed");
-    } else {
-        ERPL_TRACE_DEBUG("ODATA_READ_BIND", "No result modifiers to add");
-    }
+  // Deliberately does nothing (GitHub #90). DuckDB does not hand table
+  // functions their bound result modifiers, so a SQL `LIMIT`/`OFFSET` never
+  // reaches this extension and is NEVER translated into `$top`/`$skip`:
+  // `SELECT * FROM odata_read(...) LIMIT 10` still pulls every page the
+  // service offers. `$top`/`$skip` are produced only from the explicit
+  // `top=`/`skip=` named parameters (see ODataReadBindHelpers::
+  // ProcessNamedParameters) and their Datasphere/SAC equivalents.
+  //
+  // The code that used to walk the modifiers and synthesise those clauses has
+  // been deleted because it made the read path look as though LIMIT pushdown
+  // existed. This stub survives only so the (equally uncalled)
+  // OdpODataReadBindData::AddResultModifiers keeps linking; delete both
+  // together.
+  (void)modifiers;
+  ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                   "AddResultModifiers is a no-op: LIMIT is not pushed to $top");
 }
 
 void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
@@ -1561,25 +1521,18 @@ ODataReadBindData::PredicatePushdownHelper() {
     ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                      "Creating new predicate pushdown helper");
         
-    // Use extracted column names if available, otherwise fall back to OData client
-        std::vector<std::string> column_names;
-        if (!extracted_column_names.empty()) {
-            column_names = extracted_column_names;
-      ERPL_TRACE_DEBUG(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format(
-              "Using extracted column names for predicate pushdown: %d columns",
-              column_names.size()));
-        } else {
-            column_names = odata_client->GetResultNames();
-      ERPL_TRACE_DEBUG(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format("Using OData client column names for "
-                                     "predicate pushdown: %d columns",
-                                     column_names.size()));
-    }
+    // Feed the helper the full resolved schema (metadata order, plus expanded
+    // columns) together with its types. The types let it decide whether
+    // $select is safe rather than guessing from column names (GitHub #86),
+    // and the order matches what DuckDB's column_ids index into.
+    auto column_names = GetResultNames(true);
+    auto column_types = GetResultTypes(true);
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     duckdb::StringUtil::Format(
+                         "Creating predicate pushdown helper with %d columns",
+                         (int)column_names.size()));
     predicate_pushdown_helper =
-        std::make_shared<ODataPredicatePushdownHelper>(column_names);
+        std::make_shared<ODataPredicatePushdownHelper>(column_names, column_types);
         
         // Set the OData version for proper filter syntax generation
         auto odata_version = odata_client->GetODataVersion();
@@ -1590,39 +1543,33 @@ ODataReadBindData::PredicatePushdownHelper() {
             std::string(odata_version == ODataVersion::V2 ? "V2" : "V4") +
             " on predicate pushdown helper");
 
-    // Column name resolver: DuckDB passes the OUTPUT position (index within the
-    // projected column list from InitGlobal). We must translate that through
-    // activated_to_original_mapping to get the schema index before looking up
-    // the column name, because the activated column order may differ from the
-    // schema order (e.g. column_ids=[8,0] puts Country at output pos 0).
-    predicate_pushdown_helper->SetColumnNameResolver([this](duckdb::column_t
-                                                                output_index)
-                                                         -> std::string {
-      // Translate output position → full-schema index
-      size_t schema_index = output_index;
-      if (output_index < this->activated_to_original_mapping.size()) {
-          schema_index = this->activated_to_original_mapping[output_index];
-      }
+    BindPredicateColumnResolver();
+    }
 
-      if (!this->extracted_column_names.empty()) {
-        if (schema_index < this->extracted_column_names.size()) {
-          return this->extracted_column_names[schema_index];
-        } else {
-          ERPL_TRACE_ERROR(
-              "ODATA_READ_BIND",
-              duckdb::StringUtil::Format("Schema column index %d (from output "
-                                         "index %d) is out of bounds for "
-                                         "extracted column names",
-                                         (int)schema_index, (int)output_index));
-          return std::string();
+    return predicate_pushdown_helper;
+}
+
+void ODataReadBindData::BindPredicateColumnResolver() {
+  if (!predicate_pushdown_helper) {
+    return;
+  }
+
+  // DuckDB passes the OUTPUT position (index within the projected column list
+  // from InitGlobal). Translate that through activated_to_original_mapping to
+  // the full-schema index before looking up the column name, because the
+  // activated column order may differ from the schema order (e.g.
+  // column_ids=[8,0] puts Country at output pos 0).
+  predicate_pushdown_helper->SetColumnNameResolver(
+      [this](duckdb::column_t output_index) -> std::string {
+        size_t schema_index = output_index;
+        if (output_index < this->activated_to_original_mapping.size()) {
+          schema_index = this->activated_to_original_mapping[output_index];
         }
-      }
-      if (this->all_result_names.empty()) {
-        this->all_result_names = this->odata_client->GetResultNames();
-      }
-      if (schema_index < this->all_result_names.size()) {
-        return this->all_result_names[schema_index];
-      } else {
+
+        this->EnsureBaseSchemaResolved();
+        if (schema_index < this->base_result_names.size()) {
+          return this->base_result_names[schema_index];
+        }
         ERPL_TRACE_ERROR(
             "ODATA_READ_BIND",
             duckdb::StringUtil::Format(
@@ -1630,11 +1577,69 @@ ODataReadBindData::PredicatePushdownHelper() {
                 "bounds for result names",
                 (int)schema_index, (int)output_index));
         return std::string();
-      }
-        });
-    }
+      });
+}
 
-    return predicate_pushdown_helper;
+duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
+  // The clone owns every piece of mutable scan state; the source keeps only
+  // the schema and configuration settled during bind (GitHub #75).
+  auto clone = duckdb::make_uniq<ODataReadBindData>(odata_client, true);
+
+  clone->service_root_mode_ = service_root_mode_;
+  clone->InitializeComponents(service_root_mode_);
+
+  // Schema and configuration: pure values, safe to copy.
+  clone->all_result_names = all_result_names;
+  clone->all_result_types = all_result_types;
+  clone->extracted_column_names = extracted_column_names;
+  clone->base_result_names = base_result_names;
+  clone->base_result_types = base_result_types;
+  clone->base_schema_resolved_ = base_schema_resolved_;
+  clone->input_parameters = input_parameters;
+  clone->expand_clause = expand_clause;
+  clone->has_expanded_data = has_expanded_data;
+  clone->active_column_ids = active_column_ids;
+  clone->activated_to_original_mapping = activated_to_original_mapping;
+
+  // The clone gets its own extractor so its per-row expand cache starts empty,
+  // but it must carry the expand schema and the types inferred during bind.
+  if (data_extractor && clone->data_extractor) {
+    clone->data_extractor->SetExpandedDataSchema(
+        data_extractor->GetExpandedDataSchema());
+    clone->data_extractor->SetNestedExpandPaths(
+        data_extractor->GetNestedExpandPaths());
+    const auto &expanded_types = data_extractor->GetExpandedDataTypes();
+    for (size_t i = 0; i < expanded_types.size(); ++i) {
+      clone->data_extractor->UpdateExpandedColumnType(i, expanded_types[i]);
+    }
+  }
+
+  // Carry the clauses generated at bind time (top/skip/expand/count from named
+  // parameters) but re-point the column resolver at the clone.
+  if (predicate_pushdown_helper) {
+    clone->predicate_pushdown_helper =
+        std::make_shared<ODataPredicatePushdownHelper>(*predicate_pushdown_helper);
+    clone->BindPredicateColumnResolver();
+  }
+
+  // Carry rows buffered during bind. The ODP path hands a pre-fetched first
+  // page in via FromEntitySetClient and the service-root path pre-buffers its
+  // synthetic rows; dropping those here would make every execution re-issue a
+  // bare GET (which SAP ODP answers with the entire dataset).
+  if (row_buffer && clone->row_buffer) {
+    clone->row_buffer->AddRows(row_buffer->CopyRows());
+    clone->row_buffer->SetHasNextPage(row_buffer->HasNextPage());
+  }
+  clone->first_page_cached_ = first_page_cached_;
+
+  ERPL_TRACE_DEBUG(
+      "ODATA_READ_BIND",
+      duckdb::StringUtil::Format(
+          "Cloned bind data for scan: %d buffered rows, first_page_cached=%s",
+          (int)(row_buffer ? row_buffer->Size() : 0),
+          first_page_cached_ ? "true" : "false"));
+
+  return clone;
 }
 
 double ODataReadBindData::GetProgressFraction() const {
@@ -1729,6 +1734,7 @@ void ODataReadBindData::BufferFirstPageFromResponse(
 void ODataReadBindData::SetExtractedColumnNames(
     const std::vector<std::string> &column_names) {
     extracted_column_names = column_names;
+    base_schema_resolved_ = false;
   ERPL_TRACE_DEBUG("ODATA_READ_BIND", "Stored " +
                                           std::to_string(column_names.size()) +
                                           " extracted column names");
@@ -1741,47 +1747,29 @@ std::string ODataReadBindData::GetOriginalColumnName(
     // by user) Just return empty string for columns we don't have mapping for
         return "";
     }
-    
+
     auto original_index = activated_to_original_mapping[activated_column_index];
-    
-  // Always use all_result_names (EDMX-derived, no navigation properties).
-  // extracted_column_names comes from JSON key order and may include nav
-  // properties at lower indices, causing off-by-one mismatches against the
-  // DuckDB catalog column indices which are built from EDMX only.
-    if (!all_result_names.empty()) {
-        if (original_index >= all_result_names.size()) {
-      ERPL_TRACE_ERROR(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format(
-              "Original column index %d is out of bounds for result names (%d total)",
-              original_index, (int)all_result_names.size()));
-            return "";
-        }
-        auto column_name = all_result_names[original_index];
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     duckdb::StringUtil::Format(
-                         "Activated index %d maps to original index %d which "
-                         "is column '%s' (from EDMX result names)",
-                         (int)activated_column_index, (int)original_index,
-                         column_name.c_str()));
-        return column_name;
-    }
-    if (original_index >= extracted_column_names.size()) {
-      ERPL_TRACE_ERROR(
-          "ODATA_READ_BIND",
-          duckdb::StringUtil::Format("Original column index %d is out of "
-                                     "bounds for extracted column names (%d total)",
-                                     original_index, (int)extracted_column_names.size()));
-        return "";
-    }
-    auto column_name = extracted_column_names[original_index];
-    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                     duckdb::StringUtil::Format(
-                         "Activated index %d maps to original index %d which "
-                         "is column '%s' (from JSON-extracted names, EDMX unavailable)",
-                         (int)activated_column_index, (int)original_index,
-                         column_name.c_str()));
-    return column_name;
+
+  // base_result_names is the reconciled schema: EDMX order first, JSON-only
+  // columns appended. That is exactly the order DuckDB's column indices refer
+  // to, so no other list may be consulted here (GitHub #88).
+  if (original_index >= base_result_names.size()) {
+    ERPL_TRACE_ERROR(
+        "ODATA_READ_BIND",
+        duckdb::StringUtil::Format(
+            "Original column index %d is out of bounds for result names (%d total)",
+            original_index, (int)base_result_names.size()));
+    return "";
+  }
+
+  const auto column_name = base_result_names[original_index];
+  ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                   duckdb::StringUtil::Format(
+                       "Activated index %d maps to original index %d which "
+                       "is column '%s'",
+                       (int)activated_column_index, (int)original_index,
+                       column_name.c_str()));
+  return column_name;
 }
 
 void ODataReadBindData::SetInputParameters(
@@ -1830,33 +1818,21 @@ bool ODataReadBindData::HasExpandedData() const {
 
 void ODataReadBindData::UpdateExpandedColumnType(
     const std::string &expand_path, const duckdb::LogicalType &new_type) {
-    // Find the expanded column in our schema and update its type
-  if (HasExpandedData() && data_extractor) {
-    const auto &exp_schema = data_extractor->GetExpandedDataSchema();
-        for (size_t i = 0; i < exp_schema.size(); ++i) {
-            if (exp_schema[i] == expand_path) {
-                // Update the type in the data extractor
-                data_extractor->UpdateExpandedColumnType(i, new_type);
-                
-                // Also update our local all_result_types if this column exists there
-                if (!extracted_column_names.empty()) {
-          auto it = std::find(extracted_column_names.begin(),
-                              extracted_column_names.end(), expand_path);
-                    if (it != extracted_column_names.end()) {
-                        size_t col_idx = std::distance(extracted_column_names.begin(), it);
-                        if (col_idx < all_result_types.size()) {
-                            all_result_types[col_idx] = new_type;
-              ERPL_TRACE_DEBUG("ODATA_READ_BIND",
-                               "Updated all_result_types[" +
-                                   std::to_string(col_idx) + "] for '" +
-                                   expand_path + "' to " + new_type.ToString());
-                        }
-                    }
-                }
-                break;
-            }
-        }
+  if (!HasExpandedData() || !data_extractor) {
+    return;
+  }
+
+  const auto &exp_schema = data_extractor->GetExpandedDataSchema();
+  for (size_t i = 0; i < exp_schema.size(); ++i) {
+    if (exp_schema[i] != expand_path) {
+      continue;
     }
+    // GetResultTypes() merges the extractor's expanded types over the base
+    // schema by column name on every call, so the extractor is the single
+    // place this type needs to live.
+    data_extractor->UpdateExpandedColumnType(i, new_type);
+    return;
+  }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -2165,50 +2141,84 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
   }
 }
 
+ODataReadGlobalState::ODataReadGlobalState(
+    duckdb::unique_ptr<ODataReadBindData> scan_state)
+    : scan_state(std::move(scan_state)) {
+}
+
+namespace {
+
+// Returns the object that owns the scan state for this execution.
+//
+// odata_read(), the ATTACHed odata_table_scan and the SAC readers use
+// ODataReadGlobalState, so each execution of a bound plan gets its own state.
+// The Datasphere readers reuse ODataReadScan with their own init-global
+// functions, which still return a bare GlobalTableFunctionState; those keep the
+// historical behaviour of scanning straight out of the bind data.
+ODataReadBindData &ResolveScanState(const duckdb::FunctionData *bind_data,
+                                    const GlobalTableFunctionState *global_state) {
+  auto *odata_global = dynamic_cast<const ODataReadGlobalState *>(global_state);
+  if (odata_global != nullptr) {
+    return const_cast<ODataReadGlobalState *>(odata_global)->Scan();
+  }
+  return bind_data->CastNoConst<ODataReadBindData>();
+}
+
+} // namespace
+
 unique_ptr<GlobalTableFunctionState>
 ODataReadTableInitGlobalState(ClientContext &context,
                               TableFunctionInitInput &input) {
-    auto &bind_data = input.bind_data->CastNoConst<ODataReadBindData>();
-    auto column_ids = input.column_ids;
+  auto &bind_data = input.bind_data->CastNoConst<ODataReadBindData>();
 
-    bind_data.ActivateColumns(column_ids);
-    bind_data.AddFilters(input.filters);
-    
-    bind_data.UpdateUrlFromPredicatePushdown();
+  // Projection, filter pushdown and the first-page prefetch all mutate scan
+  // state, so they run against a private clone. The bind data stays exactly as
+  // bind left it, which is what makes a second EXECUTE of the same prepared
+  // statement (and a self-join of one odata_read call) work (GitHub #75).
+  auto scan_state = bind_data.CloneForScan();
+
+  scan_state->ActivateColumns(input.column_ids);
+  scan_state->AddFilters(input.filters);
+  scan_state->UpdateUrlFromPredicatePushdown();
   // Prefetch first page after URL is finalized so progress can show early and
   // tiny scans return immediately
-    bind_data.PrefetchFirstPage();
+  scan_state->PrefetchFirstPage();
 
-    return duckdb::make_uniq<GlobalTableFunctionState>();
+  return duckdb::make_uniq<ODataReadGlobalState>(std::move(scan_state));
 }
 
 double ODataReadTableProgress(ClientContext &, const FunctionData *func_data,
-                              const GlobalTableFunctionState *) {
-    auto &bind_data = func_data->CastNoConst<ODataReadBindData>();
-    return bind_data.GetProgressFraction();
+                              const GlobalTableFunctionState *global_state) {
+  return ResolveScanState(func_data, global_state).GetProgressFraction();
 }
 
 void ODataReadScan(ClientContext &context, TableFunctionInput &data,
                    DataChunk &output) {
-    auto &bind_data = data.bind_data->CastNoConst<ODataReadBindData>();
-    
-    ERPL_TRACE_DEBUG("ODATA_SCAN", "Starting OData scan operation");
-    
-  if (!bind_data.HasMoreResults()) {
-        ERPL_TRACE_DEBUG("ODATA_SCAN", "No more results available");
-        // End of scan: surface the per-column conversion failures once.
-        bind_data.ReportConversionFailures();
-        return;
-    }
-    
-    ERPL_TRACE_DEBUG("ODATA_SCAN", "Fetching next result set");
-    auto rows_fetched = bind_data.FetchNextResult(output);
+  // Scan state lives on the per-execution clone owned by the global state, so a
+  // bound plan can be executed more than once (GitHub #75). ResolveScanState
+  // falls back to the bind data for callers that still supply a bare
+  // GlobalTableFunctionState.
+  auto &scan_state =
+      ResolveScanState(data.bind_data.get(), data.global_state.get());
+
+  ERPL_TRACE_DEBUG("ODATA_SCAN", "Starting OData scan operation");
+
+  if (!scan_state.HasMoreResults()) {
+    ERPL_TRACE_DEBUG("ODATA_SCAN", "No more results available");
+    // End of scan: surface the per-column conversion failures once, against the
+    // instance that actually accumulated them (GitHub #74).
+    scan_state.ReportConversionFailures();
+    return;
+  }
+
+  ERPL_TRACE_DEBUG("ODATA_SCAN", "Fetching next result set");
+  auto rows_fetched = scan_state.FetchNextResult(output);
   ERPL_TRACE_INFO("ODATA_SCAN",
                   duckdb::StringUtil::Format("Fetched %d rows", rows_fetched));
 
-    if (!bind_data.HasMoreResults()) {
-        bind_data.ReportConversionFailures();
-    }
+  if (!scan_state.HasMoreResults()) {
+    scan_state.ReportConversionFailures();
+  }
 }
 
 TableFunctionSet CreateODataReadFunction() {

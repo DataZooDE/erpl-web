@@ -1,0 +1,129 @@
+# name: test/sql/odata_scan_reexecution.test
+# description: A bound OData plan must be re-executable (GitHub #75). All scan
+#              state used to live in the bind data, so the second EXECUTE of a
+#              prepared statement found the row buffer already drained and
+#              returned zero rows, and a self-join of one odata_read() call had
+#              both scans sharing a single pagination cursor.
+# group: [erpl_web_odata]
+
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+SET erpl_trace_enabled=false;
+
+# ============================================================================
+# PREPARE / EXECUTE twice must return the same number of rows
+# ============================================================================
+#
+# $top=12 exceeds the TripPin server page size (8), so the scan also has to
+# follow a @odata.nextLink - i.e. the pagination cursor is exercised on every
+# execution, not just the buffered first page.
+
+statement ok
+PREPARE people_count AS SELECT COUNT(*) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12');
+
+query I
+EXECUTE people_count;
+----
+12
+
+# The second execution reuses the same bound plan. Before the fix this returned
+# 0 because the bind data's row buffer had been consumed by the first run.
+query I
+EXECUTE people_count;
+----
+12
+
+query I
+EXECUTE people_count;
+----
+12
+
+# The same must hold for a projecting plan, which exercises the per-scan
+# projection state as well.
+statement ok
+PREPARE people_names AS SELECT COUNT(DISTINCT UserName) FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12');
+
+query I
+EXECUTE people_names;
+----
+12
+
+query I
+EXECUTE people_names;
+----
+12
+
+# ============================================================================
+# Self-join: two scans of the same table function inside one query
+# ============================================================================
+
+# Two independent scans of the same odata_read() call must each see all rows.
+# Before the fix the two scans shared the bind data's buffer and cursor, so the
+# join produced far fewer than 12 * 12 rows.
+query I
+SELECT COUNT(*) FROM
+  odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12') a,
+  odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12') b;
+----
+144
+
+query I
+SELECT COUNT(*) FROM
+  odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12') a
+  JOIN odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12') b
+    ON a.UserName = b.UserName;
+----
+12
+
+# A UNION ALL of the same call is another two-scan shape.
+query I
+SELECT COUNT(*) FROM (
+  SELECT UserName FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12')
+  UNION ALL
+  SELECT UserName FROM odata_read('https://services.odata.org/TripPinRESTierService/People?$top=12')
+);
+----
+24
+
+# ============================================================================
+# The same properties for an ATTACHed service (odata_table_scan)
+# ============================================================================
+
+statement ok
+ATTACH 'https://services.odata.org/TripPinRESTierService/' AS trippin (TYPE odata)
+
+# Self-join on the catalog-backed scan. Counted over a projected column rather
+# than with COUNT(*), because COUNT(*) on an ATTACHed OData table is broken
+# independently of this change (GitHub #132, pre-existing on main): the empty
+# projection it produces makes the scan write a string into an INT64 slot.
+query I
+SELECT COUNT(a.AirlineCode) > 0
+  AND COUNT(a.AirlineCode) = (SELECT COUNT(x.AirlineCode) FROM trippin.Airlines x)
+FROM trippin.Airlines a
+JOIN trippin.Airlines b ON a.AirlineCode = b.AirlineCode;
+----
+true
+
+statement ok
+PREPARE airlines_nonempty AS SELECT COUNT(AirlineCode) > 0 FROM trippin.Airlines;
+
+query I
+EXECUTE airlines_nonempty;
+----
+true
+
+# Second execution of the same bound catalog scan.
+query I
+EXECUTE airlines_nonempty;
+----
+true
+
+statement ok
+DETACH trippin;
