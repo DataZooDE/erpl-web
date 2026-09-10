@@ -22,20 +22,21 @@ std::string ODataUrlResolver::resolveMetadataUrl(const HttpUrl &request_url,
     auto path = base.Path();
     base.Query("");
 
-    if (path.find("/V2/") != std::string::npos) {
-        auto svc_pos = path.find(".svc");
-        if (svc_pos != std::string::npos) {
-            auto service_root = path.substr(0, svc_pos + 4);
+    // A ".svc" segment names the service root explicitly (the WCF Data Services
+    // convention used by Northwind, Business Central and many on-premise services).
+    // It is independent of the OData version, so it is honoured before any
+    // version-specific path heuristic. See GitHub #60.
+    auto svc_pos = path.find(".svc");
+    if (svc_pos != std::string::npos) {
+        base.Path(path.substr(0, svc_pos + 4) + "/$metadata");
+    } else if (path.find("/V2/") != std::string::npos) {
+        auto v2_pos = path.find("/V2/");
+        auto service_pos = path.find("/", v2_pos + 4);
+        if (service_pos != std::string::npos) {
+            auto service_root = path.substr(0, service_pos);
             base.Path(service_root + "/$metadata");
         } else {
-            auto v2_pos = path.find("/V2/");
-            auto service_pos = path.find("/", v2_pos + 4);
-            if (service_pos != std::string::npos) {
-                auto service_root = path.substr(0, service_pos);
-                base.Path(service_root + "/$metadata");
-            } else {
-                base.Path(path + "/$metadata");
-            }
+            base.Path(path + "/$metadata");
         }
     } else if (path.find("/V4/") != std::string::npos) {
         auto v4_pos = path.find("/V4/");

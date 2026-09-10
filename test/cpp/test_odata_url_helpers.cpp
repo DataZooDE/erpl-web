@@ -56,3 +56,34 @@ TEST_CASE("ODataUrlCodec ensureJsonFormat appends $format=json", "[odata_url]") 
 }
 
 
+
+TEST_CASE("ODataUrlResolver keeps a .svc service root for OData V4", "[odata_url]") {
+    // GitHub #60: the V2 branch honoured a .svc service root while the V4 branch
+    // took the first segment after /V4/, truncating "Northwind.svc" away and
+    // making every WCF-convention V4 service unreachable.
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V4/Northwind/Northwind.svc/Orders");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://services.odata.org/V4/Northwind/Northwind.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver keeps a .svc service root for OData V2", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V2/Northwind/Northwind.svc/Orders");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://services.odata.org/V2/Northwind/Northwind.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver honours a .svc service root with no version segment", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://erp.example.com/odata/Sales.svc/Customers");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta == "https://erp.example.com/odata/Sales.svc/$metadata");
+}
+
+TEST_CASE("ODataUrlResolver drops the query string when deriving $metadata", "[odata_url]") {
+    ODataUrlResolver r;
+    HttpUrl base("https://services.odata.org/V4/Northwind/Northwind.svc/Orders?$top=5");
+    auto meta = r.resolveMetadataUrl(base, "");
+    REQUIRE(meta.find('?') == std::string::npos);
+}
