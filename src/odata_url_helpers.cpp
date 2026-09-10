@@ -21,7 +21,33 @@ std::string ODataUrlResolver::resolveMetadataUrl(const HttpUrl &request_url,
         if (hash_pos != std::string::npos) {
             ctx = ctx.substr(0, hash_pos);
         }
+
+        // A relative context is resolved the way RFC 3986 resolves any relative
+        // reference: against the base's *directory*, so the last segment of the
+        // request path is replaced rather than appended to. OData services state
+        // the context of an entity set response as the bare "$metadata", and
+        // appending that to ".../0001/Travel" produces ".../0001/Travel/$metadata",
+        // which SAP Gateway answers with 400. The metadata document is then
+        // unreachable and every column falls back to VARCHAR without a word.
+        //
+        // The request's query string is dropped for the same reason: $format,
+        // $filter and $skiptoken describe the entity request, not the metadata
+        // document. See GitHub #152.
+        const bool is_absolute_reference =
+            ctx.find("://") != std::string::npos || (!ctx.empty() && ctx.front() == '/');
+        if (!is_absolute_reference) {
+            HttpUrl context_base(request_url);
+            context_base.Query("");
+            auto base_path = context_base.Path();
+            const auto last_slash = base_path.rfind('/');
+            base_path = (last_slash == std::string::npos) ? std::string("/")
+                                                          : base_path.substr(0, last_slash + 1);
+            context_base.Path(base_path);
+            return HttpUrl::MergeWithBaseUrlIfRelative(context_base, ctx).ToString();
+        }
+
         auto merged = HttpUrl::MergeWithBaseUrlIfRelative(request_url, ctx);
+        merged.Query("");
         return merged.ToString();
     }
 

@@ -110,7 +110,14 @@ void ODataReadBindData::EnsureInitialized() {
 
     // Make sure first page is prefetched once and buffered
     if (!first_page_cached_) {
+        // PrefetchFirstPage buffers through BufferFirstPageFromResponse, which extracts
+        // expanded data itself - the schema is settled by the time a scan runs.
         PrefetchFirstPage();
+    } else {
+        // The buffered page came from the bind-time probe, which ran before the expand
+        // clause was parsed, so its expanded data was never extracted. Do it now, into
+        // THIS scan's extractor. See GitHub #156.
+        ExtractExpandedDataFromBufferedFirstPage();
     }
 }
 
@@ -390,7 +397,37 @@ bool ODataReadBindData::HasMoreResults() {
 duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
   // The clone owns every piece of mutable scan state; the source keeps only
   // the schema and configuration settled during bind (GitHub #75).
-  auto clone = duckdb::make_uniq<ODataReadBindData>(odata_client, true);
+  //
+  // That includes the OData client: it carries the pagination cursor (url,
+  // current_response, page_requests), so sharing one between executions makes the second
+  // EXECUTE of a bound plan resume where the first stopped. A projecting plan used to get
+  // a private client by accident, because applying $select rebuilt it; an unprojected
+  // `SELECT *` changes no URL and rebuilds nothing, so the client is minted here instead
+  // and the accident is no longer load-bearing. Service-root mode issues no requests and
+  // keeps its stub.
+  auto scan_client = odata_client;
+  if (!service_root_mode_ && odata_client != nullptr) {
+    scan_client = std::make_shared<ODataEntitySetClient>(
+        odata_client->GetHttpClient(), HttpUrl(odata_client->Url()), odata_client->AuthParams());
+    const auto bound_version = odata_client->GetODataVersion();
+    if (bound_version != ODataVersion::UNKNOWN) {
+      scan_client->SetODataVersionDirectly(bound_version);
+    }
+    // The bind-time probe already paid for page one; adopting it here lets this execution
+    // follow that page's next link without re-fetching it, while keeping the cursor
+    // private. Deliberately NOT odata_client->current_response: after one execution that
+    // is the LAST page, and resuming from it would return nothing.
+    if (first_page_response_ != nullptr) {
+      scan_client->AdoptResponse(first_page_response_);
+    }
+  }
+
+  auto clone = duckdb::make_uniq<ODataReadBindData>(scan_client, true);
+  clone->first_page_response_ = first_page_response_;
+  // first_page_expand_extracted_ is deliberately NOT copied. The clone gets a fresh
+  // extractor with an empty expand cache, so this execution must extract page one's
+  // expanded data into it again; copying the flag would leave the first page's expanded
+  // columns NULL. See GitHub #156.
 
   clone->service_root_mode_ = service_root_mode_;
   clone->InitializeComponents(service_root_mode_);
@@ -492,6 +529,30 @@ void ODataReadBindData::PrefetchFirstPage() {
                        row_buffer->HasNextPage() ? "true" : "false"));
 }
 
+void ODataReadBindData::ExtractExpandedDataFromBufferedFirstPage() {
+  if (service_root_mode_ || first_page_response_ == nullptr || first_page_expand_extracted_) {
+    return;
+  }
+  if (!HasExpandedData() || data_extractor->GetExpandedDataSchema().empty()) {
+    return;
+  }
+
+  try {
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     "Extracting expanded data from the buffered probe page now that the "
+                     "expand schema is known");
+    data_extractor->ExtractExpandedDataFromResponse(first_page_response_->RawContent());
+    first_page_expand_extracted_ = true;
+  } catch (const StrictTypingViolation &) {
+    throw;
+  } catch (const std::exception &e) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    std::string("Failed to extract expanded data from the buffered probe "
+                                "page: ") +
+                        e.what());
+  }
+}
+
 void ODataReadBindData::BufferFirstPageFromResponse(
     std::shared_ptr<ODataEntitySetResponse> response) {
     if (!response) {
@@ -541,6 +602,9 @@ void ODataReadBindData::BufferFirstPageFromResponse(
     row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
     first_page_cached_ = true;
+    // Whatever this page's expanded data was, it has been handled here; the re-extraction
+    // hook in EnsureInitialized must not append it a second time.
+    first_page_expand_extracted_ = true;
 }
 
 ODataReadGlobalState::ODataReadGlobalState(

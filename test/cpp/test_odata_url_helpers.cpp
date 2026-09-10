@@ -11,6 +11,36 @@ TEST_CASE("ODataUrlResolver uses @odata.context when present", "[odata_url]") {
     REQUIRE(meta.find("$metadata") != std::string::npos);
 }
 
+// A relative @odata.context is resolved against the service root, not appended to
+// the entity set URL. SAP Gateway answers an entity set with "$metadata#Travel";
+// appending that to ".../0001/Travel" yields ".../0001/Travel/$metadata", which the
+// Gateway rejects with 400. The metadata document is then unreachable and every
+// column silently degrades to VARCHAR -- dates and numbers arrive as strings and a
+// numeric comparison in SQL fails to bind. See GitHub #152.
+TEST_CASE("ODataUrlResolver resolves a relative @odata.context against the service root",
+          "[odata_url]") {
+    ODataUrlResolver r;
+
+    HttpUrl sap("http://host/sap/opu/odata4/dmo/svc/srvd/dmo/ui_travel/0001/Travel?$format=json");
+    REQUIRE(r.resolveMetadataUrl(sap, "$metadata#Travel") ==
+            "http://host/sap/opu/odata4/dmo/svc/srvd/dmo/ui_travel/0001/$metadata");
+
+    // The "./" spelling means the same thing.
+    REQUIRE(r.resolveMetadataUrl(sap, "./$metadata#Travel") ==
+            "http://host/sap/opu/odata4/dmo/svc/srvd/dmo/ui_travel/0001/$metadata");
+
+    // The request's own query string must not be carried onto the metadata URL:
+    // $format=json asks for a JSON entity payload, not a JSON metadata document.
+    REQUIRE(r.resolveMetadataUrl(sap, "$metadata#Travel").find("$format") == std::string::npos);
+
+    // An absolute-path context still wins outright.
+    REQUIRE(r.resolveMetadataUrl(sap, "/other/$metadata#Travel") == "http://host/other/$metadata");
+
+    // ...as does a fully absolute one.
+    REQUIRE(r.resolveMetadataUrl(sap, "https://elsewhere/svc/$metadata#Travel") ==
+            "https://elsewhere/svc/$metadata");
+}
+
 TEST_CASE("ODataUrlResolver falls back for Datasphere without context", "[odata_url]") {
     ODataUrlResolver r;
     HttpUrl base("https://host/api/v1/dwc/consumption/relational/ten/ass/Entity");

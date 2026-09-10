@@ -122,6 +122,16 @@ public:
     // Expand functionality
     void SetExpandClause(const std::string& expand_clause);
     std::string GetExpandClause() const;
+    // Extract expanded data from the page the bind-time probe already fetched.
+    //
+    // That page is buffered before the expand clause has been parsed, so at buffering time
+    // the expand schema is empty and the extraction is skipped. Bind calls this once the
+    // schema is known. Without it, $expand written into the URL returns NULL expanded
+    // columns for the whole scan - and because the expand cache is keyed on the scan-global
+    // row index, a page that contributes no entries shifts every later page's values too.
+    // See GitHub #156.
+    void ExtractExpandedDataFromBufferedFirstPage();
+
     void SetExpandedDataSchema(const std::vector<std::string>& expand_paths);
     // Forward nested expand paths into the extractor for recursive processing
     void SetNestedExpandPaths(const std::vector<std::string>& nested_paths);
@@ -206,6 +216,19 @@ private:
     // data_extractor's row cache and odata_client's paging cursor, this is the
     // complete set of fields the clone must own.
     bool first_page_cached_ = false;
+
+    // The page the bind-time probe already fetched, kept as DATA rather than as client
+    // state. Every execution clones the bind data and must get its OWN client: they share
+    // one shared_ptr<ODataEntitySetClient> otherwise, and that client owns the mutable
+    // pagination cursor (url, current_response, page_requests). Handing the page to the
+    // bind-time client instead would make the second EXECUTE of a bound `SELECT *` plan
+    // resume from wherever the first one stopped. See GitHub #75 and #149.
+    std::shared_ptr<ODataEntitySetResponse> first_page_response_;
+
+    // Per-scan guard: each execution clones the bind data and gets a FRESH extractor, so
+    // the extraction has to be redone per scan - and exactly once, or page one's expanded
+    // values would be appended twice and shift every later page.
+    bool first_page_expand_extracted_ = false;
     // Tracks how many rows have been emitted so far to align expanded cache row-wise
     size_t emitted_row_index_ = 0;
     bool service_root_mode_ = false;

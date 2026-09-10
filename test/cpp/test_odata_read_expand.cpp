@@ -326,6 +326,51 @@ TEST_CASE("odata_read parses inline expanded data into the result", "[odata_expa
     REQUIRE(ExpandOnTheWire(server, "/nw/Products") == "Category");
 }
 
+// GitHub #156: $expand written into the URL must behave exactly like the expand= named
+// parameter. It did not. FromEntitySetClient buffers the bind-time probe page BEFORE
+// ProcessExpandClause has set the expand schema, so page one is buffered with no expanded
+// data extracted. The named-parameter spelling hides this: it ADDS $expand to the URL, so
+// the URL changes, the buffer is discarded and page one is refetched once the schema is
+// known. With $expand already in the URL nothing changes, the un-extracted buffer survives,
+// and the expanded column comes back NULL for the whole scan.
+TEST_CASE("odata_read expands identically whether $expand is in the URL or a parameter",
+          "[odata_expand][e2e]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/nw/$metadata", "edm_northwind.xml");
+    server.OnPath(
+        "/nw/Products",
+        CannedResponse::Json(MakeV4Page(
+            server.Url("/nw/$metadata") + "#Products",
+            {R"({"ProductID":1,"ProductName":"Chai","SupplierID":1,"CategoryID":1,)"
+             R"("QuantityPerUnit":"10 boxes x 20 bags","UnitPrice":18.0,"UnitsInStock":39,)"
+             R"("UnitsOnOrder":0,"ReorderLevel":10,"Discontinued":false,)"
+             R"("Category":{"CategoryID":1,"CategoryName":"Beverages",)"
+             R"("Description":"Soft drinks, coffees, teas"}})"})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto by_parameter = con.Query("SELECT CAST(Category AS VARCHAR) FROM odata_read('" +
+                                  server.Url("/nw/Products") + "', expand = 'Category')");
+    INFO((by_parameter->HasError() ? by_parameter->GetError() : std::string()));
+    REQUIRE_FALSE(by_parameter->HasError());
+    REQUIRE(by_parameter->RowCount() == 1);
+
+    auto by_url = con.Query("SELECT CAST(Category AS VARCHAR) FROM odata_read('" +
+                            server.Url("/nw/Products") + "?$expand=Category')");
+    INFO((by_url->HasError() ? by_url->GetError() : std::string()));
+    REQUIRE_FALSE(by_url->HasError());
+    REQUIRE(by_url->RowCount() == 1);
+
+    const auto parameter_text = by_parameter->GetValue(0, 0).ToString();
+    const auto url_text = by_url->GetValue(0, 0).ToString();
+    INFO("by parameter: " << parameter_text);
+    INFO("by url:       " << url_text);
+    REQUIRE(url_text.find("Beverages") != std::string::npos);
+    REQUIRE(url_text == parameter_text);
+}
+
 // Catches: an expand that is dropped as soon as another query option is present.
 // $top/$skip and $expand are assembled from the same helper, so a clause that
 // overwrites rather than adds is a plausible regression.
