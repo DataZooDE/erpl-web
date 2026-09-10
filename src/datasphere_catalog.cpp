@@ -1,4 +1,5 @@
 #include "datasphere_catalog.hpp"
+#include "odata_url_helpers.hpp"
 #include "datasphere_client.hpp"
 #include "odata_client.hpp"
 #include "odata_content.hpp"
@@ -473,8 +474,9 @@ duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const st
         
         ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Constructed metadata endpoint URL: " + metadata_endpoint_url);
         
-        // Use the HttpClient directly to get the raw content
-        auto direct_http_client = std::make_shared<HttpClient>();
+        // Same client the rest of the OData stack uses; a default-constructed HttpClient
+        // re-encodes the URL and mangles OData query options (GitHub #102).
+        auto metadata_http_client = CreateODataHttpClient();
         
         // Create a direct HTTP request to the metadata URL
         HttpRequest metadata_request(HttpMethod::GET, HttpUrl(metadata_endpoint_url));
@@ -483,7 +485,7 @@ duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const st
         }
         
         // Execute the request
-        auto raw_response = direct_http_client->SendRequest(metadata_request);
+        auto raw_response = metadata_http_client->SendRequest(metadata_request);
         if (!raw_response) {
             return "Failed to get raw metadata response";
         }

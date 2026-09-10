@@ -136,7 +136,15 @@ public:
     // Throws duckdb::IOException carrying the underlying cause and the service URL when the
     // $metadata request fails, so that authentication, TLS or connectivity problems are not
     // reported to the user as "table does not exist".
-    Edmx &GetCachedMetadata();
+    //
+    // The document is the very snapshot held by the process-global EdmCache, not a private
+    // copy of it, so N catalogs attached to the same service cost one EDMX rather than N+1
+    // (GitHub #106). It is const because it is shared.
+    const Edmx &GetCachedMetadata();
+
+    // Drops this catalog's snapshot and the corresponding EdmCache entry, so the next
+    // GetCachedMetadata() re-fetches $metadata from the service.
+    void InvalidateCachedMetadata();
 
     // True when the entity set is excluded by the IGNORE option of the ATTACH statement.
     bool IsIgnored(const std::string &entity_set_name) const;
@@ -151,7 +159,7 @@ protected:
     std::unique_ptr<ODataSchemaEntry> main_schema;
 
     mutable std::mutex metadata_mutex;
-    std::optional<Edmx> cached_metadata;
+    std::shared_ptr<const Edmx> cached_metadata;
 
 private:
     duckdb::string path_;
