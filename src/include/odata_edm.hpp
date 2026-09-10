@@ -11,6 +11,7 @@
 #include <variant>
 #include <iostream>
 #include <memory>
+#include <chrono>
 
 // Cross-platform string comparison
 #ifdef _WIN32
@@ -2062,7 +2063,7 @@ private:
 class DuckTypeConverter 
 {
     public:
-        DuckTypeConverter(Edmx &edmx) : edmx(edmx) {}
+        explicit DuckTypeConverter(const Edmx &edmx) : edmx(edmx) {}
 
         // Central primitive EDM->DuckDB LogicalType mapping
         static duckdb::LogicalType ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name) {
@@ -2136,7 +2137,7 @@ class DuckTypeConverter
         }
 
         // Central property-aware mapping (handles Decimal p/s and Collection(...))
-        static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, Edmx &edmx) {
+        static duckdb::LogicalType BuildLogicalTypeForProperty(const Property &property, const Edmx &edmx) {
             // Detect Collection(T)
             std::regex collection_regex("Collection\\(([^\\)]+)\\)");
             std::smatch match;
@@ -2426,13 +2427,15 @@ class DuckTypeConverter
 
     
     public:
-        Edmx &edmx;
+        // Held by const reference: the EDM is shared, potentially across connections
+        // via EdmCache, and this converter only reads it.
+        const Edmx &edmx;
 };
 
 // Centralized OData EDM-based type builder utilities (for expand schema)
 class ODataEdmTypeBuilder {
 public:
-    explicit ODataEdmTypeBuilder(Edmx &edmx) : edmx(edmx), converter(edmx) {}
+    explicit ODataEdmTypeBuilder(const Edmx &edmx) : edmx(edmx), converter(edmx) {}
 
     // Resolve (is_collection, target_type_name) for a navigation property on an entity type
     std::pair<bool, std::string> ResolveNavTargetOnEntity(const std::string &entity_type_name, const std::string &nav_prop) const;
@@ -2448,26 +2451,67 @@ public:
                                                 const std::vector<std::string> &nested_children) const;
 
 private:
-    Edmx &edmx;
+    const Edmx &edmx;
     DuckTypeConverter converter;
 };
 
+// Process-global cache of parsed $metadata documents, keyed by metadata URL.
+//
+// Ownership: entries are handed out as shared_ptr<const Edmx> snapshots rather than as
+// pointers into the map. The previous optional_ptr<Edmx> was borrowed from a map entry
+// after the lock had already been released, so a concurrent Set() on the same URL --
+// two connections attaching or reading the same service is the normal case -- destroyed
+// the Edmx the first caller was still reading. A shared_ptr keeps the snapshot alive for
+// exactly as long as somebody holds it, and Set() replaces the map slot rather than the
+// object, so readers are never disturbed. The payload is const because it is shared.
 class EdmCache
 {
 public:
+    // A cached document is considered stale after this long. $metadata is not immutable:
+    // a service redeployment changes it, and without an expiry the entry survives for the
+    // lifetime of the process. See GitHub #106.
+    static constexpr int64_t DEFAULT_ENTRY_LIFETIME_SECONDS = 900;
+
     static EdmCache& GetInstance();
 
     EdmCache(const EdmCache&) = delete;
     EdmCache& operator=(const EdmCache&) = delete;
 
-    duckdb::optional_ptr<Edmx> Get(const std::string& key);
-    void Set(const std::string& key, Edmx edmx);
+    // Returns a snapshot, or nullptr when the URL is unknown or its entry has expired.
+    std::shared_ptr<const Edmx> Get(const std::string& metadata_url);
+
+    // Stores a snapshot and returns it, so a caller that has just parsed a document can
+    // hold the cached instance instead of keeping a private copy of it.
+    std::shared_ptr<const Edmx> Set(const std::string& metadata_url, Edmx edmx);
+
+    // Drops one entry (e.g. after a metadata request failed against a redeployed service).
+    void Invalidate(const std::string& metadata_url);
+
+    // Drops every entry. Mainly for tests and for a future `erpl_odata_clear_cache` pragma.
+    void Clear();
+
+    // Number of entries currently held, expired ones included.
+    size_t Size() const;
+
+    // Entry lifetime; a non-positive value disables expiry.
+    void SetEntryLifetime(std::chrono::seconds lifetime);
+    std::chrono::seconds GetEntryLifetime() const;
 
 private:
     EdmCache() = default;
 
-    std::mutex cache_lock;
-    std::unordered_map<std::string, Edmx> cache;
+    struct Entry {
+        std::shared_ptr<const Edmx> edmx;
+        std::chrono::steady_clock::time_point stored_at;
+    };
+
+    // Caller must hold cache_lock.
+    bool IsExpired(const Entry& entry, std::chrono::steady_clock::time_point now) const;
+    void EvictExpired(std::chrono::steady_clock::time_point now);
+
+    mutable std::mutex cache_lock;
+    std::unordered_map<std::string, Entry> cache;
+    std::chrono::seconds entry_lifetime{DEFAULT_ENTRY_LIFETIME_SECONDS};
 
     std::string UrlWithoutFragment(const std::string& url) const;
 };

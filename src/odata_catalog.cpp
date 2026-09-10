@@ -409,11 +409,21 @@ ODataServiceClient& ODataCatalog::GetServiceClient() {
     return service_client;
 }
 
-Edmx &ODataCatalog::GetCachedMetadata() {
+const Edmx &ODataCatalog::GetCachedMetadata() {
     std::lock_guard<std::mutex> lock(metadata_mutex);
-    if (!cached_metadata.has_value()) {
+    if (!cached_metadata) {
         try {
-            cached_metadata = service_client.GetMetadata();
+            // GetMetadata() populates the process-global EdmCache as a side effect. Taking the
+            // snapshot back out of the cache - rather than storing the returned value - is what
+            // keeps the catalog from holding a second full EDMX for the whole life of the ATTACH.
+            // See GitHub #106.
+            auto edmx = service_client.GetMetadata();
+            const auto metadata_url = service_client.GetMetadataContextUrl();
+            cached_metadata = EdmCache::GetInstance().Get(metadata_url);
+            if (!cached_metadata) {
+                // The client did not cache it (or the entry expired in between); adopt ours.
+                cached_metadata = EdmCache::GetInstance().Set(metadata_url, std::move(edmx));
+            }
         } catch (const std::exception &e) {
             // Preserve the underlying cause (401, TLS failure, DNS failure, malformed EDMX, ...)
             // together with the service URL instead of degrading it into an empty schema.
@@ -421,7 +431,17 @@ Edmx &ODataCatalog::GetCachedMetadata() {
                 "Failed to load OData metadata from '%s': %s", path_, std::string(e.what())));
         }
     }
-    return cached_metadata.value();
+    return *cached_metadata;
+}
+
+void ODataCatalog::InvalidateCachedMetadata() {
+    std::lock_guard<std::mutex> lock(metadata_mutex);
+    if (cached_metadata) {
+        EdmCache::GetInstance().Invalidate(service_client.GetMetadataContextUrl());
+    }
+    // Any caller still reading the previous snapshot keeps it alive through its own
+    // shared_ptr; resetting ours only detaches this catalog from it.
+    cached_metadata.reset();
 }
 
 bool ODataCatalog::IsIgnored(const std::string &entity_set_name) const {

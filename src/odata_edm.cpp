@@ -8,20 +8,73 @@ EdmCache& EdmCache::GetInstance() {
     return instance;
 }
 
-duckdb::optional_ptr<Edmx> EdmCache::Get(const std::string& metadata_url) {
-    std::lock_guard<std::mutex> lock(cache_lock);
-    auto url_without_fragment = UrlWithoutFragment(metadata_url);
-    auto it = cache.find(url_without_fragment);
-    if (it != cache.end()) {
-        return duckdb::optional_ptr<Edmx>(&(it->second));
+bool EdmCache::IsExpired(const Entry& entry, std::chrono::steady_clock::time_point now) const {
+    if (entry_lifetime <= std::chrono::seconds::zero()) {
+        return false;
     }
-    return duckdb::optional_ptr<Edmx>();
+    return (now - entry.stored_at) >= entry_lifetime;
 }
 
-void EdmCache::Set(const std::string& metadata_url, Edmx edmx) {
+void EdmCache::EvictExpired(std::chrono::steady_clock::time_point now) {
+    if (entry_lifetime <= std::chrono::seconds::zero()) {
+        return;
+    }
+    for (auto it = cache.begin(); it != cache.end();) {
+        it = IsExpired(it->second, now) ? cache.erase(it) : std::next(it);
+    }
+}
+
+std::shared_ptr<const Edmx> EdmCache::Get(const std::string& metadata_url) {
+    const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(cache_lock);
-    auto url_without_fragment = UrlWithoutFragment(metadata_url);
-    cache[url_without_fragment] = std::move(edmx);
+
+    // Sweeping on every lookup keeps the map from growing without bound in a
+    // long-lived process that attaches many services. See GitHub #106.
+    EvictExpired(now);
+
+    const auto url_without_fragment = UrlWithoutFragment(metadata_url);
+    const auto it = cache.find(url_without_fragment);
+    if (it == cache.end()) {
+        return nullptr;
+    }
+    // The shared_ptr copy leaves the lock with the caller; whatever happens to the map
+    // slot afterwards, the document the caller reads stays alive and unchanged.
+    return it->second.edmx;
+}
+
+std::shared_ptr<const Edmx> EdmCache::Set(const std::string& metadata_url, Edmx edmx) {
+    auto snapshot = std::make_shared<const Edmx>(std::move(edmx));
+    const auto now = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(cache_lock);
+    EvictExpired(now);
+    cache[UrlWithoutFragment(metadata_url)] = Entry{snapshot, now};
+    return snapshot;
+}
+
+void EdmCache::Invalidate(const std::string& metadata_url) {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    cache.erase(UrlWithoutFragment(metadata_url));
+}
+
+void EdmCache::Clear() {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    cache.clear();
+}
+
+size_t EdmCache::Size() const {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    return cache.size();
+}
+
+void EdmCache::SetEntryLifetime(std::chrono::seconds lifetime) {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    entry_lifetime = lifetime;
+}
+
+std::chrono::seconds EdmCache::GetEntryLifetime() const {
+    std::lock_guard<std::mutex> lock(cache_lock);
+    return entry_lifetime;
 }
 
 std::string EdmCache::UrlWithoutFragment(const std::string& url_str) const {
