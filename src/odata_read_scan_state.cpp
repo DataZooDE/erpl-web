@@ -110,7 +110,14 @@ void ODataReadBindData::EnsureInitialized() {
 
     // Make sure first page is prefetched once and buffered
     if (!first_page_cached_) {
+        // PrefetchFirstPage buffers through BufferFirstPageFromResponse, which extracts
+        // expanded data itself - the schema is settled by the time a scan runs.
         PrefetchFirstPage();
+    } else {
+        // The buffered page came from the bind-time probe, which ran before the expand
+        // clause was parsed, so its expanded data was never extracted. Do it now, into
+        // THIS scan's extractor. See GitHub #156.
+        ExtractExpandedDataFromBufferedFirstPage();
     }
 }
 
@@ -417,6 +424,10 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
 
   auto clone = duckdb::make_uniq<ODataReadBindData>(scan_client, true);
   clone->first_page_response_ = first_page_response_;
+  // first_page_expand_extracted_ is deliberately NOT copied. The clone gets a fresh
+  // extractor with an empty expand cache, so this execution must extract page one's
+  // expanded data into it again; copying the flag would leave the first page's expanded
+  // columns NULL. See GitHub #156.
 
   clone->service_root_mode_ = service_root_mode_;
   clone->InitializeComponents(service_root_mode_);
@@ -518,6 +529,30 @@ void ODataReadBindData::PrefetchFirstPage() {
                        row_buffer->HasNextPage() ? "true" : "false"));
 }
 
+void ODataReadBindData::ExtractExpandedDataFromBufferedFirstPage() {
+  if (service_root_mode_ || first_page_response_ == nullptr || first_page_expand_extracted_) {
+    return;
+  }
+  if (!HasExpandedData() || data_extractor->GetExpandedDataSchema().empty()) {
+    return;
+  }
+
+  try {
+    ERPL_TRACE_DEBUG("ODATA_READ_BIND",
+                     "Extracting expanded data from the buffered probe page now that the "
+                     "expand schema is known");
+    data_extractor->ExtractExpandedDataFromResponse(first_page_response_->RawContent());
+    first_page_expand_extracted_ = true;
+  } catch (const StrictTypingViolation &) {
+    throw;
+  } catch (const std::exception &e) {
+    ERPL_TRACE_WARN("ODATA_READ_BIND",
+                    std::string("Failed to extract expanded data from the buffered probe "
+                                "page: ") +
+                        e.what());
+  }
+}
+
 void ODataReadBindData::BufferFirstPageFromResponse(
     std::shared_ptr<ODataEntitySetResponse> response) {
     if (!response) {
@@ -567,6 +602,9 @@ void ODataReadBindData::BufferFirstPageFromResponse(
     row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
     first_page_cached_ = true;
+    // Whatever this page's expanded data was, it has been handled here; the re-extraction
+    // hook in EnsureInitialized must not append it a second time.
+    first_page_expand_extracted_ = true;
 }
 
 ODataReadGlobalState::ODataReadGlobalState(
