@@ -237,7 +237,14 @@ protected:
         return http_response;
     }
 
-    std::unique_ptr<HttpResponse> DoMetadataHttpGet(const std::string& metadata_url_raw) 
+    // Metadata is fetched through the injected client (GitHub #83). No
+    // IHttpClient/virtual-SendRequest seam is layered on top of that, and none
+    // is planned: $metadata is served to the tests over real HTTP by
+    // ODataTestServer (test/cpp/include/odata_test_server.hpp) from the
+    // committed EDMX fixtures. That covers the fixture use case the issue was
+    // filed for while additionally exercising the HTTP client, the header set
+    // and the EDMX parse -- all of which an in-process seam would stub out.
+    std::unique_ptr<HttpResponse> DoMetadataHttpGet(const std::string& metadata_url_raw)
     {
         // Sanitize: strip any query from a $metadata URL (e.g., remove "$format=json")
         std::string sanitized_raw = metadata_url_raw;
@@ -435,7 +442,14 @@ public:
 
 private:
     EntitySet GetCurrentEntitySetType();
-    
+
+    // Server-driven paging guard. A service that echoes back a next link
+    // identical to the request that produced it (SAP ODP repeating a
+    // "!deltatoken"/"$skiptoken", or a legal empty page that still carries a
+    // next link) would otherwise spin forever issuing HTTP requests.
+    static constexpr idx_t MAX_PAGE_REQUESTS = 100000;
+    idx_t page_request_count = 0;
+
     // For Datasphere input parameters: storage for input parameters
     std::map<std::string, std::string> input_parameters;
     

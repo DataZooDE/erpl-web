@@ -1141,13 +1141,38 @@ SchemaInfo ODataReadBindData::PrepareSchemaInfo() {
     return info;
 }
 
-void ODataReadBindData::FetchAdditionalPagesIfNeeded(const SchemaInfo& schema_info) {
+void ODataReadBindData::FetchAdditionalPagesIfNeeded(
+    duckdb::optional_ptr<duckdb::ClientContext> context,
+    const SchemaInfo& schema_info) {
     const idx_t target = STANDARD_VECTOR_SIZE;
-    
+    idx_t pages_fetched = 0;
+
     // Fetch additional pages until we have enough buffered rows to fill the
     // vector or no more pages
     while (row_buffer->Size() < target && row_buffer->HasNextPage()) {
+        // Ctrl-C and statement timeouts both arrive as an interrupt flag on the
+        // client context; a paging loop that never observes it is unstoppable.
+        if (context != nullptr && context->interrupted) {
+            ERPL_TRACE_INFO("ODATA_READ_BIND", "Interrupted while fetching additional pages");
+            throw duckdb::InterruptException();
+        }
+
+        // Only yield once there is something to emit: DuckDB ends a table scan
+        // on the first empty chunk, so breaking with an empty buffer would
+        // silently truncate the result. A run of empty pages is bounded by the
+        // interrupt check above and by the client's page ceiling instead.
+        if (pages_fetched >= MAX_PAGES_PER_SCAN_CALL && row_buffer->Size() > 0) {
+            ERPL_TRACE_DEBUG(
+                "ODATA_READ_BIND",
+                duckdb::StringUtil::Format(
+                    "Reached the per-scan-call page cap of %llu; emitting a short vector and "
+                    "resuming on the next call",
+                    (unsigned long long)MAX_PAGES_PER_SCAN_CALL));
+            break;
+        }
+
         auto next_response = odata_client->Get(true);
+        pages_fetched++;
         if (!next_response) {
             row_buffer->SetHasNextPage(false);
             break;
@@ -1337,11 +1362,22 @@ void ODataReadBindData::UpdateProgressTracking(idx_t rows_emitted) {
 }
 
 unsigned int ODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
+    return FetchNextResultInternal(nullptr, output);
+}
+
+unsigned int ODataReadBindData::FetchNextResult(duckdb::ClientContext &context,
+                                                duckdb::DataChunk &output) {
+    return FetchNextResultInternal(&context, output);
+}
+
+unsigned int ODataReadBindData::FetchNextResultInternal(
+    duckdb::optional_ptr<duckdb::ClientContext> context,
+    duckdb::DataChunk &output) {
     EnsureInitialized();
-    
+
     auto schema_info = PrepareSchemaInfo();
-    FetchAdditionalPagesIfNeeded(schema_info);
-    
+    FetchAdditionalPagesIfNeeded(context, schema_info);
+
     idx_t rows_emitted = EmitRowsToOutput(output, schema_info);
     UpdateProgressTracking(rows_emitted);
     
@@ -2229,7 +2265,9 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
   }
 
   ERPL_TRACE_DEBUG("ODATA_SCAN", "Fetching next result set");
-  auto rows_fetched = scan_state.FetchNextResult(output);
+  // The context reaches the paging loop so a long scan stays interruptible and
+  // yields between pages (GitHub #78).
+  auto rows_fetched = scan_state.FetchNextResult(context, output);
   ERPL_TRACE_INFO("ODATA_SCAN",
                   duckdb::StringUtil::Format("Fetched %d rows", rows_fetched));
 

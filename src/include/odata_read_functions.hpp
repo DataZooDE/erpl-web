@@ -71,7 +71,12 @@ public:
     std::vector<std::string> GetResultNames(bool all_columns = false);
     std::vector<duckdb::LogicalType> GetResultTypes(bool all_columns = false);
     bool HasMoreResults();
+    // Context-less overload, kept for callers that have no ClientContext at
+    // hand. A scan started from a table function should prefer the overload
+    // below: without a context there is no way to honour Ctrl-C or a statement
+    // timeout while follow-up pages are being fetched.
     unsigned int FetchNextResult(DataChunk &output);
+    unsigned int FetchNextResult(duckdb::ClientContext &context, DataChunk &output);
 
     // DuckDB lifecycle methods
     void ActivateColumns(const std::vector<duckdb::column_t> &column_ids);
@@ -214,10 +219,21 @@ private:
     // dataset and inflates the result by N×.
     void BufferFirstPageFromResponse(std::shared_ptr<ODataEntitySetResponse> response);
 
+    // Upper bound on the number of follow-up pages fetched inside a single
+    // GetData call. Without it one scan call can issue hundreds of sequential
+    // HTTP requests and never yield, so neither an interrupt nor a statement
+    // timeout can take effect. Breaking out emits a short vector; the scan
+    // resumes on the next call because HasMoreResults() still reports a next
+    // page.
+    static constexpr idx_t MAX_PAGES_PER_SCAN_CALL = 32;
+
     // FetchNextResult helper methods
+    unsigned int FetchNextResultInternal(duckdb::optional_ptr<duckdb::ClientContext> context,
+                                         DataChunk &output);
     void EnsureInitialized();
     SchemaInfo PrepareSchemaInfo();
-    void FetchAdditionalPagesIfNeeded(const SchemaInfo& schema_info);
+    void FetchAdditionalPagesIfNeeded(duckdb::optional_ptr<duckdb::ClientContext> context,
+                                      const SchemaInfo& schema_info);
     void ProcessPageResponse(std::shared_ptr<ODataEntitySetResponse> response, const SchemaInfo& schema_info);
     idx_t EmitRowsToOutput(duckdb::DataChunk &output, const SchemaInfo& schema_info);
     void EmitSingleRowToOutput(duckdb::DataChunk &output, const std::vector<duckdb::Value> &row, idx_t row_index, const SchemaInfo& schema_info);
