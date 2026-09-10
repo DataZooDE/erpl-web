@@ -180,17 +180,9 @@ void OdpODataReadBindData::ForceInitialLoad() {
     pending_next_url_              = "";
     initial_load_in_progress_      = false;
     delta_fetch_in_progress_       = false;
+    initial_load_preference_applied_ = false;
 
     CreateODataBindData();
-}
-
-void OdpODataReadBindData::TerminateSubscription() {
-    ERPL_TRACE_INFO("ODP_BIND_DATA", "Terminating subscription");
-    
-    state_manager_->TransitionToTerminated();
-    
-    // TODO: Call SAP termination endpoint if needed
-    // This would require implementing the termination request in the orchestrator
 }
 
 std::vector<OdpAuditEntry> OdpODataReadBindData::GetAuditHistory(int days_back) const {
@@ -294,6 +286,10 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         if (!result.response) {
             return false;
         }
+
+        // Only this first response answers the `Prefer: odata.track-changes` we sent, so record
+        // the server's answer now; later pages cannot re-confirm it.
+        initial_load_preference_applied_ = result.preference_applied;
 
         auto first_next = result.response->NextUrl();
         pending_next_url_ = (first_next.has_value() && !first_next->empty())
@@ -628,7 +624,11 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
 
         if (initial_load_in_progress_) {
             initial_load_in_progress_  = false;
-            last_page.preference_applied = !norm_token.empty();
+            // Carry forward the preference the SERVER confirmed on the first page. Deriving it
+            // from "we got a token" here would re-introduce the silent-data-loss path that
+            // GitHub #97 closed: a token without change tracking transitions the subscription to
+            // DELTA_FETCH over data that was never tracked.
+            last_page.preference_applied = initial_load_preference_applied_;
             ProcessRequestResult(last_page, "initial_load");
         } else if (delta_fetch_in_progress_) {
             delta_fetch_in_progress_   = false;

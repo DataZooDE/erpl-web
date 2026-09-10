@@ -1,16 +1,91 @@
 #include "odp_request_orchestrator.hpp"
 #include "tracing.hpp"
 #include "yyjson.hpp"
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdint>
+#include <ctime>
+#include <iomanip>
+#include <locale>
 #include <regex>
 #include <sstream>
+#include <thread>
 
 namespace erpl_web {
+
+namespace {
+
+/// HTTP status returned by SAP while an extraction package is still being prepared.
+constexpr int HTTP_STATUS_ACCEPTED = 202;
+
+/// Days since the Unix epoch for a proleptic Gregorian y/m/d, after Howard Hinnant's
+/// `days_from_civil`. Used instead of `timegm` (absent on MSVC) or `_mkgmtime` (absent
+/// everywhere else) so that HTTP-date handling is identical on every supported platform.
+int64_t DaysFromCivil(int64_t year, uint32_t month, uint32_t day)
+{
+    year -= (month <= 2) ? 1 : 0;
+    const int64_t era = (year >= 0 ? year : year - 399) / 400;
+    const uint32_t year_of_era = static_cast<uint32_t>(year - era * 400);
+    const uint32_t day_of_year =
+        (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const uint32_t day_of_era =
+        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    return era * 146097 + static_cast<int64_t>(day_of_era) - 719468;
+}
+
+/// Convert a `std::tm` already expressed in UTC to a Unix timestamp, without consulting
+/// the process timezone (which is what `std::mktime` would do).
+int64_t TimestampFromUtcTm(const std::tm& time_fields)
+{
+    const int64_t days = DaysFromCivil(static_cast<int64_t>(time_fields.tm_year) + 1900,
+                                       static_cast<uint32_t>(time_fields.tm_mon) + 1,
+                                       static_cast<uint32_t>(time_fields.tm_mday));
+    return days * 86400 + time_fields.tm_hour * 3600 + time_fields.tm_min * 60 + time_fields.tm_sec;
+}
+
+std::string TrimWhitespace(const std::string& value)
+{
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+/// Try each of the three date formats RFC 7231 requires a recipient to accept.
+bool ParseHttpDate(const std::string& value, int64_t& out_timestamp)
+{
+    static const std::array<const char*, 3> FORMATS = {
+        "%a, %d %b %Y %H:%M:%S",  // IMF-fixdate  - "Sun, 06 Nov 1994 08:49:37 GMT"
+        "%A, %d-%b-%y %H:%M:%S",  // RFC 850      - "Sunday, 06-Nov-94 08:49:37 GMT"
+        "%a %b %d %H:%M:%S %Y"    // asctime      - "Sun Nov  6 08:49:37 1994"
+    };
+
+    for (const auto* format : FORMATS) {
+        std::tm time_fields = {};
+        std::istringstream stream(value);
+        stream.imbue(std::locale::classic());
+        stream >> std::get_time(&time_fields, format);
+        if (stream.fail()) {
+            continue;
+        }
+        // RFC 850 two-digit years: std::get_time maps %y to 1969..2068, which is what we want.
+        out_timestamp = TimestampFromUtcTm(time_fields);
+        return true;
+    }
+    return false;
+}
+
+} // namespace
 
 OdpRequestOrchestrator::OdpRequestOrchestrator(std::shared_ptr<HttpAuthParams> auth_params,
                                              uint32_t default_page_size)
     : http_factory_(std::make_unique<OdpHttpRequestFactory>(auth_params))
     , auth_params_(auth_params)
     , default_page_size_(default_page_size)
+    , sleep_function_([](std::chrono::milliseconds duration) { std::this_thread::sleep_for(duration); })
 {
     ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
         "Initializing request orchestrator with default page size: %u", default_page_size_));
@@ -155,6 +230,61 @@ uint32_t OdpRequestOrchestrator::GetDefaultPageSize() const {
     return default_page_size_;
 }
 
+void OdpRequestOrchestrator::SetRetryPolicy(const RetryPolicy& policy) {
+    retry_policy_ = policy;
+    ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+        "Updated 202 retry policy - MaxAttempts: %u, DefaultDelay: %lld ms, MaxTotalWait: %lld ms",
+        retry_policy_.max_attempts,
+        static_cast<long long>(retry_policy_.default_delay.count()),
+        static_cast<long long>(retry_policy_.max_total_wait.count())));
+}
+
+const OdpRequestOrchestrator::RetryPolicy& OdpRequestOrchestrator::GetRetryPolicy() const {
+    return retry_policy_;
+}
+
+void OdpRequestOrchestrator::SetSleepFunction(SleepFunction sleep_function) {
+    sleep_function_ = std::move(sleep_function);
+}
+
+std::optional<std::chrono::milliseconds> OdpRequestOrchestrator::ParseRetryAfter(
+    const std::string& header_value, std::chrono::system_clock::time_point now) {
+
+    const std::string trimmed = TrimWhitespace(header_value);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+
+    // Form 1: delta-seconds. A bare run of digits, per RFC 7231; anything else falls through
+    // to the date parser rather than being partially consumed.
+    if (std::all_of(trimmed.begin(), trimmed.end(),
+                    [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        try {
+            const auto seconds = std::stoll(trimmed);
+            return std::chrono::milliseconds(std::chrono::seconds(seconds));
+        } catch (const std::exception&) {
+            // Out of range - treat as unparsable so the caller uses its default delay.
+            return std::nullopt;
+        }
+    }
+
+    // Form 2: HTTP-date.
+    int64_t target_timestamp = 0;
+    if (!ParseHttpDate(trimmed, target_timestamp)) {
+        return std::nullopt;
+    }
+
+    const auto now_timestamp =
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    const int64_t delta_seconds = target_timestamp - static_cast<int64_t>(now_timestamp);
+    if (delta_seconds <= 0) {
+        // The server named an instant that has already passed - retry immediately.
+        return std::chrono::milliseconds(0);
+    }
+
+    return std::chrono::milliseconds(std::chrono::seconds(delta_seconds));
+}
+
 // ============================================================================
 // Private Helper Methods
 // ============================================================================
@@ -167,9 +297,9 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteRequest(
     OdpRequestResult result;
     
     try {
-        // Execute HTTP request
-        auto http_response = http_client_->SendRequest(const_cast<HttpRequest&>(request));
-        
+        // Execute HTTP request, absorbing any 202 Accepted "still preparing" responses.
+        auto http_response = SendRequestHandlingAccepted(request, operation_type);
+
         result.http_status_code = http_response->Code();
         result.response_size_bytes = http_response->Content().size();
         
@@ -182,23 +312,32 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteRequest(
             throw duckdb::IOException("ODP request failed with HTTP " + std::to_string(result.http_status_code) + ": " + http_response->content);
         }
         
+        // Capture the real response headers and validate the server's change-tracking promise
+        // BEFORE the response is moved into the OData wrapper. Inferring `preference_applied`
+        // from the presence of a delta token used to let the reader transition to DELTA_FETCH
+        // over data that was never change-tracked, silently dropping every subsequent change.
+        // See GitHub #97.
+        result.response_headers = http_response->headers;
+        if (operation_type == "initial_load") {
+            result.preference_applied = ValidatePreferenceApplied(*http_response);
+            if (!result.preference_applied) {
+                ERPL_TRACE_WARN("ODP_ORCHESTRATOR",
+                    "Initial load response did not carry 'Preference-Applied: odata.track-changes'. "
+                    "Change tracking was NOT established; the subscription must stay in initial-load "
+                    "mode rather than issue a delta fetch that would miss changes.");
+            }
+        }
+
         // Process OData response
         result.response = ProcessHttpResponse(std::move(http_response));
-        
+
         // Extract delta token if present
         result.extracted_delta_token = ExtractDeltaToken(*result.response);
-        
+
         // Check for next page
         auto next_url = result.response->NextUrl();
         result.has_more_pages = next_url.has_value() && !next_url->empty();
-        
-        // Validate preference applied for initial load
-        if (operation_type == "initial_load") {
-            // We need access to the original HTTP response for header validation
-            // For now, we'll assume preference was applied if we got a delta token
-            result.preference_applied = !result.extracted_delta_token.empty();
-        }
-        
+
         LogResponseDetails(result, operation_type);
         
     } catch (const std::exception& e) {
@@ -208,6 +347,99 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteRequest(
     }
     
     return result;
+}
+
+std::unique_ptr<HttpResponse> OdpRequestOrchestrator::SendRequestHandlingAccepted(
+    const HttpRequest& request, const std::string& operation_type) {
+
+    HttpRequest current_request = request;
+    std::chrono::milliseconds total_waited{0};
+
+    for (uint32_t attempt = 0; ; ++attempt) {
+        auto http_response = http_client_->SendRequest(current_request);
+        if (!http_response) {
+            throw duckdb::IOException("ODP " + operation_type + " request returned no response for '" +
+                                      current_request.url.ToString() + "'");
+        }
+
+        if (http_response->Code() != HTTP_STATUS_ACCEPTED) {
+            if (attempt > 0) {
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+                    "ODP %s package became ready after %u re-poll(s) and %lld ms of waiting",
+                    operation_type, attempt, static_cast<long long>(total_waited.count())));
+            }
+            return http_response;
+        }
+
+        // SAP is still preparing the extraction package.
+        if (attempt >= retry_policy_.max_attempts) {
+            throw duckdb::IOException(duckdb::StringUtil::Format(
+                "ODP %s did not become ready: the service answered HTTP 202 Accepted %u times for "
+                "'%s' (waited %lld ms in total). The extraction is still being prepared on the SAP "
+                "side; re-run the query later, or raise the retry limit.",
+                operation_type, attempt + 1, current_request.url.ToString(),
+                static_cast<long long>(total_waited.count())));
+        }
+
+        std::chrono::milliseconds wait_for = retry_policy_.default_delay;
+        auto retry_after_header = http_response->headers.find("retry-after");
+        if (retry_after_header != http_response->headers.end()) {
+            auto parsed = ParseRetryAfter(retry_after_header->second, std::chrono::system_clock::now());
+            if (parsed.has_value()) {
+                wait_for = *parsed;
+            } else {
+                ERPL_TRACE_WARN("ODP_ORCHESTRATOR",
+                    "Could not parse Retry-After value '" + retry_after_header->second +
+                    "'; falling back to the default delay");
+            }
+        }
+
+        if (total_waited + wait_for > retry_policy_.max_total_wait) {
+            throw duckdb::IOException(duckdb::StringUtil::Format(
+                "ODP %s did not become ready within the %lld ms wait budget: the service answered "
+                "HTTP 202 Accepted for '%s' and asked to be retried in a further %lld ms (already "
+                "waited %lld ms). The extraction is still being prepared on the SAP side; re-run "
+                "the query later, or raise the wait budget.",
+                operation_type, static_cast<long long>(retry_policy_.max_total_wait.count()),
+                current_request.url.ToString(),
+                static_cast<long long>(wait_for.count()),
+                static_cast<long long>(total_waited.count())));
+        }
+
+        // A 202 may name the resource to poll in `Location`. Honour it when the server sends one,
+        // because re-issuing the original initial-load request (which carries
+        // `Prefer: odata.track-changes`) risks opening a second ODQ subscription. Restrict the
+        // redirect to the same origin, consistent with the rest of the ODP request path.
+        auto location_header = http_response->headers.find("location");
+        if (location_header != http_response->headers.end() && !location_header->second.empty()) {
+            HttpUrl poll_url =
+                HttpUrl::MergeWithBaseUrlIfRelative(current_request.url, location_header->second);
+            if (!poll_url.IsSameOrigin(current_request.url)) {
+                throw duckdb::IOException(
+                    "ODP " + operation_type + " received an HTTP 202 whose Location header points to "
+                    "a different origin ('" + poll_url.ToString() + "' vs '" +
+                    current_request.url.ToSchemeHostAndPort() + "'); refusing to follow it.");
+            }
+            if (!poll_url.Equals(current_request.url)) {
+                ERPL_TRACE_INFO("ODP_ORCHESTRATOR",
+                    "Following 202 Location for polling: " + poll_url.ToString());
+                current_request = HttpRequest(HttpMethod::GET, poll_url.ToString());
+                if (auth_params_) {
+                    current_request.AuthHeadersFromParams(*auth_params_);
+                }
+            }
+        }
+
+        ERPL_TRACE_INFO("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+            "ODP %s not ready (HTTP 202, attempt %u of %u); waiting %lld ms before re-polling %s",
+            operation_type, attempt + 1, retry_policy_.max_attempts + 1,
+            static_cast<long long>(wait_for.count()), current_request.url.ToString()));
+
+        if (sleep_function_ && wait_for.count() > 0) {
+            sleep_function_(wait_for);
+        }
+        total_waited += wait_for;
+    }
 }
 
 std::shared_ptr<ODataEntitySetResponse> OdpRequestOrchestrator::ProcessHttpResponse(
