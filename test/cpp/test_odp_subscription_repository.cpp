@@ -1,5 +1,6 @@
 #include "catch.hpp"
 #include "odp_subscription_repository.hpp"
+#include "odp_test_db.hpp"
 #include "duckdb.hpp"
 #include <chrono>
 #include <thread>
@@ -8,11 +9,9 @@ using namespace erpl_web;
 using namespace duckdb;
 
 TEST_CASE("OdpSubscriptionRepository - Basic Operations", "[odp_repository]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    Connection& conn = temp_db.Conn();
+    ClientContext& context = temp_db.Context();
     
     OdpSubscriptionRepository repo(context);
     
@@ -77,10 +76,9 @@ TEST_CASE("OdpSubscriptionRepository - Basic Operations", "[odp_repository]") {
         // Create subscription
         std::string subscription_id = repo.CreateSubscription(service_url, entity_set_name);
         
-        // Update delta token
+        // Advance the delta token from its initial empty value
         std::string delta_token = "test_delta_token_12345";
-        bool success = repo.UpdateDeltaToken(subscription_id, delta_token);
-        REQUIRE(success);
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(subscription_id, "", delta_token));
         
         // Verify update
         auto subscription = repo.GetSubscription(subscription_id);
@@ -213,6 +211,13 @@ TEST_CASE("OdpSubscriptionRepository - Utility Methods", "[odp_repository_utils]
         REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl("https://test.com/FactsOfTest"));
         REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl("https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfSEPM_ISO"));
         REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl("https://test.com/sap/opu/odata/sap/TEST_SRV/FactsOf0D_NW_C01"));
+        // A query string must not make a valid service URL fail the check (#105)
+        REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl(
+            "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfSEPM_ISO?$format=json"));
+        REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl(
+            "https://test.com/sap/opu/odata/sap/TEST_SRV/FactsOf0D_NW_C01?$format=json&!deltatoken=D20240101"));
+        REQUIRE(OdpSubscriptionRepository::IsValidOdpUrl(
+            "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfSEPM_ISO/"));
         
         // Invalid URLs
         REQUIRE(!OdpSubscriptionRepository::IsValidOdpUrl("https://test.com/RegularEntity"));
@@ -223,20 +228,16 @@ TEST_CASE("OdpSubscriptionRepository - Utility Methods", "[odp_repository_utils]
 }
 
 TEST_CASE("OdpSubscriptionRepository - Error Handling", "[odp_repository_errors]") {
-    DBConfig config;
-    config.SetOption("allocator_background_threads", Value(true));
-    DuckDB db(nullptr, &config);
-    Connection conn(db);
-    ClientContext& context = *conn.context;
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
     
     OdpSubscriptionRepository repo(context);
     repo.EnsureTablesExist();
     
-    SECTION("Invalid URL creation") {
-        REQUIRE_THROWS_AS(
-            repo.CreateSubscription("https://invalid.com/RegularEntity", "RegularEntity"),
-            InvalidInputException
-        );
+    SECTION("A URL that does not follow the ODP naming convention is accepted with a warning") {
+        // The EntityOf*/FactsOf*/AttrOf* convention is a hint, not a contract:
+        // refusing such a URL blocked legitimate services (#105).
+        REQUIRE_NOTHROW(repo.CreateSubscription("https://valid.com/RegularEntity", "RegularEntity"));
     }
     
     SECTION("Non-existent subscription operations") {
@@ -246,11 +247,11 @@ TEST_CASE("OdpSubscriptionRepository - Error Handling", "[odp_repository_errors]
         auto subscription = repo.GetSubscription(fake_id);
         REQUIRE(!subscription.has_value());
         
-        // Update non-existent subscription
-        bool success = repo.UpdateDeltaToken(fake_id, "test_token");
-        REQUIRE(!success); // Should fail gracefully
+        // Advancing the token of a subscription that is gone must say so, not
+        // report success (#95).
+        REQUIRE_THROWS(repo.AdvanceDeltaToken(fake_id, "", "test_token"));
         
-        success = repo.UpdateSubscriptionStatus(fake_id, "terminated");
+        bool success = repo.UpdateSubscriptionStatus(fake_id, "terminated");
         REQUIRE(!success); // Should fail gracefully
         
         // Remove non-existent subscription
@@ -270,4 +271,242 @@ TEST_CASE("OdpSubscriptionRepository - Error Handling", "[odp_repository_errors]
         std::string id2 = repo.CreateSubscription(service_url, entity_set_name);
         REQUIRE(id1 == id2);
     }
+}
+
+
+// ============================================================================
+// GitHub #99 -- repository SQL must be built from bound parameters
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionRepository - values containing SQL syntax round-trip", "[odp_repository][odp_sql_injection]") {
+    odp_test::TempDatabase temp_db;
+    ClientContext& context = temp_db.Context();
+    OdpSubscriptionRepository repo(context);
+
+    SECTION("A single quote in the service URL and entity set name survives a round-trip") {
+        // Pre-fix: FindActiveSubscription interpolated both values straight into
+        // the SQL text, so the quote produced a parse error that was swallowed
+        // and reported as "no subscription" -- this REQUIRE failed.
+        const std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOf'Quote";
+        const std::string entity_set_name = "EntityOf'Quote";
+
+        const std::string subscription_id = repo.CreateSubscription(service_url, entity_set_name, "sec'ret");
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name);
+        REQUIRE(found.has_value());
+        REQUIRE(found->subscription_id == subscription_id);
+        REQUIRE(found->service_url == service_url);
+        REQUIRE(found->entity_set_name == entity_set_name);
+        REQUIRE(found->secret_name == "sec'ret");
+    }
+
+    SECTION("A crafted entity set name cannot execute a statement of its own") {
+        // Pre-fix: this value closed the string literal and appended a DROP, and
+        // the repository ran it on a full-privilege connection -- the table was
+        // gone by the time this REQUIRE ran.
+        const std::string malicious = "x'; DROP TABLE erpl_web.odp_subscriptions; --";
+        repo.CreateSubscription("https://test.com/EntityOfInjection", malicious);
+
+        auto surviving = temp_db.Conn().Query(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema = 'erpl_web' AND table_name = 'odp_subscriptions'");
+        REQUIRE(!surviving->HasError());
+        REQUIRE(surviving->GetValue(0, 0).GetValue<int64_t>() == 1);
+
+        auto found = repo.FindActiveSubscription("https://test.com/EntityOfInjection", malicious);
+        REQUIRE(found.has_value());
+        REQUIRE(found->entity_set_name == malicious);
+    }
+
+    SECTION("A delta token containing a quote round-trips") {
+        const std::string url = "https://test.com/EntityOfTokenQuote";
+        const std::string id = repo.CreateSubscription(url, "EntityOfTokenQuote");
+
+        const std::string token = "D2024'0101_120000";
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(id, "", token));
+
+        auto reloaded = repo.GetSubscription(id);
+        REQUIRE(reloaded.has_value());
+        REQUIRE(reloaded->delta_token == token);
+    }
+}
+
+// ============================================================================
+// GitHub #92 -- ODP state must live in a named, persistent catalog
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionRepository - state catalog resolution", "[odp_repository][odp_state_catalog]") {
+    SECTION("An in-memory database is refused") {
+        // Pre-fix: the schema was created in the in-memory catalog and every
+        // delta token was discarded at exit -- nothing threw.
+        DBConfig config;
+        config.SetOption("allocator_background_threads", Value(true));
+        DuckDB db(nullptr, &config);
+        Connection conn(db);
+
+        OdpSubscriptionRepository repo(*conn.context);
+        REQUIRE_THROWS_AS(repo.EnsureTablesExist(), InvalidInputException);
+    }
+
+    SECTION("A persistent database is used and named") {
+        odp_test::TempDatabase temp_db;
+        OdpSubscriptionRepository repo(temp_db.Context());
+        REQUIRE_NOTHROW(repo.EnsureTablesExist());
+        REQUIRE(!repo.GetStateCatalog().empty());
+        REQUIRE(repo.GetStateCatalog() != "memory");
+    }
+
+    SECTION("USE of another database does not move the state") {
+        // Pre-fix: the schema name was unqualified, so a USE re-pointed every
+        // later statement -- the subscription landed in the other database and
+        // this count came back 0.
+        odp_test::TempDatabase state_db("odp_state_home");
+        const auto other_path = odp_test::TempDatabase::MakeUniquePath("odp_state_elsewhere");
+
+        OdpSubscriptionRepository repo(state_db.Context());
+        repo.EnsureTablesExist();
+        const std::string home_catalog = repo.GetStateCatalog();
+
+        auto attach = state_db.Conn().Query("ATTACH '" + other_path.string() + "' AS elsewhere");
+        REQUIRE(!attach->HasError());
+        auto use_result = state_db.Conn().Query("USE elsewhere");
+        REQUIRE(!use_result->HasError());
+
+        repo.CreateSubscription("https://test.com/EntityOfHome", "EntityOfHome");
+
+        auto rows = state_db.Conn().Query(
+            "SELECT count(*) FROM \"" + home_catalog + "\".erpl_web.odp_subscriptions");
+        REQUIRE(!rows->HasError());
+        REQUIRE(rows->GetValue(0, 0).GetValue<int64_t>() == 1);
+
+        auto stray = state_db.Conn().Query(
+            "SELECT count(*) FROM duckdb_tables() WHERE database_name = 'elsewhere' AND schema_name = 'erpl_web'");
+        REQUIRE(!stray->HasError());
+        REQUIRE(stray->GetValue(0, 0).GetValue<int64_t>() == 0);
+
+        state_db.Conn().Query("USE \"" + home_catalog + "\"");
+        state_db.Conn().Query("DETACH elsewhere");
+        std::error_code ignored;
+        std::filesystem::remove(other_path, ignored);
+    }
+}
+
+// ============================================================================
+// GitHub #95 -- concurrent readers must not split the delta stream
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionRepository - concurrent delta advance", "[odp_repository][odp_concurrency]") {
+    odp_test::TempDatabase temp_db;
+    auto second_connection = temp_db.NewConnection();
+
+    OdpSubscriptionRepository session_a(temp_db.Context());
+    OdpSubscriptionRepository session_b(*second_connection->context);
+
+    const std::string url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfRace";
+    const std::string entity = "EntityOfRace";
+    const std::string id = session_a.CreateSubscription(url, entity);
+
+    SECTION("The second advance from a stale token fails loudly") {
+        // Both sessions read the same starting token.
+        auto seen_by_a = session_a.FindActiveSubscription(url, entity);
+        auto seen_by_b = session_b.FindActiveSubscription(url, entity);
+        REQUIRE(seen_by_a.has_value());
+        REQUIRE(seen_by_b.has_value());
+        REQUIRE(seen_by_a->delta_token == seen_by_b->delta_token);
+
+        session_a.AdvanceDeltaToken(id, seen_by_a->delta_token, "TOKEN_FROM_A");
+
+        // Pre-fix: this was an unconditional UPDATE, so it quietly overwrote A's
+        // token and the two sessions each got half of the change stream.
+        REQUIRE_THROWS(session_b.AdvanceDeltaToken(id, seen_by_b->delta_token, "TOKEN_FROM_B"));
+
+        auto final_state = session_a.GetSubscription(id);
+        REQUIRE(final_state.has_value());
+        REQUIRE(final_state->delta_token == "TOKEN_FROM_A");
+    }
+
+    SECTION("An advance from the current token succeeds") {
+        session_a.AdvanceDeltaToken(id, "", "TOKEN_1");
+        REQUIRE_NOTHROW(session_b.AdvanceDeltaToken(id, "TOKEN_1", "TOKEN_2"));
+        REQUIRE(session_a.GetSubscription(id)->delta_token == "TOKEN_2");
+    }
+
+    SECTION("Only one subscription can exist per (service_url, entity_set_name)") {
+        // Pre-fix: there was no unique constraint, so two sessions racing on the
+        // first read each inserted their own row -- this INSERT succeeded.
+        auto duplicate = temp_db.Conn().Query(
+            "INSERT INTO \"" + session_a.GetStateCatalog() + "\".erpl_web.odp_subscriptions "
+            "(subscription_id, service_url, entity_set_name, secret_name, delta_token, "
+            "subscription_status, preference_applied, schema_version) "
+            "VALUES ('other_id', '" + url + "', '" + entity + "', 'default', '', 'active', FALSE, 1)");
+        REQUIRE(duplicate->HasError());
+    }
+
+    SECTION("Audit ids come from a sequence") {
+        // Pre-fix: the id was the current time in microseconds, so it was a
+        // 16-digit number rather than a sequence value.
+        OdpAuditEntry first(id, "initial_load");
+        OdpAuditEntry second(id, "delta_fetch");
+
+        const int64_t first_id = session_a.CreateAuditEntry(first);
+        const int64_t second_id = session_a.CreateAuditEntry(second);
+
+        REQUIRE(first_id == 1);
+        REQUIRE(second_id == 2);
+    }
+}
+
+// ============================================================================
+// GitHub #96 -- a failing query is not the same answer as "no subscription"
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionRepository - failures are distinguished from not-found",
+          "[odp_repository][odp_error_reporting]") {
+    SECTION("A broken state table throws instead of reporting no subscription") {
+        odp_test::TempDatabase temp_db;
+        OdpSubscriptionRepository repo(temp_db.Context());
+        repo.EnsureTablesExist();
+        repo.CreateSubscription("https://test.com/EntityOfBroken", "EntityOfBroken");
+
+        auto dropped = temp_db.Conn().Query(
+            "DROP TABLE \"" + repo.GetStateCatalog() + "\".erpl_web.odp_subscriptions");
+        REQUIRE(!dropped->HasError());
+
+        // Pre-fix: the query error was caught and turned into nullopt, which the
+        // caller read as "never subscribed" and answered with a full reload.
+        REQUIRE_THROWS(repo.FindActiveSubscription("https://test.com/EntityOfBroken", "EntityOfBroken"));
+    }
+
+    SECTION("A state table written by an older version is detected") {
+        odp_test::TempDatabase temp_db;
+        auto& conn = temp_db.Conn();
+        REQUIRE(!conn.Query("CREATE SCHEMA erpl_web")->HasError());
+        // The pre-#92 layout: no schema_version column.
+        REQUIRE(!conn.Query(
+            "CREATE TABLE erpl_web.odp_subscriptions ("
+            "subscription_id VARCHAR PRIMARY KEY, service_url VARCHAR, entity_set_name VARCHAR, "
+            "secret_name VARCHAR, delta_token VARCHAR, created_at TIMESTAMP, last_updated TIMESTAMP, "
+            "subscription_status VARCHAR, preference_applied BOOLEAN)")->HasError());
+
+        OdpSubscriptionRepository repo(temp_db.Context());
+        // Pre-fix: CREATE TABLE IF NOT EXISTS accepted the old table and the
+        // repository read its columns by position, misreading every row.
+        REQUIRE_THROWS_AS(repo.EnsureTablesExist(), InvalidInputException);
+    }
+}
+
+// ============================================================================
+// GitHub #100 -- an error body is truncated before it is persisted
+// ============================================================================
+
+TEST_CASE("OdpSubscriptionRepository - audit error bodies are truncated", "[odp_repository][odp_redaction]") {
+    const std::string huge(OdpSubscriptionRepository::MAX_AUDIT_ERROR_LENGTH + 500, 'x');
+    const std::string truncated = OdpSubscriptionRepository::TruncateForAudit(huge);
+
+    // Pre-fix: the whole body went into the audit row verbatim.
+    REQUIRE(truncated.length() < huge.length());
+    REQUIRE(truncated.find("[truncated]") != std::string::npos);
+
+    const std::string small = "short error";
+    REQUIRE(OdpSubscriptionRepository::TruncateForAudit(small) == small);
 }

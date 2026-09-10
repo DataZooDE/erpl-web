@@ -3,7 +3,14 @@
 #include "duckdb.hpp"
 
 #include "odp_http_request_factory.hpp"
+#include "odp_trace_redaction.hpp"
+#include "tracing.hpp"
 #include "datazoo/oauth2/http_client.hpp"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace erpl_web;
 using namespace std;
@@ -247,4 +254,84 @@ TEST_CASE("OdpHttpRequestFactory URL Format Parameter Handling", "[odp_http_fact
         auto request = factory.CreateMetadataRequest(url);
         REQUIRE(request.url.ToString() == "https://example.com/test/$metadata");
     }
+}
+
+
+// ============================================================================
+// GitHub #100 -- credentials must never reach the trace log
+// ============================================================================
+
+TEST_CASE("Odp trace redaction - header values", "[odp_http_factory][odp_redaction]") {
+    SECTION("Authorization keeps its scheme and loses its credential") {
+        // Pre-fix: there was no redaction at all -- the value was written as-is.
+        REQUIRE(odp_trace::RedactHeaderValue("Authorization", "Bearer eyJhbGciOi.SECRET") == "Bearer ***");
+        REQUIRE(odp_trace::RedactHeaderValue("authorization", "Basic dXNlcjpwYXNz") == "Basic ***");
+        REQUIRE(odp_trace::RedactHeaderValue("Proxy-Authorization", "Basic dXNlcjpwYXNz") == "Basic ***");
+    }
+
+    SECTION("Cookies are dropped entirely") {
+        REQUIRE(odp_trace::RedactHeaderValue("Cookie", "SAP_SESSIONID=abc") == "***");
+        REQUIRE(odp_trace::RedactHeaderValue("Set-Cookie", "SAP_SESSIONID=abc") == "***");
+    }
+
+    SECTION("Ordinary headers are untouched") {
+        REQUIRE(odp_trace::RedactHeaderValue("Accept", "application/json") == "application/json");
+        REQUIRE(odp_trace::RedactHeaderValue("Prefer", "odata.track-changes") == "odata.track-changes");
+    }
+}
+
+TEST_CASE("OdpHttpRequestFactory - the trace file carries no credentials",
+          "[odp_http_factory][odp_redaction]") {
+    const std::string secret_password = "sup3rSecretSapPassw0rd";
+    const std::string bearer_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.NOT_IN_THE_LOG";
+
+    auto trace_dir = std::filesystem::temp_directory_path() /
+                     ("erpl_odp_trace_" + std::to_string(
+                         std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(trace_dir);
+    const auto trace_file = trace_dir / "erpl_web_trace.log";
+
+    auto& tracer = ErplTracer::Instance();
+    const bool was_enabled = tracer.IsEnabled();
+    const TraceLevel previous_level = tracer.GetLevel();
+    const std::string previous_output = tracer.GetOutputMode();
+
+    tracer.SetTraceDirectory(trace_dir.string());
+    tracer.SetOutputMode("file");
+    tracer.SetLevel(TraceLevel::DEBUG_LEVEL);
+    tracer.SetEnabled(true);
+
+    {
+        auto basic_auth = std::make_shared<HttpAuthParams>();
+        basic_auth->basic_credentials = std::make_tuple("SAPUSER", secret_password);
+        OdpHttpRequestFactory basic_factory(basic_auth);
+        basic_factory.CreateInitialLoadRequest("https://sap.example.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest");
+
+        auto bearer_auth = std::make_shared<HttpAuthParams>();
+        bearer_auth->bearer_token = bearer_token;
+        OdpHttpRequestFactory bearer_factory(bearer_auth);
+        bearer_factory.CreateDeltaFetchRequest("https://sap.example.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest");
+    }
+
+    tracer.SetEnabled(false);
+
+    std::ifstream log(trace_file);
+    std::stringstream contents;
+    contents << log.rdbuf();
+    log.close();
+    const std::string trace_text = contents.str();
+
+    // The requests were traced at all...
+    REQUIRE(trace_text.find("Created ODP HTTP request") != std::string::npos);
+    // ...but the credentials did not travel with them. Pre-fix both of these
+    // substrings were present in the log verbatim.
+    REQUIRE(trace_text.find(bearer_token) == std::string::npos);
+    REQUIRE(trace_text.find(HttpAuthParams::Base64Encode("SAPUSER:" + secret_password)) == std::string::npos);
+    REQUIRE(trace_text.find("Bearer ***") != std::string::npos);
+
+    tracer.SetLevel(previous_level);
+    tracer.SetOutputMode(previous_output);
+    tracer.SetEnabled(was_enabled);
+    std::error_code ignored;
+    std::filesystem::remove_all(trace_dir, ignored);
 }

@@ -295,3 +295,99 @@ TEST_CASE("OdpRequestOrchestrator - NormalizeDeltaToken", "[odp_normalize_token]
         REQUIRE(OdpRequestOrchestrator::NormalizeDeltaToken("'abc123\"") == "'abc123\"");
     }
 }
+
+
+// ============================================================================
+// GitHub #105 -- the delta token must be percent-encoded into the URL
+// ============================================================================
+
+TEST_CASE("OdpRequestOrchestrator - delta token encoding", "[odp_orchestrator][odp_url_encoding]") {
+    SECTION("Unreserved characters are left alone") {
+        // SAP's own tokens are alphanumeric with underscores; encoding them must
+        // not change them, or every existing subscription would break.
+        REQUIRE(OdpRequestOrchestrator::EncodeDeltaToken("D20240101120000_000000000") ==
+                "D20240101120000_000000000");
+        REQUIRE(OdpRequestOrchestrator::EncodeDeltaToken("abc-123.def~ghi") == "abc-123.def~ghi");
+    }
+
+    SECTION("Query syntax inside the token is escaped") {
+        // Pre-fix: the token went into the URL verbatim, so a '&' in it split
+        // the query and appended a parameter of the server's choosing.
+        const std::string url = OdpRequestOrchestrator::BuildDeltaUrl(
+            "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest", "D2024&$top=1");
+
+        REQUIRE(url.find("&$top=1") == std::string::npos);
+        REQUIRE(url.find("!deltatoken=D2024%26%24top%3D1") != std::string::npos);
+    }
+
+    SECTION("Spaces and fragments are escaped") {
+        REQUIRE(OdpRequestOrchestrator::EncodeDeltaToken("a b") == "a%20b");
+        REQUIRE(OdpRequestOrchestrator::EncodeDeltaToken("a#b") == "a%23b");
+    }
+}
+
+// ============================================================================
+// GitHub #101 -- server-supplied links must be checked against the service origin
+// ============================================================================
+
+TEST_CASE("OdpRequestOrchestrator - origin comparison for server-supplied links",
+          "[odp_orchestrator][odp_same_origin]") {
+    const std::string service = "https://sap.example.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest";
+
+    SECTION("The same host, scheme and port is same-origin") {
+        REQUIRE(OdpRequestOrchestrator::IsSameOrigin(
+            service, "https://sap.example.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest?$skiptoken=2"));
+    }
+
+    SECTION("A relative link resolves against the service and stays same-origin") {
+        REQUIRE(OdpRequestOrchestrator::IsSameOrigin(service, "/sap/opu/odata/sap/TEST_SRV/EntityOfTest?$skiptoken=2"));
+    }
+
+    SECTION("Another host is not same-origin") {
+        // Pre-fix: there was no check at all, and this link was fetched with the
+        // caller's bearer token attached.
+        REQUIRE(!OdpRequestOrchestrator::IsSameOrigin(service, "https://attacker.example.net/collect"));
+    }
+
+    SECTION("A scheme downgrade is not same-origin") {
+        REQUIRE(!OdpRequestOrchestrator::IsSameOrigin(service, "http://sap.example.com/sap/opu/odata/sap/TEST_SRV"));
+    }
+
+    SECTION("A different port is not same-origin") {
+        REQUIRE(!OdpRequestOrchestrator::IsSameOrigin(service, "https://sap.example.com:8443/sap/opu/odata"));
+    }
+
+    SECTION("An empty candidate is not same-origin") {
+        REQUIRE(!OdpRequestOrchestrator::IsSameOrigin(service, ""));
+        REQUIRE(!OdpRequestOrchestrator::IsSameOrigin("", service));
+    }
+}
+
+// ============================================================================
+// GitHub #94 -- a token error must be recognised structurally, not by substring
+// ============================================================================
+
+TEST_CASE("OdpRequestOrchestrator - error codes are parsed from the payload",
+          "[odp_orchestrator][odp_token_errors]") {
+    SECTION("An OData v2 SAP error payload yields its code") {
+        const std::string body =
+            R"({"error":{"code":"/IWBEP/CM_MGW_RT/021","message":{"lang":"en","value":"Delta token invalid"}}})";
+        REQUIRE(OdpRequestOrchestrator::ExtractErrorCode(body) == "/IWBEP/CM_MGW_RT/021");
+    }
+
+    SECTION("A payload without an error object yields nothing") {
+        REQUIRE(OdpRequestOrchestrator::ExtractErrorCode(R"({"d":{"results":[]}})").empty());
+        REQUIRE(OdpRequestOrchestrator::ExtractErrorCode("not json at all").empty());
+        REQUIRE(OdpRequestOrchestrator::ExtractErrorCode("").empty());
+    }
+
+    SECTION("The exception carries the status and the code") {
+        // Pre-fix: the failure was a plain IOException whose message was the
+        // only thing a caller could inspect, which is why the caller resorted to
+        // substring-matching it.
+        OdpHttpException error(410, "DELTATOKEN_EXPIRED", "ODP request failed with HTTP 410");
+        REQUIRE(error.HttpStatusCode() == 410);
+        REQUIRE(error.SapErrorCode() == "DELTATOKEN_EXPIRED");
+        REQUIRE(std::string(error.what()).find("410") != std::string::npos);
+    }
+}

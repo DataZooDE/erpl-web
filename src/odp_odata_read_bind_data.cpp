@@ -1,6 +1,8 @@
 #include "odp_odata_read_bind_data.hpp"
 #include "secret_functions.hpp"
 #include "tracing.hpp"
+#include <algorithm>
+#include <cctype>
 #include <regex>
 
 namespace erpl_web {
@@ -270,8 +272,12 @@ void OdpODataReadBindData::ValidateEntitySetUrl() const {
         throw duckdb::InvalidInputException("Entity set URL cannot be empty");
     }
     
+    // The ODP entity-set naming convention is a hint, not a contract: warn on a
+    // URL that does not match it rather than refusing to read it (#105).
     if (!OdpSubscriptionRepository::IsValidOdpUrl(entity_set_url_)) {
-        throw duckdb::InvalidInputException("Invalid ODP URL: " + entity_set_url_);
+        ERPL_TRACE_WARN("ODP_BIND_DATA",
+            "Entity set URL does not look like an ODP entity set (expected EntityOf*/FactsOf*/AttrOf*): " +
+            entity_set_url_);
     }
     
     ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Entity set URL validation passed");
@@ -346,9 +352,19 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
             ERPL_TRACE_INFO("ODP_BIND_DATA", "Multi-page delta fetch — deferring state transition to last page");
         }
 
-        std::string delta_url = !result.extracted_delta_url.empty()
-            ? result.extracted_delta_url
-            : OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
+        // The __delta link is server-supplied and becomes the URL the OData
+        // client requests next, with credentials attached. Only adopt it when it
+        // stays on the service's own origin (#101).
+        std::string delta_url = OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
+        if (!result.extracted_delta_url.empty()) {
+            if (OdpRequestOrchestrator::IsSameOrigin(entity_set_url_, result.extracted_delta_url)) {
+                delta_url = result.extracted_delta_url;
+            } else {
+                ERPL_TRACE_WARN("ODP_BIND_DATA", duckdb::StringUtil::Format(
+                    "Ignoring server-supplied delta link on a different origin than the service (%s -> %s)",
+                    entity_set_url_, result.extracted_delta_url));
+            }
+        }
         ERPL_TRACE_INFO("ODP_BIND_DATA", "Using delta URL for first page injection: " + delta_url);
         UpdateODataClientWithResponse(delta_url, result.response->RawContent());
         return true;
@@ -459,13 +475,26 @@ void OdpODataReadBindData::HandleRequestError(const std::exception& error, const
 }
 
 bool OdpODataReadBindData::IsTokenError(const std::exception& error) const {
-    std::string error_msg = error.what();
-    
-    // Check for common token-related error patterns
-    return error_msg.find("410") != std::string::npos ||  // Gone - token expired
-           error_msg.find("404") != std::string::npos ||  // Not found - token invalid
-           error_msg.find("token") != std::string::npos || // Generic token error
-           error_msg.find("delta") != std::string::npos;   // Delta-related error
+    // Substring-matching the message text used to classify almost any failure as
+    // a token error -- a network message mentioning "delta" was enough -- and
+    // that discards a perfectly good delta token and re-extracts everything
+    // (#94). Only a structured signal counts now.
+    const auto* http_error = dynamic_cast<const OdpHttpException*>(&error);
+    if (!http_error) {
+        return false;
+    }
+
+    // 410 Gone is the OData answer to a delta link that is no longer valid.
+    if (http_error->HttpStatusCode() == 410) {
+        return true;
+    }
+
+    // SAP reports an invalid or expired delta token through the error code in
+    // the payload; the code text carries DELTATOKEN.
+    std::string code = http_error->SapErrorCode();
+    std::transform(code.begin(), code.end(), code.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return code.find("DELTATOKEN") != std::string::npos;
 }
 
 void OdpODataReadBindData::LogCurrentState() const {

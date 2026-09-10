@@ -1,5 +1,7 @@
 #include "odp_request_orchestrator.hpp"
+#include "odp_trace_redaction.hpp"
 #include "tracing.hpp"
+#include <iomanip>
 #include "yyjson.hpp"
 #include <regex>
 #include <sstream>
@@ -28,6 +30,7 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteInitialL
     const std::string& url, std::optional<uint32_t> max_page_size) {
     
     ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Executing initial load for URL: " + url);
+    service_origin_url_ = url;
     
     // Create initial load request with change tracking
     HttpRequest request = http_factory_->CreateInitialLoadRequest(url, max_page_size);
@@ -54,6 +57,7 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFet
             "Normalized delta token from '%s' to '%s",
             delta_token.substr(0, 64), normalized_token.substr(0, 64)));
     }
+    service_origin_url_ = url;
     std::string delta_url = BuildDeltaUrl(url, normalized_token);
     ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Constructed delta URL: " + delta_url);
     
@@ -68,9 +72,21 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteNextPage
     
     // Create simple GET request for next page (no special ODP headers needed)
     HttpRequest request(HttpMethod::GET, next_url);
-    
+
+    // The next link comes from the server. Attaching the caller's credentials to
+    // whatever host it names would hand the bearer token to that host, so follow
+    // the rule HttpClient already applies to redirects: same origin keeps the
+    // credentials, anything else does not (#101).
+    const bool same_origin = service_origin_url_.empty() || IsSameOrigin(service_origin_url_, next_url);
+    if (!same_origin) {
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
+            "Server-supplied next link points at a different origin than the service (%s -> %s); "
+            "requesting it without credentials",
+            service_origin_url_, next_url));
+    }
+
     // Apply authentication if available
-    if (auth_params_) {
+    if (auth_params_ && same_origin) {
         request.AuthHeadersFromParams(*auth_params_);
     }
     
@@ -136,10 +152,12 @@ std::string OdpRequestOrchestrator::BuildDeltaUrl(const std::string& base_url, c
         has_query = true;
     }
     
-    // Append &!deltatoken=TOKEN
+    // Append &!deltatoken=TOKEN. The token is server-supplied, so it is
+    // percent-encoded rather than pasted in raw: an unescaped '&' or '#' in it
+    // would otherwise change the query the service sees (#105).
     delta_url += has_query ? '&' : '?';
     delta_url += "!deltatoken=";
-    delta_url += delta_token;
+    delta_url += EncodeDeltaToken(delta_token);
     
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", "Built delta URL: " + delta_url);
     return delta_url;
@@ -177,9 +195,15 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteRequest(
             "HTTP request completed - Status: %d, Size: %zu bytes", 
             result.http_status_code, result.response_size_bytes));
         
-        // Check for HTTP errors
+        // Check for HTTP errors. The status and the SAP error code travel with
+        // the exception so callers do not have to grep the message text (#94),
+        // and the body is truncated before it reaches a log or an audit row.
         if (result.http_status_code >= 400) {
-            throw duckdb::IOException("ODP request failed with HTTP " + std::to_string(result.http_status_code) + ": " + http_response->content);
+            const std::string error_code = ExtractErrorCode(http_response->content);
+            throw OdpHttpException(result.http_status_code, error_code,
+                "ODP request failed with HTTP " + std::to_string(result.http_status_code) +
+                (error_code.empty() ? std::string() : " (" + error_code + ")") + ": " +
+                odp_trace::TruncateBody(http_response->content));
         }
         
         // Process OData response
@@ -229,11 +253,9 @@ void OdpRequestOrchestrator::LogRequestDetails(const HttpRequest& request, const
     log_msg << "Executing " << operation_type << " request:" << std::endl;
     log_msg << "  Method: " << request.method.ToString() << std::endl;
     log_msg << "  URL: " << request.url.ToString() << std::endl;
-    log_msg << "  Headers:";
-    
-    for (const auto& header : request.headers) {
-        log_msg << std::endl << "    " << header.first << ": " << header.second;
-    }
+    // Redacted: an Authorization header written verbatim puts the SAP password
+    // or the Entra bearer token into the trace file (#100).
+    log_msg << "  Headers:" << odp_trace::FormatHeaders(request.headers);
     
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", log_msg.str());
 }
@@ -422,6 +444,62 @@ std::string OdpRequestOrchestrator::EnsureJsonFormat(const std::string& url) {
 
 bool OdpRequestOrchestrator::HasJsonFormat(const std::string& url) {
     return url.find("$format=json") != std::string::npos;
+}
+
+bool OdpRequestOrchestrator::IsSameOrigin(const std::string& reference_url, const std::string& candidate_url) {
+    if (reference_url.empty() || candidate_url.empty()) {
+        return false;
+    }
+    try {
+        HttpUrl reference(reference_url);
+        HttpUrl candidate = HttpUrl::MergeWithBaseUrlIfRelative(reference, candidate_url);
+        return reference.IsSameOrigin(candidate);
+    } catch (const std::exception& e) {
+        // An unparseable link is not a link we should send credentials to.
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR", "Could not compare origins: " + std::string(e.what()));
+        return false;
+    }
+}
+
+std::string OdpRequestOrchestrator::EncodeDeltaToken(const std::string& delta_token) {
+    std::ostringstream encoded;
+    encoded << std::hex << std::uppercase << std::setfill('0');
+    for (const unsigned char c : delta_token) {
+        const bool is_unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                                   c == '-' || c == '_' || c == '.' || c == '~';
+        if (is_unreserved) {
+            encoded << static_cast<char>(c);
+        } else {
+            encoded << '%' << std::setw(2) << static_cast<int>(c);
+        }
+    }
+    return encoded.str();
+}
+
+std::string OdpRequestOrchestrator::ExtractErrorCode(const std::string& response_content) {
+    if (response_content.empty()) {
+        return "";
+    }
+
+    // Both OData v2 and v4 error payloads carry {"error":{"code":"..."}}.
+    auto doc = duckdb_yyjson::yyjson_read(response_content.c_str(), response_content.length(), 0);
+    if (!doc) {
+        return "";
+    }
+
+    std::string code;
+    auto root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    if (root) {
+        auto error_obj = duckdb_yyjson::yyjson_obj_get(root, "error");
+        if (error_obj) {
+            auto code_val = duckdb_yyjson::yyjson_obj_get(error_obj, "code");
+            if (code_val && duckdb_yyjson::yyjson_is_str(code_val)) {
+                code = duckdb_yyjson::yyjson_get_str(code_val);
+            }
+        }
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return code;
 }
 
 std::string OdpRequestOrchestrator::NormalizeDeltaToken(const std::string& raw) {
