@@ -885,18 +885,13 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
     std::string constant_value = filter.constant.ToString();
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Constant value: '" + constant_value + "' (type: " + filter.constant.type().ToString() + ")");
     
-    // Skip invalid filters that would generate malformed OData
-    if (constant_value.empty() || constant_value == "''" || constant_value == "\"\"") {
-        // Empty string comparisons often don't make sense and can cause OData errors
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Skipping empty string comparison for column: " + column_name);
-        return "";
-    }
-    
-    // Skip filters with very long values that might cause OData URL issues
-    if (constant_value.length() > 1000) {
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Skipping filter with very long value (length: " + std::to_string(constant_value.length()) + ") for column: " + column_name);
-        return "";
-    }
+    // Nothing is skipped here on the grounds of the value alone. DuckDB removes a
+    // predicate from the plan once it becomes a TableFilter and the function advertises
+    // filter_pushdown, so no residual filter re-applies what we drop: skipping means
+    // returning rows that do not satisfy the query's WHERE clause. An empty string is a
+    // perfectly good OData literal ("Col eq ''", which SAP Gateway answers correctly),
+    // and an over-long literal is the service's business - a rejection from the server is
+    // loud, unlike a silently wrong answer. See GitHub #153.
     
     std::stringstream result;
     result << column_name << " ";
@@ -922,23 +917,29 @@ std::string ODataPredicatePushdownHelper::TranslateConstantComparison(const duck
             comparison_operator = "ge";
             break;
         default:
-            // Unsupported comparison type - skip this filter
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Unsupported comparison type for column: " + column_name);
-            return "";
+            // Skipping would silently widen the result set (see above), so fail instead.
+            ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Unsupported comparison type for column: " + column_name);
+            throw duckdb::NotImplementedException(
+                "OData pushdown cannot express the comparison used on column '" + column_name +
+                "'. Please open an issue at https://github.com/DataZooDE/erpl-web/issues");
     }
     
     result << comparison_operator;
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Using comparison operator: " + comparison_operator);
 
-    // Render the constant as a version-appropriate OData literal. A type with no
-    // safe literal form drops the whole comparison rather than emitting a
-    // wrongly-typed one; DuckDB still applies it as a residual filter.
+    // Render the constant as a version-appropriate OData literal. A type with no safe
+    // literal form cannot be pushed and cannot be left to DuckDB either, because the
+    // predicate is no longer in the plan - so the query fails rather than answering with
+    // rows that do not match it.
     const auto literal = FormatODataLiteral(filter.constant, odata_version);
     if (!literal.has_value()) {
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN",
+        ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN",
                          "No OData literal form for type " + filter.constant.type().ToString() +
-                         " on column " + column_name + "; leaving the filter to DuckDB");
-        return "";
+                         " on column " + column_name);
+        throw duckdb::NotImplementedException(
+            "OData pushdown has no literal form for type " + filter.constant.type().ToString() +
+            " used in a comparison on column '" + column_name +
+            "'. Cast the value to a type the service understands, or filter after reading.");
     }
     result << " " << *literal;
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Added literal: " + *literal);
@@ -986,9 +987,10 @@ std::string ODataPredicatePushdownHelper::TranslateInFilter(const duckdb::InFilt
 }
 
 std::string ODataPredicatePushdownHelper::TranslateConjunction(const duckdb::ConjunctionAndFilter &filter, const std::string &column_name) const {
-    // Children that cannot be translated are dropped. That widens the result
-    // set, and DuckDB's residual filter removes the surplus rows, so the answer
-    // stays correct.
+    // A child that cannot be translated throws, and the exception propagates: dropping
+    // it would widen the result set with nothing downstream to narrow it again. An empty
+    // translation now means only "advisory filter" (optional, bloom, or an uninitialised
+    // dynamic filter), which is safe to leave out. See GitHub #153.
     std::vector<std::string> translated;
     translated.reserve(filter.child_filters.size());
     for (const auto &child : filter.child_filters) {
