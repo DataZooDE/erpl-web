@@ -141,8 +141,14 @@ TEST_CASE("ODataDataExtractor - rejects a value that does not fit an INTEGER col
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(1, "4000000000", "8"));
 
+    // The unrepresentable amount becomes a NULL in place; the rest of the
+    // expanded row survives. Discarding the whole collection because one number
+    // does not fit would throw away data that is perfectly good.
     auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
-    REQUIRE(orders.IsNull());
+    REQUIRE_FALSE(orders.IsNull());
+    auto &row = duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(orders)[0]);
+    REQUIRE(row[1].IsNull());
+    REQUIRE(row[0].ToString() == "o0");
     REQUIRE(extractor.GetLastError().find("4000000000") != std::string::npos);
 }
 
@@ -152,7 +158,9 @@ TEST_CASE("ODataDataExtractor - rejects a negative value below the INTEGER range
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(1, "-4000000000", "8"));
 
     auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
-    REQUIRE(orders.IsNull());
+    REQUIRE_FALSE(orders.IsNull());
+    auto &row = duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(orders)[0]);
+    REQUIRE(row[1].IsNull());
     REQUIRE(extractor.GetLastError().find("-4000000000") != std::string::npos);
 }
 
@@ -168,7 +176,10 @@ TEST_CASE("ODataDataExtractor - an out-of-range value does not shift later rows"
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(json);
 
-    REQUIRE(extractor.ExtractExpandedDataForRow("0", "Orders").IsNull());
+    // Row 0 keeps its shape with a NULL amount, so row 1 is still row 1.
+    auto first = extractor.ExtractExpandedDataForRow("0", "Orders");
+    REQUIRE_FALSE(first.IsNull());
+    REQUIRE(duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(first)[0])[1].IsNull());
 
     auto second = extractor.ExtractExpandedDataForRow("1", "Orders");
     REQUIRE_FALSE(second.IsNull());

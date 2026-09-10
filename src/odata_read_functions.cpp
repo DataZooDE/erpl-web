@@ -404,9 +404,14 @@ ODataReadBindData::ODataReadBindData(
 void ODataReadBindData::InitializeComponents(bool service_root_mode) {
     predicate_pushdown_helper = nullptr;
 
+  // The failure log is created first and owned here: page responses and the
+  // row buffer are replaced during pagination, the log must not be.
+  conversion_failure_log = std::make_shared<ConversionFailureLog>();
+
   // Only create entity-set specific components if not in service root mode
   if (!service_root_mode) {
     data_extractor = std::make_shared<ODataDataExtractor>(odata_client);
+    data_extractor->SetConversionFailureLog(conversion_failure_log);
     type_resolver = std::make_shared<ODataTypeResolver>(odata_client);
   } else {
     // In service root mode, these components are not needed and would trigger
@@ -420,6 +425,39 @@ void ODataReadBindData::InitializeComponents(bool service_root_mode) {
 
     progress_tracker = std::make_shared<ODataProgressTracker>();
     row_buffer = std::make_shared<ODataRowBuffer>();
+}
+
+ODataReadBindData::~ODataReadBindData() {
+  // Safety net: a query with a LIMIT may be torn down before the scan reaches
+  // its terminal call, and the user should still learn about bad values.
+  try {
+    ReportConversionFailures();
+  } catch (...) {
+    // Never let a destructor throw.
+  }
+}
+
+void ODataReadBindData::SetStrictTyping(bool strict) {
+  if (!conversion_failure_log) {
+    conversion_failure_log = std::make_shared<ConversionFailureLog>();
+  }
+  conversion_failure_log->SetStrictTyping(strict);
+  ERPL_TRACE_INFO("ODATA_READ_BIND",
+                  std::string("strict_typing set to ") +
+                      (strict ? "true" : "false"));
+}
+
+std::shared_ptr<ConversionFailureLog>
+ODataReadBindData::GetConversionFailureLog() const {
+  return conversion_failure_log;
+}
+
+void ODataReadBindData::ReportConversionFailures() {
+  if (conversion_failures_reported_ || !conversion_failure_log) {
+    return;
+  }
+  conversion_failures_reported_ = true;
+  conversion_failure_log->ReportAndDrain("odata_read");
 }
 
 // Helper methods for URL detection
@@ -1185,6 +1223,9 @@ void ODataReadBindData::ProcessPageResponse(
             ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                            "Extracting expanded data from subsequent page");
             data_extractor->ExtractExpandedDataFromResponse(response->RawContent());
+        } catch (const StrictTypingViolation &) {
+            // strict_typing must fail the query, not be downgraded to a warning.
+            throw;
         } catch (const std::exception &e) {
             ERPL_TRACE_WARN(
                 "ODATA_READ_BIND",
@@ -1196,6 +1237,7 @@ void ODataReadBindData::ProcessPageResponse(
     // Buffer full rows using full schema to keep indices stable
     auto column_names = schema_info.all_result_names;
     auto column_types = schema_info.all_result_types;
+    response->Content()->SetConversionFailureLog(conversion_failure_log);
     auto page_rows = response->ToRows(column_names, column_types);
     const auto row_count = page_rows.size();
     row_buffer->AddRows(std::move(page_rows));
@@ -1649,6 +1691,9 @@ void ODataReadBindData::BufferFirstPageFromResponse(
             ERPL_TRACE_DEBUG("ODATA_READ_BIND",
                              "Extracting expanded data from buffered first page");
             data_extractor->ExtractExpandedDataFromResponse(response->RawContent());
+        } catch (const StrictTypingViolation &) {
+            // strict_typing must fail the query, not be downgraded to a warning.
+            throw;
         } catch (const std::exception &e) {
             ERPL_TRACE_WARN("ODATA_READ_BIND",
                             std::string("Failed to extract expanded data from "
@@ -1674,6 +1719,7 @@ void ODataReadBindData::BufferFirstPageFromResponse(
     auto all_result_names_local = GetResultNames(true);
     auto all_result_types_local = GetResultTypes(true);
 
+    response->Content()->SetConversionFailureLog(conversion_failure_log);
     auto page_rows = response->ToRows(all_result_names_local, all_result_types_local);
     row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
@@ -1949,6 +1995,18 @@ void ProcessNamedParameters(ODataReadBindData *bind_data,
     ProcessExpandClause(bind_data, expand_value);
   }
 
+  // Handle STRICT_TYPING parameter
+  if (input.named_parameters.find("strict_typing") !=
+      input.named_parameters.end()) {
+      auto strict_value =
+          input.named_parameters["strict_typing"].GetValue<bool>();
+      ERPL_TRACE_DEBUG("ODATA_BIND",
+                       duckdb::StringUtil::Format(
+                           "Named parameter 'strict_typing' set to: %s",
+                           strict_value ? "true" : "false"));
+      bind_data->SetStrictTyping(strict_value);
+  }
+
   // Handle COUNT parameter
   if (input.named_parameters.find("count") != input.named_parameters.end()) {
       auto count_value =
@@ -2138,6 +2196,8 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
     
   if (!bind_data.HasMoreResults()) {
         ERPL_TRACE_DEBUG("ODATA_SCAN", "No more results available");
+        // End of scan: surface the per-column conversion failures once.
+        bind_data.ReportConversionFailures();
         return;
     }
     
@@ -2145,6 +2205,10 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
     auto rows_fetched = bind_data.FetchNextResult(output);
   ERPL_TRACE_INFO("ODATA_SCAN",
                   duckdb::StringUtil::Format("Fetched %d rows", rows_fetched));
+
+    if (!bind_data.HasMoreResults()) {
+        bind_data.ReportConversionFailures();
+    }
 }
 
 TableFunctionSet CreateODataReadFunction() {
@@ -2160,6 +2224,10 @@ TableFunctionSet CreateODataReadFunction() {
     read_entity_set.named_parameters["skip"] = LogicalTypeId::UBIGINT;
     read_entity_set.named_parameters["expand"] = LogicalTypeId::VARCHAR;
     read_entity_set.named_parameters["count"] = LogicalTypeId::BOOLEAN;
+    // Off by default: turning today's silently-wrong queries into hard
+    // failures would be its own regression. On, a value we cannot convert
+    // fails the query instead of arriving as an indistinguishable NULL.
+    read_entity_set.named_parameters["strict_typing"] = LogicalTypeId::BOOLEAN;
 
     function_set.AddFunction(read_entity_set);
     return function_set;

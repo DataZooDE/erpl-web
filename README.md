@@ -406,7 +406,16 @@ FROM odata_read(
     expand = 'Orders'
 )
 WHERE Country = 'Germany';
+
+-- Fail the query on the first value that cannot be converted to its column
+-- type, instead of receiving it as a NULL that looks like server-sent NULL
+SELECT * FROM odata_read('https://example.com/svc/Orders', strict_typing = true);
 ```
+
+By default (`strict_typing = false`) a value that cannot be converted is
+returned as `NULL`, the rest of the row is kept, and a warning naming the
+column, the number of failures and the first offending value is printed once
+per scan. Values are never silently replaced by `0`, `''` or `false`.
 
 Attach usage:
 

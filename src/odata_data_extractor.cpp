@@ -41,16 +41,12 @@ private:
   JsonDoc *doc;
 };
 
-// Raised when a JSON number cannot be represented in the DuckDB column type the
-// EDM metadata demands. It is deliberately distinct from the soft conversion
-// failures the fallback paths absorb: silently substituting a truncated or
-// default value here would corrupt the user's data without any signal, so this
-// exception is re-thrown through the parsing chain until it reaches the caller.
-class NumericRangeError : public duckdb::ConversionException {
-public:
-  explicit NumericRangeError(const std::string &message)
-      : duckdb::ConversionException(message) {}
-};
+// NumericRangeError comes from conversion_failure_log.hpp: a JSON number that
+// cannot be represented in the DuckDB column type the EDM metadata demands.
+// It is deliberately distinct from the soft conversion failures the fallback
+// paths absorb - silently substituting a truncated or default value here would
+// corrupt the user's data with no signal - so it is thrown through the parsing
+// chain and recorded against the column by the caller.
 
 static std::string JsonValueToString(JsonValue *value) {
   char *json_str = duckdb_yyjson::yyjson_val_write(value, 0, nullptr);
@@ -280,6 +276,9 @@ void ODataDataExtractor::ExtractExpandedDataFromResponse(
                 }
             }
         }
+  } catch (const StrictTypingViolation &) {
+    // strict_typing must fail the query, not be downgraded to a warning.
+    throw;
   } catch (const std::exception &e) {
     ERPL_TRACE_WARN("DATA_EXTRACTOR",
                     "Error processing expanded data: " + std::string(e.what()));
@@ -346,6 +345,7 @@ void ODataDataExtractor::ProcessExpandedDataRows(
           continue;
         }
 
+        current_column_context_ = expand_path;
         try {
           auto parsed_value = ParseExpandedDataRecursively(
               expand_data, expand_path, GetExpandedTargetType(expand_path));
@@ -353,28 +353,38 @@ void ODataDataExtractor::ProcessExpandedDataRows(
           ERPL_TRACE_DEBUG("DATA_EXTRACTOR",
                            "Extracted expanded data for path '" + expand_path +
                                "' at row " + std::to_string(row_index));
+        } catch (const StrictTypingViolation &) {
+          // strict_typing fails the whole query, so cache alignment no longer
+          // matters - let it out.
+          throw;
         } catch (const NumericRangeError &e) {
-          // A value that does not fit its column is a data-integrity problem,
-          // so it is logged at ERROR level and retained in GetLastError()
-          // rather than being converted into a wrapped-around number.
+          // A value that does not fit its column is a data-integrity problem, so
+          // it is recorded against the column rather than wrapped around into a
+          // different number.
           //
-          // The cache is indexed by row position, so this row still has to
+          // The cache is indexed by row position, so this row must still
           // contribute exactly one entry per expand path - skipping it would
-          // shift every later row onto the wrong expanded value. Re-throwing is
-          // not an option either: both callers in odata_read_functions.cpp
-          // swallow exceptions from ExtractExpandedDataFromResponse and carry
-          // on, which would leave the cache short and misalign the following
-          // pages. Making this reach the SQL user needs those two call sites to
-          // stop swallowing (GitHub #81 follow-up).
+          // shift every later row onto the wrong expanded value, and re-throwing
+          // would leave this page's cache short and misalign the pages after it.
+          // So the failure is logged and an aligned NULL is pushed.
+          // Recorded for the end-of-scan report the user sees, and retained in
+          // GetLastError() for programmatic diagnosis.
           LogError("EXPANDED_DATA_RANGE",
                    "Dropping expanded value for path '" + expand_path +
                        "' at row " + std::to_string(row_index) + ": " +
                        e.what());
+          RecordConversionFailure(expand_path, "", e.what());
           expanded_data_cache[expand_path].push_back(duckdb::Value());
         } catch (const std::exception &e) {
           ERPL_TRACE_WARN("DATA_EXTRACTOR",
                           "Failed to parse expand data for path '" +
                               expand_path + "': " + e.what());
+          // The exception MUST stop here: expanded_data_cache is indexed by
+          // row position, so skipping the push_back would leave this page's
+          // cache short and misalign every later page onto the wrong rows.
+          // Alignment is preserved by pushing a NULL in place; visibility is
+          // preserved by recording the failure for the end-of-scan report.
+          RecordConversionFailure(expand_path, "<expanded payload>", e.what());
           expanded_data_cache[expand_path].push_back(duckdb::Value());
         }
       }
@@ -508,12 +518,14 @@ duckdb::Value ODataDataExtractor::ParseJsonValueToDuckDBValue(
     default:
       return ConvertFallbackAsString(value, target_type);
     }
+  } catch (const StrictTypingViolation &) {
+    throw;
   } catch (const NumericRangeError &) {
     throw;
   } catch (const std::exception &e) {
     LogError("JSON_PARSING",
              "Unexpected error parsing JSON value: " + std::string(e.what()));
-    return CreateFallbackValue(target_type);
+    return CreateFallbackValue(target_type, e.what());
   }
 }
 
@@ -807,12 +819,30 @@ ODataDataExtractor::ParseJsonArray(duckdb_yyjson::yyjson_val *array_val,
 
     duckdb_yyjson::yyjson_val *item;
         while ((item = duckdb_yyjson::yyjson_arr_iter_next(&arr_it))) {
-            list_values.push_back(ParseJsonValueToDuckDBValue(item, child_type));
+            try {
+                list_values.push_back(ParseJsonValueToDuckDBValue(item, child_type));
+            } catch (const StrictTypingViolation &) {
+                throw;
+            } catch (const NumericRangeError &e) {
+                // One unrepresentable element must not discard the rest of the
+                // collection, and must not shorten it either: a missing element
+                // would re-index every element after it. So the failure is
+                // recorded and a typed NULL takes its place, in position.
+                LogError("ARRAY_ELEMENT_RANGE", e.what());
+                // Attribute the failure to the column being extracted, not to the
+                // element's type, so the end-of-scan report names something the
+                // user can act on.
+                RecordConversionFailure(current_column_context_.empty()
+                                            ? child_type.ToString()
+                                            : current_column_context_,
+                                        JsonValueToString(item), e.what());
+                list_values.push_back(duckdb::Value(child_type));
+            }
         }
 
         return duckdb::Value::LIST(child_type, list_values);
 
-  } catch (const NumericRangeError &) {
+  } catch (const StrictTypingViolation &) {
     throw;
   } catch (const std::exception &e) {
     LogError("ARRAY_PARSING",
@@ -852,13 +882,27 @@ ODataDataExtractor::ParseJsonObject(duckdb_yyjson::yyjson_val *obj_val,
             if (it != child_index.end()) {
                 size_t pos = it->second;
                 const auto &field_type = struct_types[pos].second;
-                struct_values[pos] = ParseJsonValueToDuckDBValue(json_val, field_type);
+                try {
+                    struct_values[pos] = ParseJsonValueToDuckDBValue(json_val, field_type);
+                } catch (const StrictTypingViolation &) {
+                    throw;
+                } catch (const NumericRangeError &e) {
+                    // Only the offending field becomes NULL. Discarding the whole
+                    // record because one number does not fit would throw away the
+                    // fields that are perfectly good, and the record still has to
+                    // occupy its position so later rows are not re-indexed.
+                    LogError("STRUCT_FIELD_RANGE",
+                             "Field '" + struct_types[pos].first + "': " + e.what());
+                    RecordConversionFailure(struct_types[pos].first,
+                                            JsonValueToString(json_val), e.what());
+                    struct_values[pos] = duckdb::Value(field_type);
+                }
             }
         }
         
         return duckdb::Value::STRUCT(target_type, struct_values);
 
-  } catch (const NumericRangeError &) {
+  } catch (const StrictTypingViolation &) {
     throw;
   } catch (const std::exception &e) {
     LogError("OBJECT_PARSING",
@@ -1006,33 +1050,34 @@ bool ODataDataExtractor::ShouldRetryAfterError(
     return it == error_counts_.end() || it->second < 3; // Retry up to 3 times
 }
 
+void ODataDataExtractor::SetConversionFailureLog(
+    std::shared_ptr<ConversionFailureLog> log) {
+  conversion_failure_log_ = std::move(log);
+}
+
+void ODataDataExtractor::RecordConversionFailure(
+    const std::string &column_name, const std::string &offending_value,
+    const std::string &error_message) const {
+  if (!conversion_failure_log_) {
+    return;
+  }
+  conversion_failure_log_->RecordFailure(column_name, offending_value,
+                                         error_message);
+}
+
+// A value we could not build becomes a NULL, never a fabricated 0 / "" / false.
+// Substituting a zero into a numeric column makes a conversion failure
+// indistinguishable from a real zero the server sent, which is exactly the
+// silent substitution the rest of this file refuses to do.
 duckdb::Value ODataDataExtractor::CreateFallbackValue(
-    const duckdb::LogicalType &target_type) const {
-    switch (target_type.id()) {
-        case duckdb::LogicalTypeId::VARCHAR:
-            return duckdb::Value("");
-        case duckdb::LogicalTypeId::INTEGER:
-            return duckdb::Value(0);
-        case duckdb::LogicalTypeId::BIGINT:
-            return duckdb::Value(static_cast<int64_t>(0));
-        case duckdb::LogicalTypeId::FLOAT:
-        case duckdb::LogicalTypeId::DOUBLE:
-            return duckdb::Value(0.0);
-        case duckdb::LogicalTypeId::BOOLEAN:
-            return duckdb::Value(false);
-        case duckdb::LogicalTypeId::LIST:
-            return duckdb::Value::LIST(duckdb::ListType::GetChildType(target_type), {});
-  case duckdb::LogicalTypeId::STRUCT: {
-    auto &struct_types = duckdb::StructType::GetChildTypes(target_type);
-            duckdb::vector<duckdb::Value> null_values;
-            for (size_t i = 0; i < struct_types.size(); ++i) {
-                null_values.push_back(duckdb::Value());
-            }
-            return duckdb::Value::STRUCT(target_type, null_values);
-        }
-        default:
-            return duckdb::Value(); // NULL for unknown types
-    }
+    const duckdb::LogicalType &target_type, const std::string &reason,
+    const std::string &offending_value) const {
+  const auto message =
+      reason.empty()
+          ? "value could not be converted to " + target_type.ToString()
+          : reason;
+  RecordConversionFailure(current_column_context_, offending_value, message);
+  return duckdb::Value(target_type);
 }
 
 // Performance and memory management methods
