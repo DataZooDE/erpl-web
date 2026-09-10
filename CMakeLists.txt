@@ -111,6 +111,11 @@ set(EXTENSION_SOURCES
     src/odata_data_extractor.cpp
     src/odata_describe_functions.cpp
     src/odata_read_functions.cpp
+    src/odata_read_bind_data.cpp
+    src/odata_read_scan_state.cpp
+    src/odata_read_pushdown.cpp
+    src/odata_type_resolver.cpp
+    src/odata_error_mapping.cpp
     src/odata_storage.cpp
     src/odata_catalog.cpp
     src/odata_transaction_manager.cpp
