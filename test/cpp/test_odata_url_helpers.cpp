@@ -102,3 +102,38 @@ TEST_CASE("ODataUrlResolver only treats .svc as a service root at a segment boun
     HttpUrl later_segment("https://host/a.svcx/Sales.svc/Orders");
     REQUIRE(r.resolveMetadataUrl(later_segment, "") == "https://host/a.svcx/Sales.svc/$metadata");
 }
+
+TEST_CASE("normalizeAndSanitizeExpand does not split options inside a string literal", "[odata_url]") {
+    // GitHub #122: the option splitter treated ';' as a separator even inside a quoted
+    // literal, so "$filter=Name eq 'Product;Name'" was cut in half - the first part was
+    // encoded as a filter value and the trailing "Name'" was re-emitted as a separate
+    // valueless option key, with its apostrophe left raw. A round-trip decode still
+    // matched the input, which is why it looked benign, but what reached the wire was a
+    // half-encoded expression containing an unescaped quote.
+    auto sanitized = ODataUrlCodec::normalizeAndSanitizeExpand("Products($filter=Name eq 'Product;Name')");
+
+    // The whole literal must be inside one encoded $filter value: the semicolon belongs
+    // to the string, so it must be percent-encoded rather than left as a separator.
+    REQUIRE(sanitized.find("%3B") != std::string::npos);
+    REQUIRE(sanitized.find(";Name'") == std::string::npos);
+}
+
+TEST_CASE("normalizeAndSanitizeExpand handles a comma inside a string literal", "[odata_url]") {
+    auto sanitized = ODataUrlCodec::normalizeAndSanitizeExpand("Products($filter=Name eq 'A,B')");
+    REQUIRE(sanitized.find("%2C") != std::string::npos);
+}
+
+TEST_CASE("normalizeAndSanitizeExpand survives OData's doubled-quote escape", "[odata_url]") {
+    // A naive toggle-on-quote scanner desynchronises on the escaped quote and treats the
+    // rest of the expression as being outside the literal.
+    auto sanitized = ODataUrlCodec::normalizeAndSanitizeExpand("Products($filter=Name eq 'O''Brien;X')");
+    REQUIRE(sanitized.find("%3B") != std::string::npos);
+    REQUIRE(sanitized.find(";X'") == std::string::npos);
+}
+
+TEST_CASE("normalizeAndSanitizeExpand keeps a parenthesis inside a literal from closing the group",
+          "[odata_url]") {
+    auto sanitized = ODataUrlCodec::normalizeAndSanitizeExpand("Products($filter=Name eq 'A)B';$select=Name)");
+    // $select is part of the same option group, so it must still be $-prefixed and present.
+    REQUIRE(sanitized.find("$select=Name") != std::string::npos);
+}
