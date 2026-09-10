@@ -216,13 +216,24 @@ std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
 
     size_t i = 0;
     while (i < expand_value.size()) {
-        // Copy navigation/property path until options or separator
+        // Copy the navigation/property path until options or a separator. Surrounding
+        // whitespace is dropped: "$expand= Category , Orders " is sloppy at best and is
+        // rejected outright by strict services such as SAP Gateway, which treats the
+        // leading space as part of the property name. See GitHub #115.
+        std::string segment;
         while (i < expand_value.size()) {
             char c = expand_value[i];
             if (c == '(' || c == ',') break;
-            out += c;
+            segment += c;
             i++;
         }
+        while (!segment.empty() && std::isspace(static_cast<unsigned char>(segment.front()))) {
+            segment.erase(segment.begin());
+        }
+        while (!segment.empty() && std::isspace(static_cast<unsigned char>(segment.back()))) {
+            segment.pop_back();
+        }
+        out += segment;
 
         if (i >= expand_value.size()) break;
 
