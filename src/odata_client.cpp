@@ -183,7 +183,25 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
             return nullptr;
         }
 
-        url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
+        auto resolved_next_url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
+
+        // A next link pointing back at the request that produced it never
+        // terminates. Report it instead of looping.
+        if (resolved_next_url.ToString() == url.ToString()) {
+            throw std::runtime_error(
+                "OData service returned a next link identical to the request that produced it ("
+                + url.ToString()
+                + "). Refusing to loop forever; the service is not advancing its paging cursor.");
+        }
+
+        if (++page_request_count > MAX_PAGE_REQUESTS) {
+            throw std::runtime_error(
+                "OData server-driven paging exceeded the ceiling of "
+                + std::to_string(MAX_PAGE_REQUESTS) + " page requests while reading "
+                + url.ToString() + ". Narrow the query with a filter or a top parameter.");
+        }
+
+        url = resolved_next_url;
         ERPL_TRACE_DEBUG("ODATA_CLIENT", "Using next URL: " + url.ToString());
     }
 
