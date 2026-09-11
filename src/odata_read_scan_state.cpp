@@ -231,6 +231,14 @@ idx_t ODataReadBindData::EmitRowsToOutput(duckdb::DataChunk &output, const Schem
     }
     
     output.SetCardinality(to_emit);
+
+    // Rows are emitted strictly in order, so everything before the current position can
+    // never be read again. Releasing here bounds the expand cache to the rows still in
+    // flight instead of the whole scan (GitHub #159).
+    if (data_extractor && HasExpandedData()) {
+        data_extractor->ReleaseExpandedDataBefore(static_cast<duckdb::idx_t>(emitted_row_index_));
+    }
+
     return to_emit;
 }
 
@@ -306,9 +314,9 @@ duckdb::Value ODataReadBindData::GetExpandedColumnValue(
     if (expand_index < data_extractor->GetExpandedDataSchema().size()) {
         std::string expand_path = data_extractor->GetExpandedDataSchema()[expand_index];
         
-        // Use global emitted_row_index_ to align with how cache was filled (per input row)
+        // The cache is filled per input row, so the scan-global emitted index is the key.
         auto expand_data = data_extractor->ExtractExpandedDataForRow(
-            std::to_string(emitted_row_index_), expand_path);
+            static_cast<duckdb::idx_t>(emitted_row_index_), expand_path);
         
         if (!expand_data.IsNull()) {
             ERPL_TRACE_DEBUG("ODATA_SCAN", duckdb::StringUtil::Format("Setting expanded data for path '%s'", expand_path.c_str()));

@@ -200,7 +200,7 @@ TEST_CASE("Expanded data never fabricates a zero", "[conversion_failure]")
         ]
     })");
 
-    auto row0 = extractor.ExtractExpandedDataForRow("0", "Numbers");
+    auto row0 = extractor.ExtractExpandedDataForRow(0, "Numbers");
     auto row0_children = duckdb::ListValue::GetChildren(row0);
     REQUIRE(row0_children.size() == 3);
     REQUIRE(row0_children[0].GetValue<int32_t>() == 1);
@@ -209,7 +209,7 @@ TEST_CASE("Expanded data never fabricates a zero", "[conversion_failure]")
     REQUIRE(row0_children[2].GetValue<int32_t>() == 3);
 
     // Cache alignment across rows survives the failure: row 1 is still row 1.
-    auto row1 = extractor.ExtractExpandedDataForRow("1", "Numbers");
+    auto row1 = extractor.ExtractExpandedDataForRow(1, "Numbers");
     auto row1_children = duckdb::ListValue::GetChildren(row1);
     REQUIRE(row1_children.size() == 2);
     REQUIRE(row1_children[0].GetValue<int32_t>() == 4);
@@ -237,7 +237,7 @@ TEST_CASE("Out-of-range integers are reported, not zeroed", "[conversion_failure
         "value": [ { "Counters": [4294967295] } ]
     })");
 
-    auto row0 = extractor.ExtractExpandedDataForRow("0", "Counters");
+    auto row0 = extractor.ExtractExpandedDataForRow(0, "Counters");
     auto children = duckdb::ListValue::GetChildren(row0);
     REQUIRE(children.size() == 1);
     REQUIRE(children[0].IsNull());

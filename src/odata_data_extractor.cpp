@@ -286,18 +286,21 @@ void ODataDataExtractor::ExtractExpandedDataFromResponse(
 }
 
 duckdb::Value
-ODataDataExtractor::ExtractExpandedDataForRow(const std::string &row_id,
+ODataDataExtractor::ExtractExpandedDataForRow(duckdb::idx_t row_index,
                                               const std::string &expand_path) {
     auto it = expanded_data_cache.find(expand_path);
     if (it != expanded_data_cache.end()) {
-        // Return value for this row index if available
-        try {
-            size_t row_index = static_cast<size_t>(std::stoull(row_id));
-            if (row_index < it->second.size()) {
-                return it->second[row_index];
+        // The vectors are indexed relative to the oldest row still held: anything before
+        // that has been released and must read as NULL rather than as whatever value now
+        // occupies that offset.
+        if (row_index >= expanded_data_base_row_) {
+            const auto local_index = static_cast<size_t>(row_index - expanded_data_base_row_);
+            if (local_index < it->second.size()) {
+                return it->second[local_index];
             }
-        } catch (...) {
-            // ignore parse errors, fall through to NULL
+        }
+        {
+            // fall through to NULL
         }
     }
     return duckdb::Value();
@@ -1094,8 +1097,22 @@ void ODataDataExtractor::EnableCompression(bool enable) {
                        std::string(enable ? "enabled" : "disabled"));
 }
 
+void ODataDataExtractor::ReleaseExpandedDataBefore(duckdb::idx_t row_index) {
+    if (row_index <= expanded_data_base_row_) {
+        return;
+    }
+    const auto to_release = static_cast<size_t>(row_index - expanded_data_base_row_);
+
+    for (auto &[path, values] : expanded_data_cache) {
+        const auto erase_count = std::min(to_release, values.size());
+        values.erase(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(erase_count));
+    }
+    expanded_data_base_row_ = row_index;
+}
+
 void ODataDataExtractor::ClearCache() {
     expanded_data_cache.clear();
+    expanded_data_base_row_ = 0;
     ERPL_TRACE_DEBUG("DATA_EXTRACTOR", "Cleared expanded data cache");
 }
 
