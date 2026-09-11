@@ -161,9 +161,10 @@ TEST_CASE("An IN filter becomes an or-chain instead of throwing", "[odata_filter
 // GitHub #85 - empty child translations must not corrupt a conjunction
 // ---------------------------------------------------------------------------
 
-TEST_CASE("An AND conjunction drops untranslatable children", "[odata_filter]") {
-	// Dropping a child of an AND widens the result set; DuckDB's residual
-	// filter removes the extra rows, so this is safe.
+TEST_CASE("An AND conjunction drops advisory children", "[odata_filter]") {
+	// An uninitialised dynamic filter is advisory - the Top-N optimiser fills it in
+	// later and the query is correct without it - so dropping it is safe. Children
+	// that are NOT advisory must not be dropped; see the case below.
 	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionAndFilter>();
 	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
 
@@ -176,10 +177,11 @@ TEST_CASE("An AND conjunction drops untranslatable children", "[odata_filter]") 
 	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "(Col eq 1)");
 }
 
-TEST_CASE("An OR conjunction is abandoned when any child is untranslatable", "[odata_filter]") {
-	// Dropping a child of an OR would NARROW the result set and silently lose
-	// rows that no residual filter can bring back, so the whole disjunction
-	// must be abandoned instead.
+TEST_CASE("An OR conjunction is abandoned when a branch is merely advisory", "[odata_filter]") {
+	// An advisory branch carries no predicate of its own, so the disjunction it appears in
+	// constrains nothing and pushing a partial form would NARROW the result. Abandoning it
+	// is safe here precisely because the branch was advisory; a branch that genuinely
+	// cannot be translated throws instead (see the case above).
 	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionOrFilter>();
 	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
 
@@ -202,6 +204,134 @@ TEST_CASE("A conjunction with no translatable children produces no $filter", "[o
 	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data));
 
 	REQUIRE(TranslateOne(std::move(conjunction), ODataVersion::V4) == "");
+}
+
+
+// ---------------------------------------------------------------------------
+// GitHub #153 - a filter we cannot translate must never be dropped silently
+// ---------------------------------------------------------------------------
+//
+// DuckDB removes a predicate from the plan once it becomes a TableFilter and the
+// function advertises filter_pushdown (see optimizer/pushdown/pushdown_get.cpp), so
+// nothing re-applies it above the scan. Dropping one therefore returns rows that do
+// not satisfy the query's own WHERE clause. Against live SAP this made
+// "WHERE CurrencyCode = ''" answer 4136 rows where the correct answer is 0.
+
+TEST_CASE("An empty string comparison is translated, not skipped", "[odata_filter]") {
+	// "Col eq ''" is valid OData and SAP Gateway answers it correctly; there was
+	// never a reason to drop it.
+	REQUIRE(TranslateOne(MakeEq(Value("")), ODataVersion::V4) == "Col eq ''");
+	REQUIRE(TranslateOne(MakeEq(Value("")), ODataVersion::V2) == "Col eq ''");
+}
+
+TEST_CASE("A long string literal is translated, not skipped", "[odata_filter]") {
+	// A long literal is the service's business: a rejection from the server is loud,
+	// whereas dropping the filter is silently wrong.
+	const std::string long_value(1001, 'x');
+	const auto translated = TranslateOne(MakeEq(Value(long_value)), ODataVersion::V4);
+	REQUIRE(translated == "Col eq '" + long_value + "'");
+}
+
+TEST_CASE("A constant with no OData literal form fails loudly", "[odata_filter]") {
+	// TIMESTAMP_TZ has no safe literal form. Failing is the only correct answer left,
+	// because DuckDB will not filter the rows for us.
+	REQUIRE_THROWS_AS(TranslateOne(duckdb::make_uniq<duckdb::ConstantFilter>(
+	                                   duckdb::ExpressionType::COMPARE_EQUAL,
+	                                   Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0))),
+	                               ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("An AND conjunction fails loudly when a child cannot be translated", "[odata_filter]") {
+	// Dropping the child would widen the result set with nothing downstream to narrow
+	// it again.
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionAndFilter>();
+	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_EQUAL, Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0))));
+
+	REQUIRE_THROWS_AS(TranslateOne(std::move(conjunction), ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("An initialised dynamic filter of an untranslatable type is skipped, not thrown",
+          "[odata_filter]") {
+	// A dynamic filter comes from the Top-N optimiser and is always enforced again above
+	// the scan, so it is advisory whatever it holds. Once initialised it reaches
+	// TranslateConstantComparison, which now throws for a type with no literal form -- that
+	// would abort "ORDER BY <timestamptz col> LIMIT n", a query that works today.
+	auto filter_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	filter_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	filter_data->initialized = true;
+
+	REQUIRE(TranslateOne(duckdb::make_uniq<duckdb::DynamicFilter>(filter_data),
+	                     ODataVersion::V4) == "");
+}
+
+TEST_CASE("An IN filter fails loudly when a value cannot be translated", "[odata_filter]") {
+	// Same reasoning as the constant comparison: dropping the filter returns rows that do
+	// not satisfy the WHERE clause, and nothing downstream filters them out.
+	duckdb::vector<Value> values;
+	values.push_back(Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	REQUIRE_THROWS_AS(TranslateOne(duckdb::make_uniq<duckdb::InFilter>(std::move(values)),
+	                               ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("A very long IN list is still translated", "[odata_filter]") {
+	// The old 100-value ceiling silently dropped the filter and returned the whole entity
+	// set. A long URL is the service's business; a 414 is loud.
+	duckdb::vector<Value> values;
+	for (int i = 0; i < 101; i++) {
+		values.push_back(Value::INTEGER(i));
+	}
+	const auto translated = TranslateOne(duckdb::make_uniq<duckdb::InFilter>(std::move(values)),
+	                                     ODataVersion::V4);
+	REQUIRE(translated.find("Col eq 0") != std::string::npos);
+	REQUIRE(translated.find("Col eq 100") != std::string::npos);
+}
+
+TEST_CASE("An OR conjunction fails loudly when a branch cannot be translated", "[odata_filter]") {
+	// Pushing nothing means the server returns everything and DuckDB re-applies nothing,
+	// so the query silently widens -- the same defect as dropping an AND child.
+	auto conjunction = duckdb::make_uniq<duckdb::ConjunctionOrFilter>();
+	conjunction->child_filters.push_back(MakeEq(Value::INTEGER(1)));
+	conjunction->child_filters.push_back(duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_EQUAL, Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0))));
+
+	REQUIRE_THROWS_AS(TranslateOne(std::move(conjunction), ODataVersion::V4),
+	                  duckdb::NotImplementedException);
+}
+
+TEST_CASE("A filter on a column that cannot be resolved fails loudly", "[odata_filter]") {
+	// The filter is neither pushed nor re-applied, so continuing past it returns rows that
+	// do not satisfy the WHERE clause. Unlike the other cases this one fires on an ordinary
+	// projection/expand mapping bug rather than on an exotic type, which makes silently
+	// widening worse, not better.
+	ODataPredicatePushdownHelper helper({"Col"});
+	helper.SetODataVersion(ODataVersion::V4);
+
+	duckdb::TableFilterSet filter_set;
+	filter_set.filters[7] = MakeEq(Value::INTEGER(1));  // no column at index 7
+
+	REQUIRE_THROWS(helper.ConsumeFilters(&filter_set));
+}
+
+TEST_CASE("Advisory filters are still skipped rather than failing", "[odata_filter]") {
+	// The contrast: these three are documented as not required for correctness, so
+	// ignoring them stays legitimate and must not become an error.
+	auto sentinel_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	sentinel_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(7));
+	sentinel_data->initialized = false;
+	REQUIRE(TranslateOne(duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data),
+	                     ODataVersion::V4) == "");
+
+	auto child = duckdb::make_uniq<duckdb::ConstantFilter>(duckdb::ExpressionType::COMPARE_EQUAL,
+	                                                       Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	auto optional_filter = duckdb::make_uniq<duckdb::OptionalFilter>(std::move(child));
+	REQUIRE(TranslateOne(std::move(optional_filter), ODataVersion::V4) == "");
 }
 
 // ---------------------------------------------------------------------------
@@ -299,10 +429,13 @@ TEST_CASE("$top is withheld when a filter could not be translated", "[odata_filt
 	helper.ConsumeLimit(10);
 
 	duckdb::TableFilterSet filter_set;
-	// A TIMESTAMP_TZ constant has no safe OData literal form, so it stays local.
-	filter_set.filters[0] = duckdb::make_uniq<duckdb::ConstantFilter>(
-	    duckdb::ExpressionType::COMPARE_EQUAL,
-	    Value::TIMESTAMPTZ(duckdb::timestamp_tz_t(0)));
+	// An advisory filter is the only kind that still reaches the server untranslated:
+	// everything else now fails the query rather than being dropped (GitHub #153).
+	auto sentinel_data = duckdb::make_shared_ptr<duckdb::DynamicFilterData>();
+	sentinel_data->filter = duckdb::make_uniq<duckdb::ConstantFilter>(
+	    duckdb::ExpressionType::COMPARE_LESSTHAN, Value::INTEGER(7));
+	sentinel_data->initialized = false;
+	filter_set.filters[0] = duckdb::make_uniq<duckdb::DynamicFilter>(sentinel_data);
 	helper.ConsumeFilters(&filter_set);
 
 	HttpUrl url("https://host/svc/Entity");

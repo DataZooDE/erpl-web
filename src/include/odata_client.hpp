@@ -126,7 +126,7 @@ private:
 template <typename TResponse>
 class ODataClient {
 public:    
-    ODataClient(std::shared_ptr<CachingHttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params)
+    ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params)
         : http_client(http_client)
         , url(url) 
         , auth_params(auth_params)
@@ -196,7 +196,7 @@ public:
         current_response = std::move(response);
     }
 
-    std::shared_ptr<HttpClient> GetHttpClient() const { return http_client->GetHttpClient(); }
+    std::shared_ptr<HttpClient> GetHttpClient() const { return http_client; }
     std::shared_ptr<HttpAuthParams> AuthParams() const { return auth_params; }
 
     // Server-driven paging follows whatever @odata.nextLink / __next the service
@@ -207,7 +207,15 @@ public:
     static constexpr idx_t MAX_PAGE_REQUESTS = 10000;
 
 protected:
-    std::shared_ptr<CachingHttpClient> http_client;
+    // Deliberately the bare client, not CachingHttpClient. That wrapper is a process-wide
+    // 30s response cache keyed on method + URL + body hash, with credentials excluded from
+    // the key. Nothing that repeats ever reached it - DoMetadataHttpGet bypasses it because
+    // the EDM is cached separately, and ProbeUrl builds its own client - so its only traffic
+    // was nextLink pages, each fetched exactly once. That is a 0% hit rate with 100%
+    // retention: every page body of every scan held for 30s, unbounded. The one case where
+    // the key did match was the same page URL under two different credentials, which served
+    // one caller's rows to another.
+    std::shared_ptr<HttpClient> http_client;
     HttpUrl url;
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<TResponse> current_response;
@@ -316,7 +324,7 @@ protected:
         
         // Use the injected client (bypassing the response cache, as metadata is cached separately
         // in the EdmCache) instead of building a throw-away client per attempt.
-        auto metadata_http_client = (http_client != nullptr) ? http_client->GetHttpClient() : nullptr;
+        auto metadata_http_client = http_client;
         if (metadata_http_client == nullptr) {
             throw std::runtime_error("No HTTP client available to fetch OData metadata from "
                                      + HttpUrl::MergeWithBaseUrlIfRelative(url, sanitized_raw).ToString());
