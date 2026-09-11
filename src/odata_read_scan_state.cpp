@@ -39,6 +39,11 @@ void ODataProgressTracker::IncrementRowsFetched(uint64_t count) {
     rows_fetched_ += count;
 }
 
+// Despite the name, the value is a PERCENTAGE (0-100), not a fraction. That is what
+// DuckDB's table-function contract wants: PhysicalTableScan::GetProgress assigns the
+// returned value to ProgressData::done and sets ProgressData::total = 100.0
+// (duckdb/src/execution/operator/scan/physical_table_scan.cpp). A negative value means
+// "unknown" and makes DuckDB hide the progress bar.
 double ODataProgressTracker::GetProgressFraction() const {
     if (!has_total_ || total_count_ == 0) {
         return -1.0; // unknown -> DuckDB will not show progress
@@ -217,7 +222,13 @@ void ODataReadBindData::ProcessPageResponse(
     const auto row_count = page_rows.size();
     row_buffer->AddRows(std::move(page_rows));
     row_buffer->SetHasNextPage(response->NextUrl().has_value());
-    progress_tracker->IncrementRowsFetched(row_count);
+    // Deliberately no IncrementRowsFetched here. Progress counts rows HANDED TO DuckDB,
+    // and UpdateProgressTracking already counts them as they are emitted. Counting them
+    // again on arrival double-counted every page after the first - the first page is
+    // buffered by BufferFirstPageFromResponse, which never incremented - so progress
+    // saturated at a clamped 100% while barely two thirds of the rows had been delivered.
+    // See GitHub #160.
+    (void)row_count;
 }
 
 idx_t ODataReadBindData::EmitRowsToOutput(duckdb::DataChunk &output, const SchemaInfo& schema_info) {

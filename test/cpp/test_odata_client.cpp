@@ -183,3 +183,13 @@ TEST_CASE("Test ThrowIfNoResponse guards the null response path", "[odata_client
     HttpResponse error_response(HttpMethod::GET, HttpUrl("https://mock.odata.service/test"), 401);
     REQUIRE_NOTHROW(ThrowIfNoResponse(&error_response, "https://mock.odata.service/test"));
 }
+
+// GitHub #161: ODataEntitySetClient redeclared MAX_PAGE_REQUESTS as 100000 while the base
+// class documented 10000, and the guard lives in the derived class - so the enforced
+// ceiling was ten times the documented one, with a dead unused counter beside it. The
+// constant is now single-sourced; this pins the value the guard actually uses.
+TEST_CASE("the server-driven paging ceiling is single-sourced", "[odata_client][paging]") {
+    REQUIRE(ODataEntitySetClient::MAX_PAGE_REQUESTS == 10000);
+    REQUIRE(ODataEntitySetClient::MAX_PAGE_REQUESTS ==
+            ODataClient<ODataEntitySetResponse>::MAX_PAGE_REQUESTS);
+}

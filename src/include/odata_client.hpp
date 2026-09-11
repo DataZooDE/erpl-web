@@ -203,7 +203,14 @@ public:
     // hands back, so the number of requests is bounded by the service and not by
     // us. A service that repeats a link (SAP ODP is known to echo the same
     // $skiptoken on a "!deltatoken" response) would otherwise spin forever.
-    // This is the hard stop on how many pages one client will ever fetch.
+    // This is the hard stop on how many pages one client will ever fetch, and it
+    // is the ONLY definition: ODataEntitySetClient used to redeclare it as
+    // 100000, and because the guard lives in that subclass the enforced ceiling
+    // was ten times the documented one. See GitHub #161.
+    //
+    // The repeated-next-link check above catches the common runaway far earlier;
+    // this is the backstop for a service that keeps advertising *different*
+    // links forever.
     static constexpr idx_t MAX_PAGE_REQUESTS = 10000;
 
 protected:
@@ -480,13 +487,6 @@ public:
 
 private:
     EntitySet GetCurrentEntitySetType();
-
-    // Server-driven paging guard. A service that echoes back a next link
-    // identical to the request that produced it (SAP ODP repeating a
-    // "!deltatoken"/"$skiptoken", or a legal empty page that still carries a
-    // next link) would otherwise spin forever issuing HTTP requests.
-    static constexpr idx_t MAX_PAGE_REQUESTS = 100000;
-    idx_t page_request_count = 0;
 
     // For Datasphere input parameters: storage for input parameters
     std::map<std::string, std::string> input_parameters;
