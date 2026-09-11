@@ -311,8 +311,20 @@ protected:
         metadata_request.headers["Accept"] = "application/xml";
         metadata_request.headers["Connection"] = "close";
         
+        // The SERVICE chooses this URL, through @odata.context, so it is attacker-controlled
+        // input in exactly the way a nextLink is. Credentials go only to the origin this
+        // client was opened against; otherwise a service could name any host and be handed
+        // the caller's bearer token or basic credential. The generic request path has had
+        // this guard since the nextLink case; the metadata path was missed.
         if (auth_params != nullptr) {
-            metadata_request.AuthHeadersFromParams(*auth_params);
+            if (metadata_request.url.IsSameOrigin(url)) {
+                metadata_request.AuthHeadersFromParams(*auth_params);
+            } else {
+                ERPL_TRACE_WARN("ODATA_CLIENT",
+                                "Not sending credentials to '" + metadata_request.url.ToString() +
+                                "': the @odata.context names a different origin from the service "
+                                "this client was opened against ('" + url.ToString() + "').");
+            }
         }
         
         // Trace metadata request details
@@ -416,7 +428,15 @@ protected:
             ERPL_TRACE_DEBUG("ODATA_CLIENT", "Retrying metadata request with popped URL: " + current_svc_url.ToString());
             
             if (auth_params != nullptr) {
-                metadata_request.AuthHeadersFromParams(*auth_params);
+                // Same rule as above: the retry URL is derived from service-supplied input.
+                if (metadata_request.url.IsSameOrigin(url)) {
+                    metadata_request.AuthHeadersFromParams(*auth_params);
+                } else {
+                    ERPL_TRACE_WARN("ODATA_CLIENT",
+                                    "Not sending credentials to '" + metadata_request.url.ToString() +
+                                    "': different origin from the service this client was opened "
+                                    "against.");
+                }
             }   
         }
 
