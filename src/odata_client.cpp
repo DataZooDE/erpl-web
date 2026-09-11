@@ -209,9 +209,15 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
         }
 
         if (page_requests >= MAX_PAGE_REQUESTS) {
+            // Say what to do about it. A caller who hits this on a legitimately huge
+            // extraction has no way to guess that a narrower query or a larger server page
+            // size is the answer, and a bare "limit exceeded" reads like a bug in us.
             throw std::runtime_error(
                 "OData server-driven paging exceeded the limit of " + std::to_string(MAX_PAGE_REQUESTS) +
-                " pages; the service keeps advertising a next link. Last URL: " + resolved_next_url.ToString());
+                " pages; the service keeps advertising a next link. Either the service is "
+                "looping, or this extraction genuinely needs more pages than the limit "
+                "allows - in which case narrow the read with a filter, or ask the service "
+                "for larger pages. Last URL: " + resolved_next_url.ToString());
         }
         page_requests++;
 
