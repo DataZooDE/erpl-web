@@ -147,6 +147,21 @@ int64_t OdpSubscriptionStateManager::CreateAuditEntry(const std::string& operati
     }
 }
 
+void OdpSubscriptionStateManager::UpdateAuditTotals(int64_t audit_id, int64_t rows_fetched,
+                                                    int64_t package_size_bytes) {
+    ERPL_TRACE_DEBUG("ODP_STATE_MANAGER",
+                     duckdb::StringUtil::Format("Recording audit totals for %lld: Rows=%lld, Size=%lld",
+                                                audit_id, rows_fetched, package_size_bytes));
+    try {
+        repository_->UpdateAuditTotals(audit_id, rows_fetched, package_size_bytes);
+    } catch (const std::exception& e) {
+        // An audit row is a record of the extraction, not part of it; failing to write it
+        // must not fail a scan that delivered its rows.
+        ERPL_TRACE_ERROR("ODP_STATE_MANAGER",
+                         "Failed to record audit totals: " + std::string(e.what()));
+    }
+}
+
 void OdpSubscriptionStateManager::UpdateAuditEntry(int64_t audit_id,
                                                   const std::optional<int>& http_status_code,
                                                   int64_t rows_fetched,

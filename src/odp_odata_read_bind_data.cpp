@@ -478,8 +478,11 @@ void OdpODataReadBindData::WriteAuditTotals() {
     // a scan finalised more than once does not overwrite a complete row with a second,
     // emptier one.
     audit_written_ = true;
-    state_manager_->UpdateAuditEntry(current_audit_id_, 200, audit_rows_fetched_,
-                                     audit_package_size_bytes_);
+    // Only the totals. UpdateAuditEntry assigns every column, so using it here blanked the
+    // delta_token_after and status that the page-boundary updates had recorded - the field
+    // that says which package this audit row is about.
+    state_manager_->UpdateAuditTotals(current_audit_id_, audit_rows_fetched_,
+                                      audit_package_size_bytes_);
     ERPL_TRACE_DEBUG("ODP_BIND_DATA",
                      duckdb::StringUtil::Format("Wrote audit totals: %lld rows, %lld bytes",
                                                 (long long)audit_rows_fetched_,

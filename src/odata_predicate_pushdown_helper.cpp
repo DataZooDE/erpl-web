@@ -681,7 +681,12 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
                 // it from the plan, so nothing re-applies it and the scan returns rows that
                 // do not satisfy the WHERE clause. See GitHub #153.
                 ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column name resolver returned empty string for index " + std::to_string(filter_entry.first));
-                throw duckdb::InternalException(
+                // NotImplementedException, not InternalException: DuckDB treats
+                // ExceptionType::INTERNAL as fatal and calls ValidChecker::Invalidate on the
+                // whole database instance, so a single query with an unresolvable filter
+                // column would take down every later statement on that connection. Failing
+                // the statement is right; failing the instance is not.
+                throw duckdb::NotImplementedException(
                     "OData pushdown could not resolve a column name for filter index " +
                     std::to_string(filter_entry.first) +
                     "; refusing to drop the filter, which would return rows that do not match "
@@ -696,7 +701,8 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
             if (column_index >= all_column_names.size()) {
                 // As above: dropping the filter silently widens the result.
                 ERPL_TRACE_ERROR("PREDICATE_PUSHDOWN", "Column index " + std::to_string(column_index) + " is out of bounds for column names array");
-                throw duckdb::InternalException(
+                // See the note above on why this is not an InternalException.
+                throw duckdb::NotImplementedException(
                     "OData pushdown got a filter for column index " + std::to_string(column_index) +
                     ", but the scan has only " + std::to_string(all_column_names.size()) +
                     " columns; refusing to drop the filter, which would return rows that do not "
