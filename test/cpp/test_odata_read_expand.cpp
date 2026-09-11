@@ -371,6 +371,45 @@ TEST_CASE("odata_read expands identically whether $expand is in the URL or a par
     REQUIRE(url_text == parameter_text);
 }
 
+// A filter that the pushdown layer cannot resolve to a column must not take the database
+// down with it. #153 replaced a silent `continue` with `throw InternalException`, and
+// DuckDB treats ExceptionType::INTERNAL as fatal: client_context.cpp calls
+// ValidChecker::Invalidate(db_inst), after which EVERY later statement on that instance
+// fails. The column resolver only searches the base result names, so a filter on an
+// expanded column resolves to "" and takes exactly that path.
+//
+// Silently dropping the filter was wrong (it returned rows that did not match). Killing
+// the instance is a different and worse kind of wrong.
+TEST_CASE("a filter on an expanded column does not invalidate the database",
+          "[odata_expand][e2e]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/nw/$metadata", "edm_northwind.xml");
+    server.OnPath(
+        "/nw/Products",
+        CannedResponse::Json(MakeV4Page(
+            server.Url("/nw/$metadata") + "#Products",
+            {R"({"ProductID":1,"ProductName":"Chai","SupplierID":1,"CategoryID":1,)"
+             R"("QuantityPerUnit":"10 boxes x 20 bags","UnitPrice":18.0,"UnitsInStock":39,)"
+             R"("UnitsOnOrder":0,"ReorderLevel":10,"Discontinued":false,)"
+             R"("Category":{"CategoryID":1,"CategoryName":"Beverages",)"
+             R"("Description":"Soft drinks, coffees, teas"}})"})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // Whether this particular filter is pushed, translated or errors is not the point.
+    auto result = con.Query("SELECT ProductName FROM odata_read('" + server.Url("/nw/Products") +
+                            "', expand = 'Category') WHERE Category IS NOT NULL");
+    (void)result;
+
+    // The point: the connection must still be usable afterwards.
+    auto after = con.Query("SELECT 1");
+    INFO((after->HasError() ? after->GetError() : std::string()));
+    REQUIRE_FALSE(after->HasError());
+    REQUIRE(after->GetValue(0, 0).GetValue<int32_t>() == 1);
+}
+
 // Catches: an expand that is dropped as soon as another query option is present.
 // $top/$skip and $expand are assembled from the same helper, so a clause that
 // overwrites rather than adds is a plausible regression.

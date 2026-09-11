@@ -153,6 +153,41 @@ TEST_CASE("OdpSubscriptionStateManager - Delta Token Management", "[odp_delta_to
     }
 }
 
+// GitHub #158 follow-up: writing the extraction totals must not blank the rest of the row.
+// UpdateAuditEntry assigns EVERY column, so calling it at the end of a scan with only rows
+// and bytes wiped out the delta_token_after a page-boundary update had recorded - the one
+// field that says which package the audit row refers to.
+TEST_CASE("OdpSubscriptionStateManager - writing totals preserves the delta token",
+          "[odp_audit]") {
+    odp_test::TempDatabase temp_db;
+    ClientContext &context = temp_db.Context();
+
+    const std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTotals";
+    OdpSubscriptionStateManager manager(context, service_url, "EntityOfTotals");
+
+    const int64_t audit_id = manager.CreateAuditEntry("initial_load", service_url);
+    REQUIRE(audit_id > 0);
+
+    // A page boundary records the token and status for the package.
+    manager.UpdateAuditEntry(audit_id, 200, 0, 4096, "TOKEN_FOR_PACKAGE", "", 100);
+
+    // The scan then finishes and records what it actually delivered.
+    manager.UpdateAuditTotals(audit_id, 3000, 24000);
+
+    auto row = temp_db.Conn().Query(
+        "SELECT rows_fetched, package_size_bytes, delta_token_after, http_status_code "
+        "FROM erpl_web.odp_subscription_audit WHERE audit_id = " + std::to_string(audit_id));
+    INFO((row->HasError() ? row->GetError() : std::string()));
+    REQUIRE_FALSE(row->HasError());
+    REQUIRE(row->RowCount() == 1);
+
+    CHECK(row->GetValue(0, 0).GetValue<int64_t>() == 3000);
+    CHECK(row->GetValue(1, 0).GetValue<int64_t>() == 24000);
+    // The token and status must survive the totals write.
+    CHECK(row->GetValue(2, 0).ToString() == "TOKEN_FOR_PACKAGE");
+    CHECK(row->GetValue(3, 0).GetValue<int32_t>() == 200);
+}
+
 TEST_CASE("OdpSubscriptionStateManager - Audit Operations", "[odp_audit]") {
     odp_test::TempDatabase temp_db;
     ClientContext& context = temp_db.Context();

@@ -457,6 +457,28 @@ int64_t OdpSubscriptionRepository::CreateAuditEntry(const OdpAuditEntry& entry) 
     }
 }
 
+bool OdpSubscriptionRepository::UpdateAuditTotals(int64_t audit_id, int64_t rows_fetched,
+                                                 int64_t package_size_bytes)
+{
+    EnsureTablesExist();
+
+    try {
+        auto result = Execute(
+            "UPDATE " + QualifiedTable(AUDIT_TABLE) +
+                " SET response_timestamp = ?, rows_fetched = ?, package_size_bytes = ? "
+                "WHERE audit_id = ?",
+            {TimePointToValue(std::chrono::system_clock::now()),
+             duckdb::Value::BIGINT(rows_fetched),
+             duckdb::Value::BIGINT(package_size_bytes),
+             duckdb::Value::BIGINT(audit_id)});
+        return result != nullptr;
+    } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("ODP_REPOSITORY",
+                         "Failed to update audit totals: " + std::string(e.what()));
+        return false;
+    }
+}
+
 bool OdpSubscriptionRepository::UpdateAuditEntry(const OdpAuditEntry& entry) {
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
         "Updating audit entry %lld for subscription %s",

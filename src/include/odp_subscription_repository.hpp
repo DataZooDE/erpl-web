@@ -109,6 +109,11 @@ public:
     int64_t CreateAuditEntry(const OdpAuditEntry& entry);
     bool UpdateAuditEntry(const OdpAuditEntry& entry);
 
+    // Update ONLY the delivered totals. UpdateAuditEntry assigns every column, so using it
+    // to record what a scan delivered blanks the delta token, status and error the page
+    // boundaries had already written. See GitHub #158.
+    bool UpdateAuditTotals(int64_t audit_id, int64_t rows_fetched, int64_t package_size_bytes);
+
     // Utility methods
     static std::string GenerateSubscriptionId(const std::string& service_url,
                                              const std::string& entity_set_name);

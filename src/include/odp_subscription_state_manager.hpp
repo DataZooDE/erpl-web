@@ -83,6 +83,10 @@ public:
                          const std::string& error_message = "",
                          const std::optional<int64_t>& duration_ms = std::nullopt);
 
+    // Record what the scan actually delivered, without disturbing the token, status or
+    // error already written for the package (GitHub #158).
+    void UpdateAuditTotals(int64_t audit_id, int64_t rows_fetched, int64_t package_size_bytes);
+
     // Utility methods
     static std::string PhaseToString(SubscriptionPhase phase);
     // Throws unless the token consists only of characters SAP uses in delta

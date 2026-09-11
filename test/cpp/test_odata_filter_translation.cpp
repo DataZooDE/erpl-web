@@ -315,7 +315,12 @@ TEST_CASE("A filter on a column that cannot be resolved fails loudly", "[odata_f
 	duckdb::TableFilterSet filter_set;
 	filter_set.filters[7] = MakeEq(Value::INTEGER(1));  // no column at index 7
 
-	REQUIRE_THROWS(helper.ConsumeFilters(&filter_set));
+	// NOT InternalException. DuckDB treats ExceptionType::INTERNAL as fatal -
+	// client_context.cpp calls ValidChecker::Invalidate(db_inst) - so every later statement
+	// on that database instance fails too. An unresolved column index is reachable from a
+	// query (a filter on an expanded column resolves against base names only), so it must
+	// fail the statement, not the instance.
+	REQUIRE_THROWS_AS(helper.ConsumeFilters(&filter_set), duckdb::NotImplementedException);
 }
 
 TEST_CASE("Advisory filters are still skipped rather than failing", "[odata_filter]") {
