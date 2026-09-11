@@ -1515,3 +1515,56 @@ Consultation: .ai/codex_context/20250130_091500_oauth_thread_safety.md"
 - **DuckDB CONTRIBUTING.md** - https://github.com/duckdb/duckdb/blob/main/CONTRIBUTING.md
 - **Community Extensions List** - https://duckdb.org/community_extensions/list_of_extensions (reference implementations)
 - **OpenAI Codex** - https://github.com/openai/codex (consult when stuck on complex problems)
+
+## Provisioning an ODP OData service on the A4H sandbox
+
+The ODP tests need a real ODP OData service. A stock ABAP system has none, and SAP ships
+**no non-UI way** to create one: `CL_RSODP_ODATA_GENERATOR` only generates the MPC/DPC
+classes; the model registration and hub activation live in `CL_RSODP_ODATA_ODP_OUT_GA`,
+which is driven by the SEGW guided-activity UI.
+
+`scripts/sap/zcl_odp_provision.abap` does the same three steps headlessly:
+
+1. `CL_RSODP_ODATA_GENERATOR->GENERATE_CLASSES` — generate MPC/DPC
+2. `/IWBEP/IF_REGISTER_MDL_SERVICE->REGISTER_SERVICE` — register model + service (backend)
+3. `/IWFND/CL_MGW_ACTIVATION_API->ACTIVATE_SERVICE` — add to the Gateway hub and activate the ICF node
+
+Run it with [erpl-adt](https://github.com/DataZooDE/erpl-adt):
+
+```bash
+export SAP_PASSWORD=...
+erpl-adt object create --type CLAS/OC --name ZCL_ODP_PROVISION --package '$TMP' \
+    --description 'ODP provisioning'
+erpl-adt source write ZCL_ODP_PROVISION --type CLAS --file scripts/sap/zcl_odp_provision.abap
+erpl-adt activate ZCL_ODP_PROVISION
+erpl-adt object run ZCL_ODP_PROVISION      # -> generate rc=0 / register OK / activate OK
+```
+
+Then point the tests at it:
+
+```bash
+make test_debug_sap ERPL_SAP_ODP_SERVICE=Z_ODP_FCT_SRV \
+                    ERPL_SAP_ODP_ENTITY_SET=FactsOfZJRODPVSQL
+```
+
+**Things that cost time the first time:**
+
+- The ODP name comes from the CDS view's **SQL view name**, not the CDS name, plus a
+  category suffix: `$F` for `@Analytics.dataCategory: #CUBE`, `$P` for `#DIMENSION`,
+  `$T` for `#TEXT`. List them with
+  `SELECT viewname, odpname FROM rsodpabapcdsextb( p_langu = @sy-langu )` — note that view
+  takes a **parameter**, and forgetting it fails activation with the unhelpful
+  *"The parameter P_LANGU was not bound"*.
+- Everything must live in `$TMP`. The `@Analytics.dataExtraction.*` annotations and the
+  classic ODP APIs are not released for ABAP Cloud, so a HOME-tier package rejects them
+  on an ABAP Cloud developer trial.
+- A source CDS view is provided as `scripts/sap/zjr_odp_v.ddls.abap` over the table in
+  `scripts/sap/zjr_odp_data.tabl.abap`, for a fixture whose contents you control.
+- **Delta is a separate matter.** `RODPS_REPL_ODP_GET_DETAIL` reports
+  `supports_delta = ' '` for ABAP-CDS sources on this system even with
+  `@Analytics.dataExtraction.delta.byElement`, so SAP returns no `__delta` link and no
+  `DeltaLinksOf*` entity set is generated (`CL_RSODP_ODATA_ODP_OUT_MPC` guards it with
+  `CHECK i_supports_delta = ...`). The reader correctly stays in initial-load mode and
+  logs *"change tracking not established"*. Testing the delta lifecycle end to end needs a
+  genuinely delta-capable ODP (CDC-based extraction, or a BW/SAPI source).
+

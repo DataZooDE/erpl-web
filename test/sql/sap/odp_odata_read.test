@@ -22,6 +22,15 @@ require-env ERPL_SAP_ODP_SERVICE
 
 require-env ERPL_SAP_ODP_ENTITY_SET
 
+# ODP delta tokens are refused an in-memory catalog on purpose (GitHub #92): they would
+# vanish at session end and turn every later read into a silent full extraction. A
+# sqllogictest session is in-memory, so the state has to live in a real file.
+statement ok
+ATTACH '__TEST_DIR__/odp_state.db' AS odp_state;
+
+statement ok
+USE odp_state;
+
 statement ok
 CREATE SECRET odp_odata_read_secret (
 	TYPE http_basic,
