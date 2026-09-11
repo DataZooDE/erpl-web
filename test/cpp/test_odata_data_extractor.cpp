@@ -75,6 +75,23 @@ static std::string BuildExpandedPayload(size_t order_count,
     return json;
 }
 
+
+// A page of `row_count` customers, each with one expanded order carrying a distinct id,
+// so a test can tell which row's expanded value it is looking at.
+static std::string BuildMultiRowPayload(size_t first_row, size_t row_count) {
+    std::string json = R"({"value":[)";
+    for (size_t i = 0; i < row_count; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        const auto row = first_row + i;
+        json += R"({"id":"c)" + std::to_string(row) + R"(","Orders":[{"id":"o)" +
+                std::to_string(row) + R"(","amount":1,"total":2}]})";
+    }
+    json += "]}";
+    return json;
+}
+
 // ============================================================================
 // Expanded collections must be returned in full (GitHub #81)
 // ============================================================================
@@ -106,7 +123,7 @@ TEST_CASE("ODataDataExtractor - keeps every element of a large expanded collecti
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(ORDER_COUNT, "7", "8"));
 
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     REQUIRE_FALSE(orders.IsNull());
     REQUIRE(orders.type().id() == duckdb::LogicalTypeId::LIST);
 
@@ -125,7 +142,7 @@ TEST_CASE("ODataDataExtractor - collections just under the former cap are unchan
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(ORDER_COUNT, "7", "8"));
 
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     REQUIRE(duckdb::ListValue::GetChildren(orders).size() == ORDER_COUNT);
 }
 
@@ -144,7 +161,7 @@ TEST_CASE("ODataDataExtractor - rejects a value that does not fit an INTEGER col
     // The unrepresentable amount becomes a NULL in place; the rest of the
     // expanded row survives. Discarding the whole collection because one number
     // does not fit would throw away data that is perfectly good.
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     REQUIRE_FALSE(orders.IsNull());
     auto &row = duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(orders)[0]);
     REQUIRE(row[1].IsNull());
@@ -157,7 +174,7 @@ TEST_CASE("ODataDataExtractor - rejects a negative value below the INTEGER range
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(1, "-4000000000", "8"));
 
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     REQUIRE_FALSE(orders.IsNull());
     auto &row = duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(orders)[0]);
     REQUIRE(row[1].IsNull());
@@ -177,11 +194,11 @@ TEST_CASE("ODataDataExtractor - an out-of-range value does not shift later rows"
     extractor.ExtractExpandedDataFromResponse(json);
 
     // Row 0 keeps its shape with a NULL amount, so row 1 is still row 1.
-    auto first = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto first = extractor.ExtractExpandedDataForRow(0, "Orders");
     REQUIRE_FALSE(first.IsNull());
     REQUIRE(duckdb::StructValue::GetChildren(duckdb::ListValue::GetChildren(first)[0])[1].IsNull());
 
-    auto second = extractor.ExtractExpandedDataForRow("1", "Orders");
+    auto second = extractor.ExtractExpandedDataForRow(1, "Orders");
     REQUIRE_FALSE(second.IsNull());
     auto &children = duckdb::ListValue::GetChildren(second);
     REQUIRE(children.size() == 1);
@@ -193,7 +210,7 @@ TEST_CASE("ODataDataExtractor - accepts the INTEGER boundary values") {
     extractor.SetExpandedDataSchema({"Orders"});
     extractor.ExtractExpandedDataFromResponse(BuildExpandedPayload(1, "2147483647", "8"));
 
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     auto &children = duckdb::ListValue::GetChildren(orders);
     REQUIRE(children.size() == 1);
 
@@ -209,10 +226,56 @@ TEST_CASE("ODataDataExtractor - keeps the full 64-bit width of a BIGINT column")
     extractor.ExtractExpandedDataFromResponse(
         BuildExpandedPayload(1, "7", "9007199254740993"));
 
-    auto orders = extractor.ExtractExpandedDataForRow("0", "Orders");
+    auto orders = extractor.ExtractExpandedDataForRow(0, "Orders");
     auto &children = duckdb::ListValue::GetChildren(orders);
     REQUIRE(children.size() == 1);
 
     auto &fields = duckdb::StructValue::GetChildren(children[0]);
     REQUIRE(fields[2].GetValue<int64_t>() == INT64_C(9007199254740993));
+}
+
+// ============================================================================
+// GitHub #159 - the expand cache must not grow with the whole scan
+// ============================================================================
+
+// One duckdb::Value per row per expand path was appended for every page and never
+// released, so memory grew with TOTAL scan rows rather than with the rows still in
+// flight. Over a large $expand read that is the whole expanded column held in memory.
+TEST_CASE("ODataDataExtractor - releases expanded values once their rows are consumed") {
+    ODataDataExtractor extractor(MakeExtractorClient());
+    extractor.SetExpandedDataSchema({"Orders"});
+
+    extractor.ExtractExpandedDataFromResponse(BuildMultiRowPayload(0, 1000));
+    extractor.ExtractExpandedDataFromResponse(BuildMultiRowPayload(1000, 1000));
+    REQUIRE(extractor.GetCacheSize() == 2000);
+
+    // The scan has emitted the first 1500 rows; their expanded values can never be asked
+    // for again, because rows are emitted strictly in order.
+    extractor.ReleaseExpandedDataBefore(1500);
+    REQUIRE(extractor.GetCacheSize() == 500);
+
+    // Releasing must not shift the rows that remain: row 1500 is still row 1500.
+    auto orders = extractor.ExtractExpandedDataForRow(1500, "Orders");
+    REQUIRE_FALSE(orders.IsNull());
+    auto &children = duckdb::ListValue::GetChildren(orders);
+    REQUIRE(children.size() == 1);
+    REQUIRE(duckdb::StructValue::GetChildren(children[0])[0].ToString() == "o1500");
+
+    auto last = extractor.ExtractExpandedDataForRow(1999, "Orders");
+    REQUIRE_FALSE(last.IsNull());
+    REQUIRE(duckdb::StructValue::GetChildren(
+                duckdb::ListValue::GetChildren(last)[0])[0].ToString() == "o1999");
+}
+
+TEST_CASE("ODataDataExtractor - a released row reads as NULL rather than another row's value") {
+    ODataDataExtractor extractor(MakeExtractorClient());
+    extractor.SetExpandedDataSchema({"Orders"});
+    extractor.ExtractExpandedDataFromResponse(BuildMultiRowPayload(0, 10));
+
+    extractor.ReleaseExpandedDataBefore(5);
+
+    // Asking for a released row is a bug in the caller; it must not silently return the
+    // value that happens to sit at that offset now.
+    REQUIRE(extractor.ExtractExpandedDataForRow(0, "Orders").IsNull());
+    REQUIRE_FALSE(extractor.ExtractExpandedDataForRow(5, "Orders").IsNull());
 }

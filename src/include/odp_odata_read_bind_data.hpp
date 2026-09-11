@@ -174,6 +174,11 @@ public:
     void FinalizeScan();
 
 private:
+    void WriteAuditTotals();
+
+public:
+
+private:
     // ========================================================================
     // Core Components (Composition Pattern)
     // ========================================================================
@@ -198,6 +203,14 @@ private:
     bool initialized_;
     bool first_fetch_completed_;
     int64_t current_audit_id_;
+
+    // Totals for the audit row, accumulated across the whole extraction and written once.
+    // The audit UPDATE assigns rather than adds, so writing per chunk left the row holding
+    // the LAST chunk's count instead of the total - useless for the one thing the audit
+    // table exists for: checking that a package was fully delivered. See GitHub #158.
+    int64_t audit_rows_fetched_ = 0;
+    int64_t audit_package_size_bytes_ = 0;
+    bool audit_written_ = false;
 
     // Incremental pagination state
     // When a multi-page response is being consumed, pending_next_url_ holds the

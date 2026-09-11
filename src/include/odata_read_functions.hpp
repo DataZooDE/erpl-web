@@ -311,7 +311,18 @@ public:
     
     // Core extraction methods
     void ExtractExpandedDataFromResponse(const std::string& response_content);
-    duckdb::Value ExtractExpandedDataForRow(const std::string& row_id, const std::string& expand_path);
+    // row_index is the scan-global index of the row being emitted. It used to be passed as
+    // a string and parsed back per cell; it is an index, so it is typed as one.
+    duckdb::Value ExtractExpandedDataForRow(duckdb::idx_t row_index, const std::string& expand_path);
+
+    // Release the expanded values for every row before row_index.
+    //
+    // Rows are emitted strictly in order, so once the scan has moved past a row its
+    // expanded values can never be asked for again. Without this the cache held one
+    // duckdb::Value per row per expand path for the WHOLE scan - memory grew with total
+    // rows rather than with the rows still in flight, which over a large $expand read is
+    // the entire expanded column. See GitHub #159.
+    void ReleaseExpandedDataBefore(duckdb::idx_t row_index);
     
     // Schema management
     void SetExpandedDataSchema(const std::vector<std::string>& expand_paths);
@@ -356,6 +367,10 @@ private:
     std::vector<std::string> expanded_data_schema;
     std::vector<duckdb::LogicalType> expanded_data_types;
     std::map<std::string, std::vector<duckdb::Value>> expanded_data_cache;
+
+    // Scan-global index of the row held at element 0 of each cache vector. Released rows
+    // are erased from the front, so the vectors are indexed relative to this.
+    duckdb::idx_t expanded_data_base_row_ = 0;
     // Top-level expanded column names (iterate columns)
     std::vector<std::string> expand_paths;
     // Full nested expand paths for recursive inference
