@@ -150,10 +150,14 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
 
         ERPL_TRACE_DEBUG("ODP_BIND_DATA", duckdb::StringUtil::Format("Fetched %u rows", rows_fetched));
 
-        if (current_audit_id_ > 0 && rows_fetched > 0) {
-            state_manager_->UpdateAuditEntry(current_audit_id_, 200, rows_fetched,
-                                           output.size() * output.GetTypes().size() * 8);
-        }
+        // Accumulate; the audit row is written once, when the scan finishes. Writing here
+        // meant one UPDATE per 2048 rows - each on a freshly constructed duckdb::Connection
+        // that takes the connection-manager lock - on the row-emission hot path, and
+        // because the UPDATE assigns rather than adds, the row ended up holding the last
+        // chunk's count rather than the total. See GitHub #158.
+        audit_rows_fetched_ += static_cast<int64_t>(rows_fetched);
+        audit_package_size_bytes_ +=
+            static_cast<int64_t>(output.size() * output.GetTypes().size() * 8);
 
         return rows_fetched;
         
@@ -463,6 +467,23 @@ void OdpODataReadBindData::ProcessRequestResult(const OdpRequestOrchestrator::Od
 
 void OdpODataReadBindData::FinalizeScan() {
     CommitStagedDeltaToken();
+    WriteAuditTotals();
+}
+
+void OdpODataReadBindData::WriteAuditTotals() {
+    if (current_audit_id_ <= 0 || audit_written_) {
+        return;
+    }
+    // Written once per extraction, with the totals the scan actually delivered. Guarded so
+    // a scan finalised more than once does not overwrite a complete row with a second,
+    // emptier one.
+    audit_written_ = true;
+    state_manager_->UpdateAuditEntry(current_audit_id_, 200, audit_rows_fetched_,
+                                     audit_package_size_bytes_);
+    ERPL_TRACE_DEBUG("ODP_BIND_DATA",
+                     duckdb::StringUtil::Format("Wrote audit totals: %lld rows, %lld bytes",
+                                                (long long)audit_rows_fetched_,
+                                                (long long)audit_package_size_bytes_));
 }
 
 void OdpODataReadBindData::CommitStagedDeltaToken() {
