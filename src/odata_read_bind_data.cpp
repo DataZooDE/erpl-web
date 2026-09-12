@@ -262,12 +262,12 @@ ODataReadBindData::GetConversionFailureLog() const {
   return conversion_failure_log;
 }
 
-void ODataReadBindData::ReportConversionFailures() {
+void ODataReadBindData::ReportConversionFailures(const std::string &source) {
   if (conversion_failures_reported_ || !conversion_failure_log) {
     return;
   }
   conversion_failures_reported_ = true;
-  conversion_failure_log->ReportAndDrain("odata_read");
+  conversion_failure_log->ReportAndDrain(source);
 }
 
 // Helper methods for URL detection

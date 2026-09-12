@@ -148,7 +148,11 @@ public:
     void SetStrictTyping(bool strict);
     std::shared_ptr<ConversionFailureLog> GetConversionFailureLog() const;
     // Emit the accumulated per-column failure summary once, at end of scan.
-    void ReportConversionFailures();
+    // `source` names the SQL function in the warning. It defaults to odata_read because
+    // that is where this path began, but every other reader that embeds an
+    // ODataReadBindData must pass its own name - a bc_read user being warned about
+    // "odata_read" is being told about a function they did not call (GitHub #196).
+    void ReportConversionFailures(const std::string &source = "odata_read");
     // Produce an independent scan instance for one execution of a bound plan.
     // See ODataReadGlobalState below and GitHub #75: all mutable scan state
     // (row buffer, paging cursor, progress, emitted-row counter, request

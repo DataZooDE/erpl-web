@@ -461,3 +461,47 @@ TEST_CASE("the remaining catalog functions return every row on each execution",
         }
     }
 }
+
+// GitHub #196. An agent-crew review reported that bc_read/crm_read "silently drop"
+// per-column conversion failures. That was narrower than it looked: a destructor safety
+// net on ODataReadBindData reports them, so they were never lost. What was actually wrong
+// is that they arrived at teardown rather than at the end of the scan, and under the name
+// "odata_read" - a function the caller never invoked.
+//
+// WHAT THIS CASE DOES AND DOES NOT COVER. It is a regression guard for wiring
+// ReportConversionFailures() into the scan's terminal exit: the read must still succeed
+// and deliver every row, because reporting is a diagnostic and must not become a failure
+// mode. It does NOT assert the warning text or its timing - those go out through the
+// tracer, and this harness has no way to capture them. Naming the limitation rather than
+// letting the test imply coverage it does not have.
+TEST_CASE("wiring conversion reporting into the bc_read scan does not break the read",
+          "[ms_reexec][conversion]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/$metadata", "edm_business_central_min.xml");
+    const std::string COMPANY = "11111111-2222-3333-4444-555555555555";
+    const std::string path = "/companies(" + COMPANY + ")/customers";
+    server.OnPath(path,
+                  CannedResponse::Json(MakeV4Page(
+                      server.Url("/$metadata") + "#customers",
+                      {R"({"id":"c1","number":"N1","displayName":"Acme"})",
+                       R"({"id":"c2","number":"N2","displayName":"Beta"})"})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query(
+        "CREATE SECRET bcconv (TYPE business_central, PROVIDER config, "
+        "TENANT_ID 'loopback', CLIENT_ID 'id', CLIENT_SECRET 'sec', "
+        "ENVIRONMENT '" + server.BaseUrl() + "', ACCESS_TOKEN 'test-token', "
+        "EXPIRES_AT '" + FarFutureEpoch() + "')");
+    REQUIRE_FALSE(secret->HasError());
+
+    // The read itself must still succeed and deliver every row - reporting is a diagnostic,
+    // not a failure mode.
+    auto result = con.Query("SELECT COUNT(*) FROM bc_read('customers', secret => 'bcconv', "
+                            "company => '" + COMPANY + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(ScalarOf(result) == 2);
+}

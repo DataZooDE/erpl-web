@@ -337,6 +337,11 @@ static void CrmReadScan(ClientContext &context, TableFunctionInput &data, DataCh
     auto rows_fetched = gstate.Scan().FetchNextResult(output);
     if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
         gstate.finished = true;
+        // Report at the terminal exit, as odata_read does, rather than leaving it to the
+        // bind-data destructor: the destructor fires at teardown, so warnings could land
+        // after the result instead of beside it. Name this function, not odata_read
+        // (GitHub #196).
+        gstate.Scan().ReportConversionFailures("crm_read");
     }
 }
 
