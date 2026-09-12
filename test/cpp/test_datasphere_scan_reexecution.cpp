@@ -267,3 +267,40 @@ TEST_CASE("a Datasphere dual-URL asset re-executes correctly",
         REQUIRE(request.path != data_prefix + "/$metadata");
     }
 }
+
+// The verbatim-URL hatch on space_id carries an OAuth bearer token, exactly like the
+// Business Central and Dataverse ones. Raised by an agent-crew review as an unapplied fix:
+// the loopback restriction went onto BC's hatch and not onto its siblings.
+//
+// The secret's token endpoint has to be a working loopback server: auth is resolved before
+// the data URL is built, so without it the read fails on the token fetch and never reaches
+// the guard under test. (That ordering is itself reassuring - the bearer token is obtained
+// from the configured token endpoint, never sent to the rejected host.)
+TEST_CASE("the Datasphere space_id hatch refuses plain http off loopback",
+          "[datasphere_reexec][security]") {
+    ODataTestServer server;
+    server.OnPath("/oauth/token",
+                  CannedResponse::Json(
+                      R"({"access_token":"test-token","token_type":"Bearer","expires_in":3600})"));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+    CreateLoopbackSecret(con, "dssec", server);
+
+    auto result = con.Query(
+        "SELECT * FROM datasphere_read_relational('http://evil.example/sp', 'A', secret => 'dssec')");
+    REQUIRE(result->HasError());
+    INFO("error was: " << result->GetError());
+    REQUIRE(result->GetError().find("loopback") != std::string::npos);
+    // A caller mistake, not a broken invariant of ours.
+    REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
+
+    // https anywhere is still accepted - the guard must not have become "loopback only".
+    auto https_ok = con.Query(
+        "SELECT * FROM datasphere_read_relational('https://tenant.datasphere.example/sp', 'A', "
+        "secret => 'dssec')");
+    REQUIRE(https_ok->HasError());  // it will fail to CONNECT, but not on the guard
+    INFO("https error was: " << https_ok->GetError());
+    REQUIRE(https_ok->GetError().find("loopback") == std::string::npos);
+}
