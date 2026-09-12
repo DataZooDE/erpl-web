@@ -68,7 +68,7 @@ double OdpODataReadProgress(duckdb::ClientContext &context, const duckdb::Functi
  *   - secret (VARCHAR): DuckDB secret name for authentication
  *   - force_full_load (BOOLEAN): Force full reload instead of delta
  *   - import_delta_token (VARCHAR): Import existing delta token
- *   - max_page_size (UINTEGER): Override default page size
+ *   - max_page_size (UBIGINT): Override default page size (validated, must be > 0)
  * 
  * @return TableFunctionSet for registration with DuckDB
  */

@@ -112,11 +112,40 @@ TEST_CASE("a bound odp_odata_read plan re-extracts in full when the service has 
     }
 }
 
-// The projecting re-execution case is deliberately absent. odp_odata_read returns NULL for
-// every explicitly projected column while SELECT * returns the values - a pre-existing
-// defect filed as GitHub #179, confirmed by reverting every ODP source change here and
-// re-running. A projecting case cannot pass while that stands, and folding the two
-// together would hide one behind the other. It belongs with the fix for #179.
+// The projecting shape needs its own case: for ODP the column selection is held on the
+// wrapper rather than the inner bind data (GitHub #58), so a clone that failed to carry it
+// would run in all-columns mode. This case only became possible once #179 was fixed -
+// before that an explicitly projected column came back NULL for every row, regardless of
+// re-execution, so it would have failed for a reason unrelated to scan state.
+TEST_CASE("a bound projecting odp_odata_read plan returns every row on each execution",
+          "[odp_reexec]") {
+    // D_NW_DIV is Edm.String in edm_sap_odp_bw_fact.xml and the values are distinct per
+    // row, so COUNT(DISTINCT) equals the row count.
+    constexpr std::size_t ROW_COUNT = 90;
+    const std::string path = "/sap/opu/odata/sap/Z_TEST_SRV/FactsOf0D_NW_C01";
+
+    ODataTestServer server;
+    ServeOdpEntitySet(server, path, ROW_COUNT);
+
+    odp_test::TempDatabase db("odp_reexec_proj");
+    auto &con = db.Conn();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    const auto url = server.Url(path);
+    auto prep = con.Query(
+        "PREPARE q AS SELECT COUNT(DISTINCT D_NW_DIV) FROM odp_odata_read('" + url + "')");
+    INFO((prep->HasError() ? prep->GetError() : std::string()));
+    REQUIRE_FALSE(prep->HasError());
+
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE q");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() ==
+                static_cast<int64_t>(ROW_COUNT));
+    }
+}
 
 // The delta-capable counterpart: execution 1 is the initial load and commits the token,
 // execution 2 must resume from it rather than re-extracting. Without per-execution scan

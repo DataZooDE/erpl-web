@@ -313,11 +313,6 @@ private:
     void ProcessRequestResult(const OdpRequestOrchestrator::OdpRequestResult& result,
                              const std::string& operation_type);
 
-    /**
-     * @brief Update the underlying OData client with new URL/token
-     * @param url New URL to use for requests
-     */
-    void UpdateODataClient(const std::string& url);
 
     /**
      * @brief Update OData client with pre-fetched response content
