@@ -86,38 +86,9 @@ duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext 
     }
 }
 
-namespace {
-
-// Owns the private scan state for one execution of a bound plan (GitHub #146).
-class OdpODataReadGlobalState : public duckdb::GlobalTableFunctionState {
-public:
-    explicit OdpODataReadGlobalState(duckdb::unique_ptr<OdpODataReadBindData> scan_state)
-        : scan_state(std::move(scan_state)) {}
-
-    OdpODataReadBindData &Scan() { return *scan_state; }
-
-private:
-    duckdb::unique_ptr<OdpODataReadBindData> scan_state;
-};
-
-// Returns the object that owns the scan state for this execution, falling back to the
-// bind data for any caller that still supplies a bare GlobalTableFunctionState. That
-// fallback is not a safe default - it is the historical behaviour that made the second
-// EXECUTE of a bound plan return nothing.
-OdpODataReadBindData &ResolveOdpScanState(const duckdb::FunctionData *bind_data,
-                                          const duckdb::GlobalTableFunctionState *global_state) {
-    auto *odp_global = dynamic_cast<const OdpODataReadGlobalState *>(global_state);
-    if (odp_global != nullptr) {
-        return const_cast<OdpODataReadGlobalState *>(odp_global)->Scan();
-    }
-    return bind_data->CastNoConst<OdpODataReadBindData>();
-}
-
-} // namespace
-
 void OdpODataReadScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data, duckdb::DataChunk &output) {
-    auto &bind_data = ResolveOdpScanState(data.bind_data.get(), data.global_state.get());
-
+    auto &bind_data = data.bind_data->CastNoConst<OdpODataReadBindData>();
+    
     ERPL_TRACE_DEBUG("ODP_ODATA_READ_SCAN", "Starting ODP scan operation");
     
     try {
@@ -159,16 +130,11 @@ duckdb::unique_ptr<duckdb::GlobalTableFunctionState> OdpODataReadInitGlobalState
     // the re-application in FetchAndLoadNextPage was a no-op and page 2 onwards ran in
     // all-columns mode - which, as the comment there notes, can write out of bounds into a
     // projected chunk. See GitHub #58.
-    // Every execution gets a private clone: the row buffer, the pagination cursor, the
-    // audit id and the delta-token staging slot all live on the instance, so sharing one
-    // made the second EXECUTE of a bound plan return nothing (GitHub #146).
-    auto scan_state = bind_data.CloneForScan();
-
-    scan_state->ActivateColumns(column_ids);
+    bind_data.ActivateColumns(column_ids);
 
     // Filters are deliberately not pushed down for ODP; see the filter_pushdown comment at
     // the function registration below.
-    scan_state->GetODataBindData().UpdateUrlFromPredicatePushdown();
+    bind_data.GetODataBindData().UpdateUrlFromPredicatePushdown();
 
     // Do NOT call PrefetchFirstPage() here. The ODP first fetch must be orchestrator-owned:
     // it is the only path that applies the required Prefer: odata.track-changes /
@@ -177,15 +143,14 @@ duckdb::unique_ptr<duckdb::GlobalTableFunctionState> OdpODataReadInitGlobalState
     // here carries none of those headers, so SAP ODP ignores max_page_size and returns the whole
     // entity set in one response, exceeding the 30 s HTTP read timeout. See GitHub #47.
 
-    return duckdb::make_uniq<OdpODataReadGlobalState>(std::move(scan_state));
+    return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
 }
 
 double OdpODataReadProgress(duckdb::ClientContext &context, const duckdb::FunctionData *func_data,
-                           const duckdb::GlobalTableFunctionState *global_state) {
-    // Progress lives on the per-execution clone, so it has to be read from there rather
-    // than from the bind data (GitHub #146).
-    auto &bind_data = ResolveOdpScanState(func_data, global_state);
-    return bind_data.GetODataBindData().GetProgressFraction();
+                           const duckdb::GlobalTableFunctionState *) {
+    auto &bind_data = func_data->CastNoConst<OdpODataReadBindData>();
+    auto& odata_bind_data = bind_data.GetODataBindData();
+    return odata_bind_data.GetProgressFraction();
 }
 
 // ============================================================================
