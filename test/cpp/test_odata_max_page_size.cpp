@@ -91,7 +91,14 @@ TEST_CASE("odata_read sends no page-size preference unless asked", "[odata_maxpa
 
     REQUIRE_FALSE(con.Query("SELECT COUNT(*) FROM odata_read('" + entity_url + "')")->HasError());
 
-    for (const auto &request : server.RequestsFor("/nomps/Airlines")) {
+    // Without this the loop below asserts nothing whenever the entity set was never
+    // requested at all - which is every way this test could break other than the one it
+    // is meant to catch.
+    const auto requests = server.RequestsFor("/nomps/Airlines");
+    INFO("the entity set was never requested, so the loop below proves nothing");
+    REQUIRE_FALSE(requests.empty());
+
+    for (const auto &request : requests) {
         INFO("Prefer: " << request.Header("Prefer"));
         REQUIRE(request.Header("Prefer").find("odata.maxpagesize") == std::string::npos);
     }
