@@ -129,6 +129,16 @@ private:
 // is advice they cannot act on (GitHub #161).
 std::string BuildPageLimitExceededMessage(idx_t limit, const std::string& last_url);
 
+// Validate a max_page_size named parameter. Shared by odata_read and odp_odata_read so the
+// same user-facing parameter cannot behave differently depending on which reader is asked:
+// odp_odata_read used to take a bare GetValue<uint32_t> with no checks, which let
+// `Prefer: odata.maxpagesize=0` reach the wire and fail service-side instead of locally
+// (GitHub #185).
+//
+// Throws InvalidInputException - a bad argument is the caller's, not a broken invariant of
+// ours, and ExceptionType::INTERNAL would invalidate the whole database instance.
+uint32_t ValidateMaxPageSizeParameter(const duckdb::Value& value);
+
 template <typename TResponse>
 class ODataClient {
 public:    
@@ -580,7 +590,12 @@ public:
     };
     
     // Single probe to determine content type and version
-    static ProbeResult ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params);
+    // max_page_size is taken here, not applied to the client afterwards, because the probe
+    // response IS page one: FromProbeResult buffers it, and for an unprojected read the URL
+    // never changes so that buffer is never refetched. Setting the preference after the
+    // probe therefore missed the first page entirely (GitHub #185).
+    static ProbeResult ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params,
+                                std::optional<uint32_t> max_page_size = std::nullopt);
     
     // Create appropriate client based on probe result
     static std::shared_ptr<ODataEntitySetClient> CreateEntitySetClient(const ProbeResult& result);

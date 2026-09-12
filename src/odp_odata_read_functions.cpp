@@ -46,7 +46,10 @@ duckdb::unique_ptr<duckdb::FunctionData> OdpODataReadBind(duckdb::ClientContext 
             import_delta_token = kv.second.ToString();
             ERPL_TRACE_DEBUG("ODP_ODATA_READ_BIND", "Import delta token: " + import_delta_token);
         } else if (kv.first == "max_page_size") {
-            max_page_size = kv.second.GetValue<uint32_t>();
+            // Shared with odata_read: a bare GetValue<uint32_t> let max_page_size=0 through
+            // and put `Prefer: odata.maxpagesize=0` on the wire, turning a bad argument into
+            // a service-side failure (GitHub #185).
+            max_page_size = ValidateMaxPageSizeParameter(kv.second);
             ERPL_TRACE_DEBUG("ODP_ODATA_READ_BIND", "Max page size: " + std::to_string(max_page_size.value()));
         }
     }
@@ -226,7 +229,9 @@ duckdb::TableFunctionSet CreateOdpODataReadFunction() {
     odp_read_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     odp_read_function.named_parameters["force_full_load"] = duckdb::LogicalType(duckdb::LogicalTypeId::BOOLEAN);
     odp_read_function.named_parameters["import_delta_token"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
-    odp_read_function.named_parameters["max_page_size"] = duckdb::LogicalType(duckdb::LogicalTypeId::UINTEGER);
+    // UBIGINT to match odata_read; the shared validator range-checks it down to 32 bits
+    // and reports an out-of-range value as an argument error rather than silently wrapping.
+    odp_read_function.named_parameters["max_page_size"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     
     function_set.AddFunction(odp_read_function);
     

@@ -234,3 +234,45 @@ TEST_CASE("the page-size preference survives re-execution of a bound plan",
         REQUIRE(asked);
     }
 }
+
+// GitHub #185 / crew F3. ODataReadBind probes the URL before ProcessNamedParameters runs,
+// and FromProbeResult buffers the probe body as page one. With no projection and no filter
+// the URL never changes, so UpdateUrlFromPredicatePushdown takes its early return, the
+// buffered page survives and PrefetchFirstPage is skipped. The result: the headline shape
+// for this feature - a large unprojected extraction - sent page one with NO Prefer header
+// and got the service's default page size; only page two onwards carried the preference.
+//
+// Every other test in this file uses COUNT(*) or a projection, which changes the URL and
+// forces a refetch, so none of them could see it.
+TEST_CASE("odata_read sends the page-size preference on the very first request",
+          "[odata_maxpagesize]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/mpsfirst/Airlines");
+    const std::string context = server.Url("/mpsfirst/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/mpsfirst/$metadata", "edm_trippin.xml");
+    // Deliberately a SINGLE page: with no next link there is no second request that could
+    // carry the header and rescue the assertion.
+    server.OnPath("/mpsfirst/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // SELECT * with an ORDER BY keeps every column live, so no $select is emitted and the
+    // URL is unchanged - the exact shape that skips the refetch.
+    auto result = con.Query("SELECT * FROM odata_read('" + entity_url +
+                            "', max_page_size=1000) ORDER BY AirlineCode");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 2);
+
+    const auto requests = server.RequestsFor("/mpsfirst/Airlines");
+    INFO("no request at all reached the entity set");
+    REQUIRE_FALSE(requests.empty());
+
+    INFO("first request Prefer: [" << requests.front().Header("Prefer") << "]");
+    REQUIRE(requests.front().Header("Prefer").find("odata.maxpagesize=1000") !=
+            std::string::npos);
+}

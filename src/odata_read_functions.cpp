@@ -1,3 +1,4 @@
+#include <optional>
 #include <limits>
 #include "duckdb/function/table_function.hpp"
 
@@ -177,27 +178,14 @@ void ProcessNamedParameters(ODataReadBindData *bind_data,
   // Handle MAX_PAGE_SIZE parameter
   if (input.named_parameters.find("max_page_size") !=
       input.named_parameters.end()) {
+    // Validation is shared with odp_odata_read so the same parameter cannot behave
+    // differently depending on which reader is asked (GitHub #185).
     const auto requested =
-        input.named_parameters["max_page_size"].GetValue<duckdb::idx_t>();
-    // Zero is not "no preference" - it is a preference no service can honour. Rejecting it
-    // here, where the caller can see why, beats putting it on the wire. This is a bad
-    // argument from the caller, so it must not be an InternalException: DuckDB treats
-    // ExceptionType::INTERNAL as a broken process invariant and invalidates the whole
-    // database instance.
-    if (requested == 0) {
-      throw duckdb::InvalidInputException(
-          "max_page_size must be greater than 0; omit the parameter to send no page-size "
-          "preference at all");
-    }
-    if (requested > std::numeric_limits<uint32_t>::max()) {
-      throw duckdb::InvalidInputException(
-          "max_page_size must fit in 32 bits; %llu is larger than any service will honour",
-          static_cast<unsigned long long>(requested));
-    }
+        ValidateMaxPageSizeParameter(input.named_parameters["max_page_size"]);
     ERPL_TRACE_DEBUG("ODATA_BIND",
                      duckdb::StringUtil::Format(
                          "Named parameter 'max_page_size' set to: %d", requested));
-    bind_data->GetODataClient()->SetMaxPageSize(static_cast<uint32_t>(requested));
+    bind_data->GetODataClient()->SetMaxPageSize(requested);
   }
 
   // Handle COUNT parameter
@@ -244,8 +232,17 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
                       "Binding OData read function for URL: %s", url.c_str()));
 
   try {
+    // Read and validate max_page_size BEFORE probing. The probe response is page one -
+    // FromProbeResult buffers it - and for an unprojected read the URL never changes, so
+    // that buffer is never refetched. Applying the preference only afterwards left the
+    // first page at the service's default size (GitHub #185).
+    std::optional<uint32_t> max_page_size;
+    if (input.named_parameters.find("max_page_size") != input.named_parameters.end()) {
+      max_page_size = ValidateMaxPageSizeParameter(input.named_parameters["max_page_size"]);
+    }
+
     // Single probe to determine content type and version
-    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
+    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params, max_page_size);
 
   // Create appropriate bind data based on probe result with fallback heuristic
   duckdb::unique_ptr<ODataReadBindData> bind_data;

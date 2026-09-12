@@ -1,3 +1,4 @@
+#include <limits>
 #include <cpptrace/cpptrace.hpp>
 
 #include "odata_client.hpp"
@@ -5,6 +6,22 @@
 #include "odata_url_helpers.hpp"
 
 namespace erpl_web {
+
+uint32_t ValidateMaxPageSizeParameter(const duckdb::Value& value)
+{
+    const auto requested = value.GetValue<uint64_t>();
+    if (requested == 0) {
+        throw duckdb::InvalidInputException(
+            "max_page_size must be greater than 0; omit the parameter to send no page-size "
+            "preference at all");
+    }
+    if (requested > std::numeric_limits<uint32_t>::max()) {
+        throw duckdb::InvalidInputException(
+            "max_page_size must fit in 32 bits; %llu is larger than any service will honour",
+            static_cast<unsigned long long>(requested));
+    }
+    return static_cast<uint32_t>(requested);
+}
 
 std::string BuildPageLimitExceededMessage(idx_t limit, const std::string& last_url)
 {
@@ -684,7 +701,7 @@ Edmx ODataServiceClient::GetMetadata()
 // ODataClientFactory Implementation
 // -------------------------------------------------------------------------------------------------
 
-ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params)
+ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params, std::optional<uint32_t> max_page_size)
 {
     ERPL_TRACE_DEBUG("ODATA_FACTORY", "Probing URL: " + url);
     
@@ -774,6 +791,13 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     // Don't add OData version headers for the probe - let the service respond naturally
     if (auth_params != nullptr) {
         http_request.AuthHeadersFromParams(*auth_params);
+    }
+
+    // The probe body becomes page one, so the caller's page-size preference has to travel
+    // with it or the first page is fetched at the service's default size (GitHub #185).
+    if (max_page_size.has_value()) {
+        http_request.headers["Prefer"] =
+            "odata.maxpagesize=" + std::to_string(max_page_size.value());
     }
     
     auto http_response = http_client->SendRequest(http_request);
