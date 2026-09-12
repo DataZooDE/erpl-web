@@ -173,6 +173,11 @@ std::string ODataEntitySetClient::GetMetadataContextUrl()
     }
     return metadata_context_url;
 }
+ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url,
+                                           const HttpUrl& service_origin, std::shared_ptr<HttpAuthParams> auth_params)
+    : ODataClient(http_client, url, service_origin, auth_params)
+{ }
+
 
 std::shared_ptr<ODataEntitySetContent> ODataEntitySetResponse::CreateODataContent(const std::string& content, ODataVersion odata_version)
 {

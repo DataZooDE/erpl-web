@@ -426,8 +426,11 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
   // keeps its stub.
   auto scan_client = odata_client;
   if (!service_root_mode_ && odata_client != nullptr) {
+    // Carry the trusted origin explicitly: Url() is the pagination cursor, so deriving the
+    // origin from it would make a followed next link the credentialed origin (GitHub #189).
     scan_client = std::make_shared<ODataEntitySetClient>(
-        odata_client->GetHttpClient(), HttpUrl(odata_client->Url()), odata_client->AuthParams());
+        odata_client->GetHttpClient(), HttpUrl(odata_client->Url()),
+        odata_client->ServiceOriginUrl(), odata_client->AuthParams());
     const auto bound_version = odata_client->GetODataVersion();
     if (bound_version != ODataVersion::UNKNOWN) {
       scan_client->SetODataVersionDirectly(bound_version);
