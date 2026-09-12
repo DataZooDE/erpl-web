@@ -49,7 +49,10 @@ void RequireGatedServiceUrl(const std::string &url, const std::string &what)
     }
 
     HttpUrl parsed(url);
-    const auto host = parsed.Host();
+    // Same case rule as RequireSecureOrLoopbackUrl below. These two disagreed: that one
+    // lowercases the host, this one compared it raw, so https://LOCALHOST passed the
+    // first check and was then refused by the gate.
+    const auto host = LowercaseAscii(parsed.Host());
     if (host == "localhost" || host == "127.0.0.1") {
         return;  // a local test server, which is what the hatch is for
     }

@@ -211,10 +211,21 @@ TEST_CASE("the Business Central URL hatch refuses plain http off loopback",
     }
 
     SECTION("...and permitted once the caller opts in") {
-        erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(true);
+        // RAII, because the policy is process-wide: a bare set/REQUIRE/unset leaves the
+        // gate OPEN for the whole binary if the assertion fails, silently weakening every
+        // later test in the run.
+        struct OptInGuard {
+            OptInGuard() { erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(true); }
+            ~OptInGuard() { erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(false); }
+        } opt_in;
+
         REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "https://api.example.com/v2") ==
                 "https://api.example.com/v2");
-        erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(false);
+    }
+
+    SECTION("the gate agrees with its sibling on host case") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://LOCALHOST:8080") ==
+                "http://LOCALHOST:8080");
     }
 
     SECTION("Dataverse is not gated - a custom https org host is its normal shape") {
