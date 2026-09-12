@@ -49,8 +49,22 @@ true
 # Reading the same subscription twice must not duplicate the extract: the second call is
 # a delta fetch, which returns the changes since the first and not the whole dataset
 # again. This is the invariant the delta-token lifecycle exists to uphold.
+#
+# The two reads must be SEPARATE statements. An ODQ subscription is stateful in the SAP
+# system, and it admits one open extraction at a time: putting both reads in one query as
+# subselects makes the server refuse the second with
+# "Could not open data access via extraction API RODPS_REPL_ODP_OPEN" (RSODP_ODATA/013).
+# That is the service enforcing its own contract, not a defect in the reader, so the test
+# has to respect it (GitHub #173).
+statement ok
+CREATE TABLE delta_read AS
+SELECT COUNT(*) AS n FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret');
+
+statement ok
+CREATE TABLE full_read AS
+SELECT COUNT(*) AS n FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret', force_full_load=true);
+
 query I
-SELECT (SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret'))
-     <= (SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_SERVICE}/${ERPL_SAP_ODP_ENTITY_SET}', secret='odp_odata_read_secret', force_full_load=true));
+SELECT (SELECT n FROM delta_read) <= (SELECT n FROM full_read);
 ----
 true

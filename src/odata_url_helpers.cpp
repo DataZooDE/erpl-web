@@ -310,6 +310,55 @@ std::string ODataDeltaLink::ExtractDeltaLink(const std::string &json_body) {
     return delta_link;
 }
 
+std::string ODataDeltaLink::ExtractTokenFromDeltaLinksPayload(const std::string &json_body) {
+    if (json_body.empty()) {
+        return std::string();
+    }
+
+    auto *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
+    if (doc == nullptr) {
+        return std::string();
+    }
+
+    std::string token;
+    std::string initial_load_token;
+
+    auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+    auto *d_wrapper = (root != nullptr && duckdb_yyjson::yyjson_is_obj(root))
+                          ? duckdb_yyjson::yyjson_obj_get(root, "d")
+                          : nullptr;
+    auto *results = (d_wrapper != nullptr && duckdb_yyjson::yyjson_is_obj(d_wrapper))
+                        ? duckdb_yyjson::yyjson_obj_get(d_wrapper, "results")
+                        : nullptr;
+
+    if (results != nullptr && duckdb_yyjson::yyjson_is_arr(results)) {
+        size_t idx = 0;
+        size_t max = 0;
+        duckdb_yyjson::yyjson_val *row = nullptr;
+        yyjson_arr_foreach(results, idx, max, row) {
+            if (!duckdb_yyjson::yyjson_is_obj(row)) {
+                continue;
+            }
+            const auto row_token = ReadStringMember(row, "DeltaToken");
+            if (row_token.empty()) {
+                continue;
+            }
+            if (token.empty()) {
+                token = row_token;
+            }
+            // SAP reports IsInitialLoad as the string "True"/"False" in the v2 JSON shape.
+            const auto is_initial = ReadStringMember(row, "IsInitialLoad");
+            if (initial_load_token.empty() &&
+                (is_initial == "True" || is_initial == "true")) {
+                initial_load_token = row_token;
+            }
+        }
+    }
+
+    duckdb_yyjson::yyjson_doc_free(doc);
+    return initial_load_token.empty() ? token : initial_load_token;
+}
+
 std::string ODataDeltaLink::ExtractDeltaToken(const std::string &json_body) {
     return ExtractToken(ExtractDeltaLink(json_body));
 }

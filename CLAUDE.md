@@ -86,8 +86,22 @@ make release    # Full reconfigure + release build
   when they are empty, which is the only shape that skips correctly. Function
   registration is covered unconditionally in `test/sql/odp_functions_registered.test`, so
   it does not skip along with the live cases.
+  The **delta** lifecycle is gated separately again, on `ERPL_SAP_ODP_DELTA_SERVICE` /
+  `ERPL_SAP_ODP_DELTA_ENTITY_SET`, because being delta-capable is a property of the
+  extractor and not of ODP — see the ODP provisioning section below.
 - `make test_build_guard` - Regression test for GitHub #45 (pure CMake, no build needed). Verifies the dev-only C++ test target stays gated on the in-tree `duckdb` submodule so consumers who statically link erpl_web (via `duckdb_extension_load`/FetchContent, where the submodule is absent) don't try to compile `test/cpp` and hit `catch.hpp file not found`. Run after touching the `add_subdirectory(test)` guard in `CMakeLists.txt`.
-- `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`)
+- `make unittest` - Relink **only** `./build/debug/test/unittest`, the SQLLogicTest runner.
+  `duckdb`, `unittest` and `erpl_web_tests` are **separate ninja targets**: building one
+  does not build the others. A session that builds a single target after a source change
+  (common when a full `make dev` is failing for an unrelated reason) leaves the other
+  binaries stale — and a stale `unittest` runs your SQL tests against code from *before*
+  the fix, which is indistinguishable from a real behavioural bug. This cost a full
+  investigation in GitHub #172, where the same ODP delta case passed from
+  `./build/debug/duckdb` and failed under `unittest` with no source difference at all.
+  `test_debug_sap`, `test_debug_ms` and `test_debug_bc` depend on this target, so prefer
+  them over invoking the runner by hand.
+- `./build/debug/test/unittest "[test_category]"` - Run SQL tests by category (e.g., `"[sap]"`).
+  Run `make unittest` first — see above.
 
 **Running individual C++ tests:**
 - `ASAN_OPTIONS=detect_odr_violation=0 ./build/debug/extension/erpl_web/test/cpp/erpl_web_tests -l` - List all tests
@@ -1544,8 +1558,14 @@ Then point the tests at it:
 
 ```bash
 make test_debug_sap ERPL_SAP_ODP_SERVICE=Z_ODP_FCT_SRV \
-                    ERPL_SAP_ODP_ENTITY_SET=FactsOfZJRODPVSQL
+                    ERPL_SAP_ODP_ENTITY_SET=FactsOfZJRODPVSQL \
+                    ERPL_SAP_ODP_DELTA_SERVICE=Z_ODP_DL2_SRV \
+                    ERPL_SAP_ODP_DELTA_ENTITY_SET=FactsOfZJRODPVSQL
 ```
+
+The two ODP gates are deliberately separate. `ERPL_SAP_ODP_SERVICE` only needs *an* ODP
+service; `ERPL_SAP_ODP_DELTA_SERVICE` must name one whose CDS view is delta-capable, which
+is a stricter requirement than it looks — see the next bullet.
 
 **Things that cost time the first time:**
 
@@ -1555,16 +1575,27 @@ make test_debug_sap ERPL_SAP_ODP_SERVICE=Z_ODP_FCT_SRV \
   `SELECT viewname, odpname FROM rsodpabapcdsextb( p_langu = @sy-langu )` — note that view
   takes a **parameter**, and forgetting it fails activation with the unhelpful
   *"The parameter P_LANGU was not bound"*.
+- `@Analytics.dataExtraction.delta.byElement` does **not** make an extractor
+  delta-capable. It activates cleanly and reads as if it should work, but
+  `RODPS_REPL_ODP_GET_DETAIL` still reports `e_supports_delta = ' '`, so the generated
+  service exposes no `DeltaLinksOf<EntitySet>` entity set and no delta link is ever
+  returned. Use `@Analytics.dataExtraction.delta.changeDataCapture.automatic: true`
+  instead; `scripts/sap/zjr_odp_v.ddls.abap` is the working fixture. Check which you have
+  with `RODPS_REPL_ODP_GET_DETAIL` before concluding the reader is at fault.
+- `TerminateDeltasFor<Entity>` flips `SubscribedFlag` to false but does **not** issue a
+  delta link. To recover a token for an already-subscribed queue, read
+  `DeltaLinksOf<EntitySet>` instead (GitHub #169).
 - Everything must live in `$TMP`. The `@Analytics.dataExtraction.*` annotations and the
   classic ODP APIs are not released for ABAP Cloud, so a HOME-tier package rejects them
   on an ABAP Cloud developer trial.
 - A source CDS view is provided as `scripts/sap/zjr_odp_v.ddls.abap` over the table in
   `scripts/sap/zjr_odp_data.tabl.abap`, for a fixture whose contents you control.
-- **Delta is a separate matter.** `RODPS_REPL_ODP_GET_DETAIL` reports
-  `supports_delta = ' '` for ABAP-CDS sources on this system even with
-  `@Analytics.dataExtraction.delta.byElement`, so SAP returns no `__delta` link and no
-  `DeltaLinksOf*` entity set is generated (`CL_RSODP_ODATA_ODP_OUT_MPC` guards it with
-  `CHECK i_supports_delta = ...`). The reader correctly stays in initial-load mode and
-  logs *"change tracking not established"*. Testing the delta lifecycle end to end needs a
-  genuinely delta-capable ODP (CDC-based extraction, or a BW/SAPI source).
+- **Delta is a separate matter, but it does work here.** `CL_RSODP_ODATA_ODP_OUT_MPC`
+  guards the `DeltaLinksOf*` entity set with `CHECK i_supports_delta = ...`, so everything
+  depends on what `RODPS_REPL_ODP_GET_DETAIL` reports. With
+  `@Analytics.dataExtraction.delta.byElement` it reports `supports_delta = ' '` and the
+  reader correctly stays in initial-load mode, logging *"change tracking not
+  established"* — which reads like a reader defect and is not one. Switching the CDS view
+  to `delta.changeDataCapture.automatic` flips it, and the full lifecycle then works
+  end to end; `test/sql/sap/odp_odata_delta.test` proves it against `Z_ODP_DL2_SRV`.
 

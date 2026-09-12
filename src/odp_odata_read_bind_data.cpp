@@ -109,7 +109,15 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
             }
             
             if (!success) {
-                throw duckdb::InternalException("Failed to perform ODP data fetch");
+                // Deliberately NOT an InternalException. DuckDB reads ExceptionType::INTERNAL
+                // as "this process's invariants are broken" and invalidates the whole database
+                // instance, so every later query - including ones unrelated to ODP - fails with
+                // "Failure within transaction management!". A service refusing an extraction is
+                // an ordinary I/O outcome (GitHub #173).
+                throw duckdb::IOException(
+                    "ODP data fetch failed for " + entity_set_url_ + ": " +
+                    (last_fetch_error_.empty() ? std::string("the service gave no reason")
+                                               : last_fetch_error_));
             }
             
             first_fetch_completed_ = true;
@@ -330,6 +338,7 @@ bool OdpODataReadBindData::HandleInitialLoad() {
         auto result = request_orchestrator_->ExecuteInitialLoad(entity_set_url_, max_page_size_);
 
         if (!result.response) {
+            last_fetch_error_ = "the service returned no response to the initial load";
             return false;
         }
 
@@ -355,6 +364,7 @@ bool OdpODataReadBindData::HandleInitialLoad() {
 
     } catch (const std::exception& e) {
         ERPL_TRACE_ERROR("ODP_BIND_DATA", "Initial load failed: " + std::string(e.what()));
+        last_fetch_error_ = e.what();
         state_manager_->TransitionToError("Initial load failed: " + std::string(e.what()));
         return false;
     }
@@ -378,6 +388,7 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
         auto result = request_orchestrator_->ExecuteDeltaFetch(entity_set_url_, current_token, max_page_size_);
 
         if (!result.response) {
+            last_fetch_error_ = "the service returned no response to the delta fetch";
             return false;
         }
 
@@ -418,6 +429,7 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
             state_manager_->TransitionToInitialLoad();
             return HandleInitialLoad();
         }
+        last_fetch_error_ = e.what();
         state_manager_->TransitionToError("Delta fetch failed: " + std::string(e.what()));
         return false;
     }

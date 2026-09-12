@@ -167,3 +167,37 @@ TEST_CASE("normalizeAndSanitizeExpand keeps a parenthesis inside a literal from 
     // $select is part of the same option group, so it must still be $-prefixed and present.
     REQUIRE(sanitized.find("$select=Name") != std::string::npos);
 }
+
+// GitHub #169: the inline __delta link is not reliably present - SAP returns it on the
+// first read of a freshly generated service and not on later full extractions of the same
+// one. The token is always available from the DeltaLinksOf<EntitySet> collection, whose
+// rows carry it as a property rather than inside a link.
+TEST_CASE("ODataDeltaLink reads a token out of a DeltaLinksOf payload", "[odata_url]") {
+    const std::string payload =
+        R"({"d":{"results":[{"__metadata":{"type":"SRV.DeltaLinkDetails"},)"
+        R"("DeltaToken":"D20260912034532_000042000","IsInitialLoad":"True"}]}})";
+
+    REQUIRE(ODataDeltaLink::ExtractTokenFromDeltaLinksPayload(payload) ==
+            "D20260912034532_000042000");
+}
+
+TEST_CASE("ODataDeltaLink prefers the initial-load delta link", "[odata_url]") {
+    // Several links can be open at once. The initial-load one is the pointer a fresh
+    // subscription should resume from; picking an arbitrary row would skip changes.
+    const std::string payload =
+        R"({"d":{"results":[)"
+        R"({"DeltaToken":"D_LATER","IsInitialLoad":"False"},)"
+        R"({"DeltaToken":"D_INITIAL","IsInitialLoad":"True"}]}})";
+
+    REQUIRE(ODataDeltaLink::ExtractTokenFromDeltaLinksPayload(payload) == "D_INITIAL");
+}
+
+TEST_CASE("ODataDeltaLink returns nothing for a DeltaLinksOf payload with no links",
+          "[odata_url]") {
+    // An ODP without delta support exposes no such collection, and a subscription with no
+    // open link returns an empty set. Both must leave the caller in initial-load mode
+    // rather than inventing a token.
+    REQUIRE(ODataDeltaLink::ExtractTokenFromDeltaLinksPayload(R"({"d":{"results":[]}})").empty());
+    REQUIRE(ODataDeltaLink::ExtractTokenFromDeltaLinksPayload("").empty());
+    REQUIRE(ODataDeltaLink::ExtractTokenFromDeltaLinksPayload("not json").empty());
+}

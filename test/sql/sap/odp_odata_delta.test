@@ -1,0 +1,67 @@
+# name: test/sql/sap/odp_odata_delta.test
+# description: the full ODP delta lifecycle against a delta-capable live SAP ODP service
+# group: [erpl_web_odp_integration]
+#
+# odp_odata_read.test only asserts the weaker "a delta fetch is not larger than a full
+# load", because the service it is gated on (ERPL_SAP_ODP_SERVICE) need not be
+# delta-capable at all. Being delta-capable is a property of the extractor, not of ODP:
+# a CDS view has to carry @Analytics.dataExtraction.delta.changeDataCapture.automatic
+# before RODPS_REPL_ODP_GET_DETAIL reports supports_delta, and only then does the
+# service expose a DeltaLinksOf<EntitySet> entity set at all.
+#
+# So this file is gated separately, on a service known to be delta-capable. It asserts
+# the thing that actually matters and that the weaker test cannot: after a full load,
+# an unchanged source yields exactly zero rows.
+
+require erpl_web
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+require-env ERPL_SAP_BASE_URL
+
+require-env ERPL_SAP_PASSWORD
+
+require-env ERPL_SAP_ODP_DELTA_SERVICE
+
+require-env ERPL_SAP_ODP_DELTA_ENTITY_SET
+
+# Delta state is refused an in-memory catalog on purpose (GitHub #92). See odp_odata_read.test.
+statement ok
+ATTACH '__TEST_DIR__/odp_delta_state.db' AS odp_delta_state;
+
+statement ok
+USE odp_delta_state;
+
+statement ok
+CREATE SECRET odp_delta_secret (
+	TYPE http_basic,
+	USERNAME 'DEVELOPER',
+	PASSWORD '${ERPL_SAP_PASSWORD}',
+	SCOPE '${ERPL_SAP_BASE_URL}'
+);
+
+# The ODQ queue lives in the SAP system, not in this test's catalog, so a previous run
+# leaves a subscription behind that would make the first read below a delta rather than
+# a full load. Terminating it first is what makes this test independent of run order.
+statement ok
+SELECT status FROM http_get('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_DELTA_SERVICE}/TerminateDeltasFor${ERPL_SAP_ODP_DELTA_ENTITY_SET}?$format=json', auth='DEVELOPER:${ERPL_SAP_PASSWORD}', auth_type='BASIC');
+
+# The initial load delivers the whole extract and, on a delta-capable extractor, must
+# also record a delta token. The row count is a property of the provisioned dataset.
+query I
+SELECT COUNT(*) > 0 FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_DELTA_SERVICE}/${ERPL_SAP_ODP_DELTA_ENTITY_SET}', secret='odp_delta_secret');
+----
+true
+
+# Nothing changed in the source between the two reads, so the delta is empty. This is
+# the assertion the whole delta-token machinery exists for: if the token had not been
+# recorded, this would silently be a second full extraction and return the dataset again
+# (GitHub #169, #172).
+query I
+SELECT COUNT(*) FROM odp_odata_read('${ERPL_SAP_BASE_URL}/sap/opu/odata/sap/${ERPL_SAP_ODP_DELTA_SERVICE}/${ERPL_SAP_ODP_DELTA_ENTITY_SET}', secret='odp_delta_secret');
+----
+0

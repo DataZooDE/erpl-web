@@ -202,6 +202,11 @@ private:
     // State tracking
     bool initialized_;
     bool first_fetch_completed_;
+    // Why the last initial load or delta fetch returned false. The handlers catch the
+    // failure so they can transition the subscription to ERROR_STATE, which means the
+    // service's own explanation would otherwise be lost by the time the caller has to
+    // raise an error (GitHub #173).
+    std::string last_fetch_error_;
     int64_t current_audit_id_;
 
     // Totals for the audit row, accumulated across the whole extraction and written once.

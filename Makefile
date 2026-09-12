@@ -28,6 +28,17 @@ dev:
 	fi
 	cmake --build build/debug --config Debug
 
+# Relink ./build/debug/test/unittest, the SQLLogicTest runner.
+#
+# 'duckdb', 'unittest' and 'erpl_web_tests' are separate ninja targets. Building one does
+# NOT build the others, so a session that builds a single target after a source change
+# leaves the other binaries stale - and a stale unittest runs your SQL tests against code
+# from before the fix, which looks exactly like a real behavioural bug (GitHub #172).
+# Every target that invokes the runner depends on this one.
+.PHONY: unittest
+unittest:
+	cmake --build build/debug --config Debug --target unittest
+
 release_win: ${EXTENSION_CONFIG_STEP}
 	cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_RELEASE_FLAGS) $(VCPKG_MANIFEST_FLAGS) -DCMAKE_BUILD_TYPE=Release -S $(DUCKDB_SRCDIR) -B build/release
 	cmake --build build/release --config Release --parallel
@@ -42,10 +53,19 @@ release_win: ${EXTENSION_CONFIG_STEP}
 # The variables must be ABSENT, not empty, when there is no ODP service: sqllogictest's
 # require-env skips only when getenv returns null, so exporting an empty value would run
 # the ODP cases and fail them - exactly what the gate exists to prevent.
+#
+# Delta is a separate gate again, because being delta-capable is a property of the
+# extractor rather than of ODP: only a CDS view carrying
+# @Analytics.dataExtraction.delta.changeDataCapture.automatic makes the service expose a
+# DeltaLinksOf entity set at all. A service named here must be one of those.
+#   ERPL_SAP_ODP_DELTA_SERVICE     - e.g. Z_ODP_DL2_SRV
+#   ERPL_SAP_ODP_DELTA_ENTITY_SET  - e.g. FactsOfZJRODPVSQL
 ERPL_SAP_ODP_ENV := $(if $(ERPL_SAP_ODP_SERVICE),ERPL_SAP_ODP_SERVICE='$(ERPL_SAP_ODP_SERVICE)') \
-                    $(if $(ERPL_SAP_ODP_ENTITY_SET),ERPL_SAP_ODP_ENTITY_SET='$(ERPL_SAP_ODP_ENTITY_SET)')
+                    $(if $(ERPL_SAP_ODP_ENTITY_SET),ERPL_SAP_ODP_ENTITY_SET='$(ERPL_SAP_ODP_ENTITY_SET)') \
+                    $(if $(ERPL_SAP_ODP_DELTA_SERVICE),ERPL_SAP_ODP_DELTA_SERVICE='$(ERPL_SAP_ODP_DELTA_SERVICE)') \
+                    $(if $(ERPL_SAP_ODP_DELTA_ENTITY_SET),ERPL_SAP_ODP_DELTA_ENTITY_SET='$(ERPL_SAP_ODP_DELTA_ENTITY_SET)')
 
-test_debug_sap: ${EXTENSION_CONFIG_STEP}
+test_debug_sap: unittest
 	ERPL_SAP_BASE_URL='http://localhost:50000' ERPL_SAP_PASSWORD='ABAPtr2023#00' \
 		$(ERPL_SAP_ODP_ENV) ./build/debug/test/unittest "[sap]"
 
@@ -64,7 +84,7 @@ test_debug_sap: ${EXTENSION_CONFIG_STEP}
 #   ERPL_MS_EXCEL_FILE_PATH     - Relative path to .xlsx file within the drive
 # Usage:
 #   source .env.microsoft && make test_debug_ms
-test_debug_ms: ${EXTENSION_CONFIG_STEP}
+test_debug_ms: unittest
 	./build/debug/test/unittest "test/sql/graph_entra_integration.test"
 	./build/debug/test/unittest "test/sql/graph_planner_integration.test"
 	./build/debug/test/unittest "test/sql/graph_sharepoint_integration.test"
@@ -82,7 +102,7 @@ test_debug_ms: ${EXTENSION_CONFIG_STEP}
 #   ERPL_BC_COMPANY_ID   - Company GUID to run entity-read tests against
 # Usage:
 #   source .env.business_central && make test_debug_bc
-test_debug_bc: ${EXTENSION_CONFIG_STEP}
+test_debug_bc: unittest
 	./build/debug/test/unittest "test/sql/business_central_integration.test"
 
 # Regression test for GitHub #45: when erpl_web is consumed as a dependency (the duckdb

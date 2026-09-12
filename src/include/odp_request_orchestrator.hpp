@@ -226,6 +226,16 @@ private:
 
     // Helper methods
     OdpRequestResult ExecuteRequest(const HttpRequest& request, const std::string& operation_type);
+
+    // Recover the delta token from the service's DeltaLinksOf<EntitySet> entity set.
+    //
+    // The inline __delta link is not reliably present: SAP returns it on the first read of
+    // a freshly generated service and not on later full extractions of the same one, so
+    // reading only the response body leaves the subscription with no token and every later
+    // read re-extracts everything. The token is always discoverable here. Returns an empty
+    // string when the service exposes no such entity set (an ODP without delta support) or
+    // the lookup fails - callers stay in initial-load mode, as before. See GitHub #169.
+    std::string FetchDeltaTokenFromDeltaLinks(const HttpUrl& entity_set_url);
     std::shared_ptr<ODataEntitySetResponse> ProcessHttpResponse(std::unique_ptr<HttpResponse> http_response);
     void LogRequestDetails(const HttpRequest& request, const std::string& operation_type) const;
     void LogResponseDetails(const OdpRequestResult& result, const std::string& operation_type) const;
