@@ -90,6 +90,9 @@ TEST_CASE("odp_odata_read projects the column the query asked for", "[odp_projec
                                 "') LIMIT 3");
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
+        // Without a row-count assertion the loop below asserts nothing on an empty result -
+        // which is exactly the drained-buffer shape these tests exist to catch.
+        REQUIRE(result->RowCount() == 3);
         for (duckdb::idx_t row = 0; row < result->RowCount(); row++) {
             INFO("row " << row << " = " << result->GetValue(0, row).ToString());
             REQUIRE(result->GetValue(0, row).ToString() == "C");
@@ -117,6 +120,7 @@ TEST_CASE("odp_odata_read projects the column the query asked for", "[odp_projec
                                 "') LIMIT 3");
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->RowCount() == 3);
         for (duckdb::idx_t row = 0; row < result->RowCount(); row++) {
             INFO("row " << row << ": ODQ_CHANGEMODE=" << result->GetValue(0, row).ToString()
                         << " CALMONTH=" << result->GetValue(1, row).ToString());
@@ -131,6 +135,7 @@ TEST_CASE("odp_odata_read projects the column the query asked for", "[odp_projec
                                 url + "')) LIMIT 3");
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->RowCount() == 3);
         for (duckdb::idx_t row = 0; row < result->RowCount(); row++) {
             REQUIRE(result->GetValue(0, row).ToString() == "CM" + std::to_string(row));
             REQUIRE(result->GetValue(1, row).ToString() == "DV" + std::to_string(row));

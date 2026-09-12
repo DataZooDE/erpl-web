@@ -564,25 +564,6 @@ void OdpODataReadBindData::CommitStagedDeltaToken() {
     staged_operation_type_.clear();
 }
 
-void OdpODataReadBindData::UpdateODataClient(const std::string& url) {
-    ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Updating OData client with URL: " + url);
-    
-    try {
-        // Recreate the OData bind data with the new URL
-        odata_bind_data_ = ODataReadBindData::FromEntitySetRoot(url, auth_params_);
-        
-        if (!odata_bind_data_) {
-            throw duckdb::InternalException("Failed to update OData client");
-        }
-        
-        ERPL_TRACE_DEBUG("ODP_BIND_DATA", "OData client updated successfully");
-        
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("ODP_BIND_DATA", "Failed to update OData client: " + std::string(e.what()));
-        throw;
-    }
-}
-
 void OdpODataReadBindData::UpdateODataClientWithResponse(const std::string& url, const std::string& response_content) {
     ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Updating OData client with pre-fetched response for URL: " + url);
     
