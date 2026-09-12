@@ -206,6 +206,10 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
         }
         emitted_row_index_ = 0;
         first_page_cached_ = false;
+        // The stored probe page belongs to the OLD url. Keeping it here is how a scan ends
+        // up adopting a page that does not match the request it is about to make.
+        first_page_response_.reset();
+        first_page_expand_extracted_ = false;
     }
 }
 

@@ -279,3 +279,60 @@ TEST_CASE("ODataDataExtractor - a released row reads as NULL rather than another
     REQUIRE(extractor.ExtractExpandedDataForRow(0, "Orders").IsNull());
     REQUIRE_FALSE(extractor.ExtractExpandedDataForRow(5, "Orders").IsNull());
 }
+
+// ============================================================================
+// GitHub #159 follow-up: does a short extraction shift later rows?
+// ============================================================================
+
+// The crew's hypothesis: the cache holds one entry per row per path, and rows are looked
+// up by position. If a page ever yields FEWER entries than it has rows - one row's expand
+// payload unparseable, say - every later row reads its neighbour's value. That is the #156
+// failure mode arriving by a different route, and #159's release makes it permanent
+// because the base index advances regardless.
+TEST_CASE("ODataDataExtractor - a row whose expand payload is unusable does not shift its neighbours") {
+    ODataDataExtractor extractor(MakeExtractorClient());
+    extractor.SetExpandedDataSchema({"Orders"});
+
+    // Three rows. The middle one carries something that is not a collection of orders.
+    const std::string payload =
+        R"({"value":[)"
+        R"({"id":"c0","Orders":[{"id":"o0","amount":1,"total":2}]},)"
+        R"({"id":"c1","Orders":"not-a-collection"},)"
+        R"({"id":"c2","Orders":[{"id":"o2","amount":3,"total":4}]}]})";
+    extractor.ExtractExpandedDataFromResponse(payload);
+
+    // Row 2 must read row 2's order, whatever happened to row 1.
+    auto row2 = extractor.ExtractExpandedDataForRow(2, "Orders");
+    INFO("cache holds " << extractor.GetCacheSize() << " entries for 3 rows");
+    REQUIRE_FALSE(row2.IsNull());
+    auto &children = duckdb::ListValue::GetChildren(row2);
+    REQUIRE(children.size() == 1);
+    CHECK(duckdb::StructValue::GetChildren(children[0])[0].ToString() == "o2");
+
+    // And the cache must carry one entry per row, so positions stay meaningful.
+    CHECK(extractor.GetCacheSize() == 3);
+}
+
+// The other shape: the expand property is ABSENT from a row rather than unusable. A page
+// that omits it for one row would, if nothing is appended, make every later row read its
+// neighbour's value.
+TEST_CASE("ODataDataExtractor - a row missing the expand property does not shift its neighbours") {
+    ODataDataExtractor extractor(MakeExtractorClient());
+    extractor.SetExpandedDataSchema({"Orders"});
+
+    const std::string payload =
+        R"({"value":[)"
+        R"({"id":"c0","Orders":[{"id":"o0","amount":1,"total":2}]},)"
+        R"({"id":"c1"},)"
+        R"({"id":"c2","Orders":[{"id":"o2","amount":3,"total":4}]}]})";
+    extractor.ExtractExpandedDataFromResponse(payload);
+
+    INFO("cache holds " << extractor.GetCacheSize() << " entries for 3 rows");
+    CHECK(extractor.GetCacheSize() == 3);
+
+    auto row2 = extractor.ExtractExpandedDataForRow(2, "Orders");
+    REQUIRE_FALSE(row2.IsNull());
+    auto &children = duckdb::ListValue::GetChildren(row2);
+    REQUIRE(children.size() == 1);
+    CHECK(duckdb::StructValue::GetChildren(children[0])[0].ToString() == "o2");
+}

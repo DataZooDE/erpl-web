@@ -443,6 +443,11 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
 
   auto clone = duckdb::make_uniq<ODataReadBindData>(scan_client, true);
   clone->first_page_response_ = first_page_response_;
+  // Carry the row count the service reported at bind time. The clone gets a fresh tracker,
+  // so without this the scan has no denominator and DuckDB shows no progress at all.
+  if (progress_tracker && clone->progress_tracker && progress_tracker->HasTotalCount()) {
+    clone->progress_tracker->SetTotalCount(progress_tracker->GetTotalCount());
+  }
   // first_page_expand_extracted_ is deliberately NOT copied. The clone gets a fresh
   // extractor with an empty expand cache, so this execution must extract page one's
   // expanded data into it again; copying the flag would leave the first page's expanded
