@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include "odata_url_helpers.hpp"
 #include "odata_text_scanning.hpp"
 #include "yyjson.hpp"
@@ -5,12 +7,45 @@
 
 namespace erpl_web {
 
+namespace {
+
+// RFC 3986 schemes are case-insensitive, so the guard must be too. The byte-exact form was
+// inert only because HttpUrl's own parser is likewise lowercase-only, so an uppercase
+// scheme fails to connect rather than shipping anything - but a credential guard should
+// not depend on a second parser's case sensitivity to do its job (GitHub #193).
+std::string LowercaseAscii(const std::string &value)
+{
+    std::string out = value;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+}  // namespace
+
+bool LooksLikeAbsoluteHttpUrl(const std::string &value)
+{
+    const auto lowered = LowercaseAscii(value);
+    return lowered.rfind("https://", 0) == 0 || lowered.rfind("http://", 0) == 0;
+}
+
 void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
 {
-    if (url.rfind("https://", 0) == 0) {
+    const auto lowered = LowercaseAscii(url);
+
+    if (lowered.rfind("https://", 0) == 0) {
         return;
     }
-    if (url.rfind("http://", 0) != 0) {
+    if (lowered.rfind("http://", 0) != 0) {
+        // A value carrying some OTHER scheme is refused rather than waved through. Passing
+        // it through is how anything unrecognised used to reach the verbatim path.
+        const auto colon = url.find(':');
+        const auto slash = url.find('/');
+        if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
+            throw duckdb::InvalidInputException(
+                "%s must be an http:// or https:// URL; '%s' names an unsupported scheme.",
+                what.c_str(), url.c_str());
+        }
         return;  // not an absolute URL at all; the caller handles its own forms
     }
 

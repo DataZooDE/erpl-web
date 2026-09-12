@@ -21,7 +21,11 @@ std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id,
     // behaviour cannot be tested at all - which is how it kept a per-execution-state
     // defect nobody could reproduce (GitHub #182). DatasphereReadRelational has had the
     // same escape hatch on space_id for as long as it has existed.
-    if (environment.rfind("https://", 0) == 0 || environment.rfind("http://", 0) == 0) {
+    // Shared predicate: the three hatches must agree on what counts as "already a URL",
+    // or the comment claiming one shared rule is false. A case-sensitive trigger also let
+    // an uppercase scheme skip the hatch entirely and get embedded into the real endpoint
+    // as an environment segment (GitHub #193).
+    if (LooksLikeAbsoluteHttpUrl(environment)) {
         std::string base = environment;
         while (!base.empty() && base.back() == '/') {
             base.pop_back();

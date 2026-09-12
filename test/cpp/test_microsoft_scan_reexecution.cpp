@@ -1,5 +1,11 @@
-// GitHub #182: the Business Central and Dataverse readers have no per-execution scan
-// state - the #75 class, in the last table functions still carrying it.
+// GitHub #182: the Business Central and Dataverse READ functions had no per-execution scan
+// state - the #75 class. That is fixed here for bc_read and crm_read.
+//
+// It is NOT fixed for their catalog siblings (bc_show_companies, bc_show_entities,
+// bc_describe, crm_show_entities, crm_describe), which still keep finished/current_row on
+// bind data and register no init_global - tracked as GitHub #191. The present tense below
+// therefore describes what these two functions USED to do; the same sentence is still true
+// of the five siblings, and leaving it ambiguous would hide where it still applies.
 //
 // Each keeps a `finished` flag on its BIND DATA, sets it when the scan drains, and never
 // resets it; the init-global functions mutate the bind data and return nullptr, so there
@@ -225,5 +231,42 @@ TEST_CASE("the Dataverse URL hatch refuses plain http off loopback",
         REQUIRE_THROWS_AS(
             erpl_web::DataverseUrlBuilder::BuildApiUrl("http://127.0.0.1.evil.example"),
             duckdb::InvalidInputException);
+    }
+}
+
+// GitHub #193. The scheme prefix test was byte-exact, so an uppercase scheme took the
+// "not an absolute URL at all" early return and the guard never applied. That was inert -
+// HttpUrl's parser is lowercase-only too, so such a URL fails to connect rather than
+// shipping a bearer token - but a credential guard relying on a second parser's case
+// sensitivity is not a guard. Raised by the continuous agent-crew review.
+TEST_CASE("the URL hatches are case-insensitive about the scheme",
+          "[ms_reexec][security]") {
+    SECTION("an uppercase scheme off loopback is still refused") {
+        REQUIRE_THROWS_AS(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "HTTP://evil.example"),
+                          duckdb::InvalidInputException);
+        REQUIRE_THROWS_AS(erpl_web::DataverseUrlBuilder::BuildApiUrl("HtTp://evil.example"),
+                          duckdb::InvalidInputException);
+    }
+
+    SECTION("an uppercase scheme on loopback is still accepted") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "HTTP://127.0.0.1:8080") ==
+                "HTTP://127.0.0.1:8080");
+    }
+
+    SECTION("uppercase HTTPS is accepted anywhere") {
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("HTTPS://org.crm.dynamics.com") ==
+                "HTTPS://org.crm.dynamics.com/api/data/v9.2");
+    }
+
+    // Anything carrying some other scheme is now refused rather than waved through.
+    SECTION("an unsupported scheme is refused, not passed through") {
+        REQUIRE_THROWS_AS(erpl_web::DataverseUrlBuilder::BuildApiUrl("file:///etc/passwd"),
+                          duckdb::InvalidInputException);
+    }
+
+    // A bare name is not a URL and must still reach the caller's own handling.
+    SECTION("a non-URL value is left alone") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("tenant", "production") ==
+                "https://api.businesscentral.dynamics.com/v2.0/tenant/production/api/v2.0");
     }
 }
