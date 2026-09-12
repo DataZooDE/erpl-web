@@ -28,6 +28,7 @@
 #include "odata_test_server.hpp"
 #include "business_central_client.hpp"
 #include "dataverse_client.hpp"
+#include "odata_url_helpers.hpp"
 
 #include <ctime>
 #include <string>
@@ -198,9 +199,27 @@ TEST_CASE("the Business Central URL hatch refuses plain http off loopback",
                           duckdb::InvalidInputException);
     }
 
-    SECTION("https is accepted anywhere") {
+    // https to a NON-loopback host is gated for Business Central, because
+    // GetResourceUrl() hardcodes the token audience to api.businesscentral.dynamics.com -
+    // so a token minted for that host would be sent to another one. Dataverse is
+    // deliberately NOT gated: its scope is environment_url + "/.default", minted for
+    // whatever host you configure, so a custom host is the normal product (GitHub #199).
+    SECTION("https to another host is gated for Business Central") {
+        REQUIRE_THROWS_AS(
+            erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "https://api.example.com/v2"),
+            duckdb::InvalidInputException);
+    }
+
+    SECTION("...and permitted once the caller opts in") {
+        erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(true);
         REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "https://api.example.com/v2") ==
                 "https://api.example.com/v2");
+        erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(false);
+    }
+
+    SECTION("Dataverse is not gated - a custom https org host is its normal shape") {
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("https://myorg.crm.dynamics.com") ==
+                "https://myorg.crm.dynamics.com/api/data/v9.2");
     }
 
     SECTION("plain http to any other host is refused") {

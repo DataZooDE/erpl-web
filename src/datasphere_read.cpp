@@ -81,7 +81,7 @@ namespace {
             // Same rule as the Business Central and Dataverse hatches: this URL is taken
             // verbatim from the caller and carries an OAuth bearer token, so plain http is
             // allowed only for loopback.
-            RequireSecureOrLoopbackUrl(space_id, "Datasphere 'space_id'");
+            RequireGatedServiceUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
             EnsureAssetSegmentPattern(data_url, asset_id);
             return data_url;
@@ -95,7 +95,7 @@ namespace {
     std::string BuildDataUrl(const std::string& space_id, const std::string& asset_id, 
                             const std::string& tenant, const std::string& data_center) {
         if (LooksLikeAbsoluteHttpUrl(space_id)) {
-            RequireSecureOrLoopbackUrl(space_id, "Datasphere 'space_id'");
+            RequireGatedServiceUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
             EnsureAssetSegmentPattern(data_url, asset_id);
             return data_url;
