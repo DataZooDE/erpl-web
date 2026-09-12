@@ -86,3 +86,39 @@ Setting it back to `''` restores verification immediately.
   extension; without the probe `SSL_CTX_set_default_verify_paths()` yields an
   empty trust store and *every* handshake fails. If your distribution keeps its
   bundle somewhere unusual, set `SSL_CERT_FILE` or `erpl_ca_cert_file`.
+
+---
+
+## Pointing a reader at a different host
+
+Separate from TLS, but the same kind of decision: `erpl_unsafe_allow_custom_service_urls`.
+
+Business Central and Datasphere obtain their OAuth token for a **fixed audience** — Business
+Central's is hardcoded to `https://api.businesscentral.dynamics.com`, Datasphere's is a
+fixed `default`/`apiaccess` scope. So pointing one of those readers at an https host it was
+not built for hands that host a credential minted for a different one. By default this is
+refused:
+
+```
+Business Central 'environment' points at 'api.example.com'. This service's OAuth token
+audience is fixed, so its token would be sent to a host it was not minted for.
+```
+
+If you are deliberately proxying the service, opt in:
+
+```sql
+SET erpl_unsafe_allow_custom_service_urls = 'I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE';
+```
+
+Like the TLS opt-out, it accepts only that exact literal.
+
+**Loopback addresses never need this setting.** `localhost` and `127.0.0.1` are always
+permitted, over http or https, which is what makes the readers testable against a local
+server.
+
+**Dataverse is deliberately not gated.** Its scope is `environment_url + "/.default"`, so
+the token is minted for whichever host you configure — a customer-specific org URL is the
+normal product, not an exposure. Gating it would have required every real deployment to set
+an unsafe flag for ordinary use, and a flag needed for normal operation is not a gate.
+
+See GitHub #199.

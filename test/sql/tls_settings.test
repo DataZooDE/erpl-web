@@ -65,3 +65,47 @@ no such file
 
 statement ok
 SET erpl_ca_cert_file = '';
+
+# =============================================================================
+# erpl_unsafe_allow_custom_service_urls (GitHub #199)
+#
+# Business Central and Datasphere mint their OAuth token for a FIXED audience, so pointing
+# those readers at another https host would hand it a credential issued for a different
+# one. Loopback never needs this setting. Dataverse is unaffected: its scope is derived
+# from environment_url, so a custom host is the normal product.
+#
+# Same shape as the TLS opt-out above: only the exact token is accepted, because a flag
+# that is easy to trip by accident is not a gate.
+# =============================================================================
+
+statement ok
+SET erpl_unsafe_allow_custom_service_urls = '';
+
+statement error
+SET erpl_unsafe_allow_custom_service_urls = 'true';
+----
+I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE
+
+statement error
+SET erpl_unsafe_allow_custom_service_urls = '1';
+----
+I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE
+
+statement error
+SET erpl_unsafe_allow_custom_service_urls = 'yes';
+----
+I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE
+
+# The error has to say WHY, not just refuse - a caller who hits this needs to know the
+# token was minted for a different audience.
+statement error
+SET erpl_unsafe_allow_custom_service_urls = 'please';
+----
+audience
+
+statement ok
+SET erpl_unsafe_allow_custom_service_urls = 'I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE';
+
+# ...and it can be turned back off.
+statement ok
+SET erpl_unsafe_allow_custom_service_urls = '';
