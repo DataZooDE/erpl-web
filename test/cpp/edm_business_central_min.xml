@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal Business Central EDMX for the catalog-function tests.
+
+  bc_show_companies binds its schema entirely from $metadata: BcShowCompaniesBind calls
+  ODataReadBindData::FromEntitySetClient(client) with no buffered response, so with no
+  companies entity set declared here the bind fails with "Table function must return at
+  least one column" and nothing about the scan can be tested. That is why GitHub #191 and
+  #195 were filed from source reading rather than from a reproduction - this fixture is
+  what unblocks them.
+
+  Only the properties the readers actually project are declared; this is a test fixture,
+  not a faithful copy of the real Business Central metadata document.
+-->
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Microsoft.NAV" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="company">
+        <Key>
+          <PropertyRef Name="id" />
+        </Key>
+        <Property Name="id" Type="Edm.String" Nullable="false" />
+        <Property Name="name" Type="Edm.String" />
+        <Property Name="displayName" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="customer">
+        <Key>
+          <PropertyRef Name="id" />
+        </Key>
+        <Property Name="id" Type="Edm.String" Nullable="false" />
+        <Property Name="number" Type="Edm.String" />
+        <Property Name="displayName" Type="Edm.String" />
+      </EntityType>
+      <EntityContainer Name="NAV">
+        <EntitySet Name="companies" EntityType="Microsoft.NAV.company" />
+        <EntitySet Name="customers" EntityType="Microsoft.NAV.customer" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
