@@ -16,6 +16,7 @@
 #include "duckdb.hpp"
 
 #include "odata_test_server.hpp"
+#include "business_central_client.hpp"
 
 #include <ctime>
 #include <string>
@@ -162,5 +163,42 @@ TEST_CASE("a bound bc_read plan returns every row on each execution", "[ms_reexe
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
         REQUIRE(ScalarOf(result) == 4);
+    }
+}
+
+// The verbatim-URL escape hatch added above is production code shared by bc_read,
+// bc_describe and the BC catalog - not test-only. Before it existed the scheme was
+// hardcoded https, so accepting plain http generally would be a security downgrade
+// introduced by a testability change: the OAuth bearer token would go on the wire in
+// cleartext, and the same-origin guard would not object because the configured URL IS the
+// origin. Raised by an agent-crew review (F6).
+TEST_CASE("the Business Central URL hatch refuses plain http off loopback",
+          "[ms_reexec][bc][security]") {
+    SECTION("loopback forms are accepted") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://127.0.0.1:8080") ==
+                "http://127.0.0.1:8080");
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://localhost:8080/") ==
+                "http://localhost:8080");
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://[::1]:8080") ==
+                "http://[::1]:8080");
+    }
+
+    SECTION("https is accepted anywhere") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "https://api.example.com/v2") ==
+                "https://api.example.com/v2");
+    }
+
+    SECTION("plain http to any other host is refused") {
+        REQUIRE_THROWS_AS(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://evil.example"),
+                          duckdb::InvalidInputException);
+        // A host that merely starts with a loopback-looking label must not slip through.
+        REQUIRE_THROWS_AS(
+            erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://localhost.evil.example"),
+            duckdb::InvalidInputException);
+    }
+
+    SECTION("a non-URL environment still builds the real BC endpoint") {
+        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("tenant", "production") ==
+                "https://api.businesscentral.dynamics.com/v2.0/tenant/production/api/v2.0");
     }
 }

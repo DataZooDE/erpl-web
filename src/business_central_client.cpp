@@ -21,10 +21,43 @@ std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id,
     // behaviour cannot be tested at all - which is how it kept a per-execution-state
     // defect nobody could reproduce (GitHub #182). DatasphereReadRelational has had the
     // same escape hatch on space_id for as long as it has existed.
-    if (environment.rfind("http://", 0) == 0 || environment.rfind("https://", 0) == 0) {
+    const bool is_https = environment.rfind("https://", 0) == 0;
+    const bool is_http = environment.rfind("http://", 0) == 0;
+    if (is_https || is_http) {
         std::string base = environment;
         while (!base.empty() && base.back() == '/') {
             base.pop_back();
+        }
+        // Plain http is accepted ONLY for loopback. This hatch exists so the reader can be
+        // pointed at a local test server; anywhere else it would put the OAuth bearer token
+        // on the wire in cleartext, and the same-origin guard would not object because the
+        // configured URL IS the origin. Before this hatch existed the scheme was hardcoded
+        // https, so allowing plain http generally would be a downgrade introduced by a
+        // testability change - which is not a trade worth making silently.
+        if (is_http) {
+            // The host must BE a loopback name, not merely start with one: a prefix test
+            // lets "localhost.evil.example" through.
+            const std::string after_scheme = base.substr(std::string("http://").size());
+            std::string host;
+            if (!after_scheme.empty() && after_scheme.front() == '[') {
+                // Bracketed IPv6: the port separator is the colon AFTER the ']', and the
+                // address itself is full of colons.
+                const auto close = after_scheme.find(']');
+                host = (close == std::string::npos) ? after_scheme
+                                                    : after_scheme.substr(0, close + 1);
+            } else {
+                const auto host_end = after_scheme.find_first_of(":/");
+                host = (host_end == std::string::npos) ? after_scheme
+                                                       : after_scheme.substr(0, host_end);
+            }
+            const bool loopback = host == "localhost" || host == "127.0.0.1" || host == "[::1]";
+            if (!loopback) {
+                throw duckdb::InvalidInputException(
+                    "Business Central 'environment' may only use plain http:// for a loopback "
+                    "address (localhost, 127.0.0.1 or [::1]); '%s' would send the OAuth bearer "
+                    "token unencrypted. Use https:// instead.",
+                    environment.c_str());
+            }
         }
         return base;
     }
