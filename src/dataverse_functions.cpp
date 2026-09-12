@@ -18,8 +18,27 @@ using namespace duckdb;
 
 struct CrmShowEntitiesBindData : public TableFunctionData {
     std::unique_ptr<ODataReadBindData> odata_bind_data;
-    bool finished = false;
 };
+
+// Per-execution scan state (GitHub #191). `finished` lived on the bind data and was never
+// reset, so a second EXECUTE of a bound plan returned zero rows silently.
+class CrmShowEntitiesGlobalState : public GlobalTableFunctionState {
+public:
+    explicit CrmShowEntitiesGlobalState(std::unique_ptr<ODataReadBindData> scan_state)
+        : scan_state(std::move(scan_state)) {}
+
+    ODataReadBindData &Scan() { return *scan_state; }
+    bool finished = false;
+
+private:
+    std::unique_ptr<ODataReadBindData> scan_state;
+};
+
+static unique_ptr<GlobalTableFunctionState> CrmShowEntitiesInitGlobalState(
+    ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->CastNoConst<CrmShowEntitiesBindData>();
+    return make_uniq<CrmShowEntitiesGlobalState>(bind_data.odata_bind_data->CloneForScan());
+}
 
 static unique_ptr<FunctionData> CrmShowEntitiesBind(
     ClientContext &context,
@@ -54,22 +73,22 @@ static unique_ptr<FunctionData> CrmShowEntitiesBind(
 }
 
 static void CrmShowEntitiesScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-    auto &bind_data = data.bind_data->CastNoConst<CrmShowEntitiesBindData>();
+    auto &gstate = data.global_state->Cast<CrmShowEntitiesGlobalState>();
 
-    if (bind_data.finished) {
+    if (gstate.finished) {
         return;
     }
 
-    auto rows_fetched = bind_data.odata_bind_data->FetchNextResult(output);
-    if (!bind_data.odata_bind_data->HasMoreResults() && rows_fetched == 0) {
-        bind_data.finished = true;
+    auto rows_fetched = gstate.Scan().FetchNextResult(output);
+    if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
+        gstate.finished = true;
     }
 }
 
 TableFunctionSet CreateCrmShowEntitiesFunction() {
     TableFunctionSet set("crm_show_entities");
 
-    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesBind));
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmShowEntitiesBind), CrmShowEntitiesInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -85,8 +104,20 @@ struct CrmDescribeBindData : public TableFunctionData {
     std::vector<std::string> attribute_types;
     std::vector<bool> is_nullable;
     std::vector<bool> is_primary;
+};
+
+// Per-execution row cursor (GitHub #191). It lived on the bind data and was never reset,
+// so a second EXECUTE of a bound plan resumed past the end and returned nothing. The
+// describe payload itself is immutable and stays shared.
+class CrmDescribeGlobalState : public GlobalTableFunctionState {
+public:
     idx_t current_row = 0;
 };
+
+static unique_ptr<GlobalTableFunctionState> CrmDescribeInitGlobalState(
+    ClientContext &context, TableFunctionInitInput &input) {
+    return make_uniq<CrmDescribeGlobalState>();
+}
 
 static unique_ptr<FunctionData> CrmDescribeBind(
     ClientContext &context,
@@ -183,14 +214,15 @@ static unique_ptr<FunctionData> CrmDescribeBind(
 
 static void CrmDescribeScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
     auto &bind_data = data.bind_data->CastNoConst<CrmDescribeBindData>();
+    auto &gstate = data.global_state->Cast<CrmDescribeGlobalState>();
 
     idx_t count = 0;
-    while (bind_data.current_row < bind_data.attribute_names.size() && count < STANDARD_VECTOR_SIZE) {
-        output.SetValue(0, count, Value(bind_data.attribute_names[bind_data.current_row]));
-        output.SetValue(1, count, Value(bind_data.attribute_types[bind_data.current_row]));
-        output.SetValue(2, count, Value(bind_data.is_nullable[bind_data.current_row]));
-        output.SetValue(3, count, Value(bind_data.is_primary[bind_data.current_row]));
-        bind_data.current_row++;
+    while (gstate.current_row < bind_data.attribute_names.size() && count < STANDARD_VECTOR_SIZE) {
+        output.SetValue(0, count, Value(bind_data.attribute_names[gstate.current_row]));
+        output.SetValue(1, count, Value(bind_data.attribute_types[gstate.current_row]));
+        output.SetValue(2, count, Value(bind_data.is_nullable[gstate.current_row]));
+        output.SetValue(3, count, Value(bind_data.is_primary[gstate.current_row]));
+        gstate.current_row++;
         count++;
     }
 
@@ -200,7 +232,7 @@ static void CrmDescribeScan(ClientContext &context, TableFunctionInput &data, Da
 TableFunctionSet CreateCrmDescribeFunction() {
     TableFunctionSet set("crm_describe");
 
-    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeBind));
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CrmDescribeBind), CrmDescribeInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -305,6 +337,11 @@ static void CrmReadScan(ClientContext &context, TableFunctionInput &data, DataCh
     auto rows_fetched = gstate.Scan().FetchNextResult(output);
     if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
         gstate.finished = true;
+        // Report at the terminal exit, as odata_read does, rather than leaving it to the
+        // bind-data destructor: the destructor fires at teardown, so warnings could land
+        // after the result instead of beside it. Name this function, not odata_read
+        // (GitHub #196).
+        gstate.Scan().ReportConversionFailures("crm_read");
     }
 }
 
