@@ -268,10 +268,11 @@ using SacShowModelsBindData = SacGenericBindData<SacModel>;
 static void SacShowModelsScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                               duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<SacShowModelsBindData>();
+    auto &gstate = data_p.global_state->Cast<SacScanGlobalState>();
 
     idx_t count = 0;
-    while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
-        const auto &model = bind_data.items[bind_data.current_index];
+    while (gstate.current_index < bind_data.items.size() && count < output.GetCapacity()) {
+        const auto &model = bind_data.items[gstate.current_index];
 
         SetStrCellNN(output.data[0], count, model.id.c_str());
         SetStrCellNN(output.data[1], count, model.name.c_str());
@@ -281,11 +282,11 @@ static void SacShowModelsScan(duckdb::ClientContext &context, duckdb::TableFunct
         SetStrCellNN(output.data[5], count, model.created_at.c_str());
         SetStrCellNN(output.data[6], count, model.last_modified_at.c_str());
 
-        bind_data.current_index++;
+        gstate.current_index++;
         count++;
     }
 
-    bind_data.finished = (bind_data.current_index >= bind_data.items.size());
+    gstate.finished = (gstate.current_index >= bind_data.items.size());
     output.SetCardinality(count);
 }
 
@@ -325,7 +326,8 @@ duckdb::TableFunctionSet CreateSacShowModelsFunction() {
         {},  // No parameters
         SacShowModelsScan,
         SacShowModelsBind
-    );
+    ,
+        SacScanInitGlobalState);
 
     // Add optional named parameter for secret name
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
@@ -342,10 +344,11 @@ using SacShowStoriesBindData = SacGenericBindData<SacStory>;
 static void SacShowStoriesScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<SacShowStoriesBindData>();
+    auto &gstate = data_p.global_state->Cast<SacScanGlobalState>();
 
     idx_t count = 0;
-    while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
-        const auto &story = bind_data.items[bind_data.current_index];
+    while (gstate.current_index < bind_data.items.size() && count < output.GetCapacity()) {
+        const auto &story = bind_data.items[gstate.current_index];
 
         SetStrCellNN(output.data[0], count, story.id.c_str());
         SetStrCellNN(output.data[1], count, story.name.c_str());
@@ -355,11 +358,11 @@ static void SacShowStoriesScan(duckdb::ClientContext &context, duckdb::TableFunc
         SetStrCellNN(output.data[5], count, story.last_modified_at.c_str());
         SetStrCellNN(output.data[6], count, story.status.c_str());
 
-        bind_data.current_index++;
+        gstate.current_index++;
         count++;
     }
 
-    bind_data.finished = (bind_data.current_index >= bind_data.items.size());
+    gstate.finished = (gstate.current_index >= bind_data.items.size());
     output.SetCardinality(count);
 }
 
@@ -398,7 +401,8 @@ duckdb::TableFunctionSet CreateSacShowStoriesFunction() {
         {},  // No parameters
         SacShowStoriesScan,
         SacShowStoriesBind
-    );
+    ,
+        SacScanInitGlobalState);
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
@@ -414,17 +418,18 @@ using SacGetModelInfoBindData = SacItemWithDetailsBindData<SacModel>;
 static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                 duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<SacGetModelInfoBindData>();
+    auto &gstate = data_p.global_state->Cast<SacScanGlobalState>();
 
     if (!bind_data.item_found) {
         output.SetCardinality(0);
-        bind_data.finished = true;
+        gstate.finished = true;
         return;
     }
 
     idx_t count = 0;
 
     // Output one row for the model with dimension list
-    if (bind_data.current_index == 0) {
+    if (gstate.current_index == 0) {
         // Build dimension list as comma-separated string
         std::string dims_str;
         for (size_t i = 0; i < bind_data.details.size(); ++i) {
@@ -439,11 +444,11 @@ static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFun
         SetStrCellNN(output.data[4], 0, dims_str.c_str());
         SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
 
-        bind_data.current_index++;
+        gstate.current_index++;
         count = 1;
     }
 
-    bind_data.finished = true;
+    gstate.finished = true;
     output.SetCardinality(count);
 }
 
@@ -491,7 +496,8 @@ duckdb::TableFunctionSet CreateSacGetModelInfoFunction() {
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // model_id
         SacGetModelInfoScan,
         SacGetModelInfoBind
-    );
+    ,
+        SacScanInitGlobalState);
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
@@ -507,16 +513,17 @@ using SacGetStoryInfoBindData = SacSingleItemBindData<SacStory>;
 static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                 duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<SacGetStoryInfoBindData>();
+    auto &gstate = data_p.global_state->Cast<SacScanGlobalState>();
 
     if (!bind_data.item_found) {
         output.SetCardinality(0);
-        bind_data.finished = true;
+        gstate.finished = true;
         return;
     }
 
     idx_t count = 0;
 
-    if (bind_data.current_index == 0) {
+    if (gstate.current_index == 0) {
         SetStrCellNN(output.data[0], 0, bind_data.item.id.c_str());
         SetStrCellNN(output.data[1], 0, bind_data.item.name.c_str());
         SetStrCellNN(output.data[2], 0, bind_data.item.description.c_str());
@@ -525,11 +532,11 @@ static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFun
         SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
         SetStrCellNN(output.data[6], 0, bind_data.item.last_modified_at.c_str());
 
-        bind_data.current_index++;
+        gstate.current_index++;
         count = 1;
     }
 
-    bind_data.finished = true;
+    gstate.finished = true;
     output.SetCardinality(count);
 }
 
@@ -576,7 +583,8 @@ duckdb::TableFunctionSet CreateSacGetStoryInfoFunction() {
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},  // story_id
         SacGetStoryInfoScan,
         SacGetStoryInfoBind
-    );
+    ,
+        SacScanInitGlobalState);
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 

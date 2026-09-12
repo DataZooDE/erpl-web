@@ -7,6 +7,29 @@
 namespace erpl_web {
 
 /**
+ * Per-execution scan state for the SAC catalog functions (GitHub #195).
+ *
+ * The cursor used to live on the bind data, which DuckDB reuses across executions of a
+ * bound plan. Nothing reset it, so a second EXECUTE resumed past the end of the vector and
+ * returned no rows - silently, the #75 class.
+ *
+ * Only the CURSOR belongs here. The items themselves are fetched once at bind and never
+ * mutated, so they stay on the bind data and are shared; copying them per execution would
+ * be waste dressed up as a fix. Same reasoning as bc_describe / crm_describe in #191.
+ */
+class SacScanGlobalState : public duckdb::GlobalTableFunctionState {
+public:
+    size_t current_index = 0;
+    bool finished = false;
+};
+
+inline duckdb::unique_ptr<duckdb::GlobalTableFunctionState> SacScanInitGlobalState(
+    duckdb::ClientContext &, duckdb::TableFunctionInitInput &) {
+    return duckdb::make_uniq<SacScanGlobalState>();
+}
+
+
+/**
  * Generic bind data template for SAC catalog table functions
  *
  * Consolidates common pattern across all SAC catalog functions:
@@ -22,8 +45,12 @@ template <typename ItemType>
 class SacGenericBindData : public duckdb::TableFunctionData {
 public:
     std::vector<ItemType> items;       // Collection of items (models, stories, etc.)
-    size_t current_index = 0;          // Current iteration position
-    bool finished = false;             // Scan completion flag
+
+    // NOT the scan cursor. Per-execution position lives on SacScanGlobalState above; a
+    // cursor here is shared across executions of a bound plan and made the second EXECUTE
+    // return nothing (GitHub #195). Kept only so existing constructions still compile.
+    size_t current_index = 0;
+    bool finished = false;
 
     SacGenericBindData() = default;
     virtual ~SacGenericBindData() = default;
