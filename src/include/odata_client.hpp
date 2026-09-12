@@ -123,6 +123,22 @@ private:
 
 // ----------------------------------------------------------------------
 
+// Built as a named function rather than inline at the throw site so it can be asserted
+// without driving 10000 real round trips. The advice has to name max_page_size: telling a
+// caller to "ask the service for larger pages" without naming the parameter that does so
+// is advice they cannot act on (GitHub #161).
+std::string BuildPageLimitExceededMessage(idx_t limit, const std::string& last_url);
+
+// Validate a max_page_size named parameter. Shared by odata_read and odp_odata_read so the
+// same user-facing parameter cannot behave differently depending on which reader is asked:
+// odp_odata_read used to take a bare GetValue<uint32_t> with no checks, which let
+// `Prefer: odata.maxpagesize=0` reach the wire and fail service-side instead of locally
+// (GitHub #185).
+//
+// Throws InvalidInputException - a bad argument is the caller's, not a broken invariant of
+// ours, and ExceptionType::INTERNAL would invalidate the whole database instance.
+uint32_t ValidateMaxPageSizeParameter(const duckdb::Value& value);
+
 template <typename TResponse>
 class ODataClient {
 public:    
@@ -133,6 +149,24 @@ public:
         , auth_params(auth_params)
         , odata_version(ODataVersion::UNKNOWN) // Start with unknown version, will be detected from metadata
     {}
+
+    // Re-mint constructor. The two sites that rebuild a client mid-query - CloneForScan and
+    // the predicate-pushdown rebuild - construct it from odata_client->Url(), which is the
+    // PAGINATION CURSOR: once paging has advanced it holds whatever the last response
+    // named. Deriving the trusted origin from that would let a hostile @odata.nextLink
+    // become the credentialed origin at the next re-mint, quietly restoring #183 with no
+    // visible edit to the guard. Pass the origin explicitly instead (GitHub #189).
+    ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url,
+                const HttpUrl& service_origin, std::shared_ptr<HttpAuthParams> auth_params)
+        : http_client(http_client)
+        , url(url)
+        , service_origin_url(service_origin)
+        , auth_params(auth_params)
+        , odata_version(ODataVersion::UNKNOWN)
+    {}
+
+    // The service this client was opened against. Never the pagination cursor.
+    const HttpUrl &ServiceOriginUrl() const { return service_origin_url; }
 
     virtual ~ODataClient() = default;
 
@@ -214,6 +248,18 @@ public:
     // links forever.
     static constexpr idx_t MAX_PAGE_REQUESTS = 10000;
 
+    // OData's way for a client to ask a service for bigger pages
+    // (Prefer: odata.maxpagesize=N). Unset means "send no preference at all", which is not
+    // the same as sending a default: a Prefer header the caller never asked for can make a
+    // service page differently than it otherwise would.
+    void SetMaxPageSize(uint32_t max_page_size) { max_page_size_ = max_page_size; }
+
+    // Read back so the setting survives the places a client is re-minted mid-query:
+    // CloneForScan gives each execution a private cursor, and predicate pushdown rebuilds
+    // the client when it changes the URL. Anything not copied at those two sites is
+    // silently lost, which is how this was first written.
+    std::optional<uint32_t> GetMaxPageSize() const { return max_page_size_; }
+
 protected:
     // Deliberately the bare client, not CachingHttpClient. That wrapper is a process-wide
     // 30s response cache keyed on method + URL + body hash, with credentials excluded from
@@ -237,6 +283,7 @@ protected:
     ODataVersion odata_version;
     std::string metadata_context_url; // For Datasphere dual-URL pattern
     idx_t page_requests = 0;          // Pages fetched via a next link on this client
+    std::optional<uint32_t> max_page_size_;  // Prefer: odata.maxpagesize=N, when asked for
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         // Create a copy of the URL to modify with input parameters
@@ -254,6 +301,11 @@ protected:
         // Set OData version and add appropriate headers
         http_request.SetODataVersion(odata_version);
         http_request.AddODataVersionHeaders();
+
+        if (max_page_size_.has_value()) {
+            http_request.headers["Prefer"] =
+                "odata.maxpagesize=" + std::to_string(max_page_size_.value());
+        }
         
         // Credentials go only to the origin this client was pointed at. Server-driven
         // paging follows whatever URL the service puts in @odata.nextLink / __next, so
@@ -487,6 +539,10 @@ public:
     ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url);
     ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, const Edmx& edmx, std::shared_ptr<HttpAuthParams> auth_params);
     ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params);
+    // Re-mint form: carries the trusted service origin explicitly rather than deriving it
+    // from `url`, which at that point is the pagination cursor (GitHub #189).
+    ODataEntitySetClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url,
+                         const HttpUrl& service_origin, std::shared_ptr<HttpAuthParams> auth_params);
 
     virtual ~ODataEntitySetClient() = default;
 
@@ -564,7 +620,12 @@ public:
     };
     
     // Single probe to determine content type and version
-    static ProbeResult ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params);
+    // max_page_size is taken here, not applied to the client afterwards, because the probe
+    // response IS page one: FromProbeResult buffers it, and for an unprojected read the URL
+    // never changes so that buffer is never refetched. Setting the preference after the
+    // probe therefore missed the first page entirely (GitHub #185).
+    static ProbeResult ProbeUrl(const std::string& url, std::shared_ptr<HttpAuthParams> auth_params,
+                                std::optional<uint32_t> max_page_size = std::nullopt);
     
     // Create appropriate client based on probe result
     static std::shared_ptr<ODataEntitySetClient> CreateEntitySetClient(const ProbeResult& result);

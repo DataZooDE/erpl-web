@@ -183,8 +183,11 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
   const auto current_entity_set_name = odata_client->GetEntitySetName();
   const auto current_input_parameters = odata_client->GetInputParameters();
 
+  // Same as CloneForScan: the origin is carried, never re-derived from the cursor
+  // (GitHub #189).
+  const auto service_origin = odata_client->ServiceOriginUrl();
   odata_client = std::make_shared<ODataEntitySetClient>(
-      http_client, updated_url, auth_params);
+      http_client, updated_url, service_origin, auth_params);
 
   if (!current_metadata_context.empty()) {
     odata_client->SetMetadataContextUrl(current_metadata_context);

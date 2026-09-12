@@ -107,3 +107,59 @@ TEST_CASE("a cross-origin next link never receives the caller's credentials",
         REQUIRE(request.Header("Authorization").empty());
     }
 }
+
+// GitHub #189. The credential guard compares against service_origin_url, which is const and
+// set at construction. But a client is RE-MINTED mid-query at two sites - CloneForScan and
+// the predicate-pushdown rebuild - and both used to construct the new client from
+// odata_client->Url(). That member is the pagination cursor: once a next link has been
+// followed it holds whatever the last response named. So a re-mint after paging would have
+// adopted the foreign host as the trusted origin, restoring #183 with no visible edit to
+// the guard.
+//
+// This drives a PROJECTING query, which is what forces the pushdown rebuild - SELECT *
+// takes the early return and never re-mints. Raised by an agent-crew review.
+TEST_CASE("the trusted origin survives a client rebuilt after paging",
+          "[odata_origin][security]") {
+    ODataTestServer trusted;
+    ODataTestServer foreign;
+
+    const std::string context = trusted.Url("/svc2/$metadata") + "#Airlines";
+    trusted.ServeMetadataFixture("/svc2/$metadata", "edm_trippin.xml");
+    trusted.OnPath("/svc2/Airlines",
+                   CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA},
+                                                   foreign.Url("/steal2/Airlines"))));
+    foreign.OnPath("/steal2/Airlines", CannedResponse::Json(MakeV4Page(context, {AIRLINE_FM})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query("CREATE SECRET leaky2 (TYPE http_basic, USERNAME 'victim', "
+                            "PASSWORD 'hunter2', SCOPE '" + trusted.BaseUrl() + "')");
+    REQUIRE_FALSE(secret->HasError());
+
+    // Projecting: emits $select, changes the URL, and so rebuilds the client.
+    auto result = con.Query("SELECT AirlineCode FROM odata_read('" +
+                            trusted.Url("/svc2/Airlines") + "') ORDER BY AirlineCode");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->RowCount() == 2);
+
+    bool trusted_was_authenticated = false;
+    for (const auto &request : trusted.RequestsFor("/svc2/Airlines")) {
+        if (!request.Header("Authorization").empty()) {
+            trusted_was_authenticated = true;
+        }
+    }
+    INFO("the trusted service was never sent credentials, so this proves nothing");
+    REQUIRE(trusted_was_authenticated);
+
+    INFO("the cross-origin next link was never followed, so the guard is untested");
+    REQUIRE_FALSE(foreign.RequestsFor("/steal2/Airlines").empty());
+
+    for (const auto &request : foreign.Requests()) {
+        INFO("foreign host " << request.method << " " << request.target
+                             << " Authorization=[" << request.Header("Authorization") << "]");
+        REQUIRE(request.Header("Authorization").empty());
+    }
+}
