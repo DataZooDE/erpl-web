@@ -123,6 +123,12 @@ private:
 
 // ----------------------------------------------------------------------
 
+// Built as a named function rather than inline at the throw site so it can be asserted
+// without driving 10000 real round trips. The advice has to name max_page_size: telling a
+// caller to "ask the service for larger pages" without naming the parameter that does so
+// is advice they cannot act on (GitHub #161).
+std::string BuildPageLimitExceededMessage(idx_t limit, const std::string& last_url);
+
 template <typename TResponse>
 class ODataClient {
 public:    
@@ -213,6 +219,18 @@ public:
     // links forever.
     static constexpr idx_t MAX_PAGE_REQUESTS = 10000;
 
+    // OData's way for a client to ask a service for bigger pages
+    // (Prefer: odata.maxpagesize=N). Unset means "send no preference at all", which is not
+    // the same as sending a default: a Prefer header the caller never asked for can make a
+    // service page differently than it otherwise would.
+    void SetMaxPageSize(uint32_t max_page_size) { max_page_size_ = max_page_size; }
+
+    // Read back so the setting survives the places a client is re-minted mid-query:
+    // CloneForScan gives each execution a private cursor, and predicate pushdown rebuilds
+    // the client when it changes the URL. Anything not copied at those two sites is
+    // silently lost, which is how this was first written.
+    std::optional<uint32_t> GetMaxPageSize() const { return max_page_size_; }
+
 protected:
     // Deliberately the bare client, not CachingHttpClient. That wrapper is a process-wide
     // 30s response cache keyed on method + URL + body hash, with credentials excluded from
@@ -229,6 +247,7 @@ protected:
     ODataVersion odata_version;
     std::string metadata_context_url; // For Datasphere dual-URL pattern
     idx_t page_requests = 0;          // Pages fetched via a next link on this client
+    std::optional<uint32_t> max_page_size_;  // Prefer: odata.maxpagesize=N, when asked for
 
     std::unique_ptr<HttpResponse> DoHttpGet(const HttpUrl& url) {
         // Create a copy of the URL to modify with input parameters
@@ -246,6 +265,11 @@ protected:
         // Set OData version and add appropriate headers
         http_request.SetODataVersion(odata_version);
         http_request.AddODataVersionHeaders();
+
+        if (max_page_size_.has_value()) {
+            http_request.headers["Prefer"] =
+                "odata.maxpagesize=" + std::to_string(max_page_size_.value());
+        }
         
         // Credentials go only to the origin this client was pointed at. Server-driven
         // paging follows whatever URL the service puts in @odata.nextLink / __next, so

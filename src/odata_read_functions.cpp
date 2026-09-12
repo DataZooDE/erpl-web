@@ -1,3 +1,4 @@
+#include <limits>
 #include "duckdb/function/table_function.hpp"
 
 #include "datazoo/oauth2/http_client.hpp"
@@ -173,6 +174,32 @@ void ProcessNamedParameters(ODataReadBindData *bind_data,
       bind_data->SetStrictTyping(strict_value);
   }
 
+  // Handle MAX_PAGE_SIZE parameter
+  if (input.named_parameters.find("max_page_size") !=
+      input.named_parameters.end()) {
+    const auto requested =
+        input.named_parameters["max_page_size"].GetValue<duckdb::idx_t>();
+    // Zero is not "no preference" - it is a preference no service can honour. Rejecting it
+    // here, where the caller can see why, beats putting it on the wire. This is a bad
+    // argument from the caller, so it must not be an InternalException: DuckDB treats
+    // ExceptionType::INTERNAL as a broken process invariant and invalidates the whole
+    // database instance.
+    if (requested == 0) {
+      throw duckdb::InvalidInputException(
+          "max_page_size must be greater than 0; omit the parameter to send no page-size "
+          "preference at all");
+    }
+    if (requested > std::numeric_limits<uint32_t>::max()) {
+      throw duckdb::InvalidInputException(
+          "max_page_size must fit in 32 bits; %llu is larger than any service will honour",
+          static_cast<unsigned long long>(requested));
+    }
+    ERPL_TRACE_DEBUG("ODATA_BIND",
+                     duckdb::StringUtil::Format(
+                         "Named parameter 'max_page_size' set to: %d", requested));
+    bind_data->GetODataClient()->SetMaxPageSize(static_cast<uint32_t>(requested));
+  }
+
   // Handle COUNT parameter
   if (input.named_parameters.find("count") != input.named_parameters.end()) {
       auto count_value =
@@ -301,6 +328,7 @@ TableFunctionSet CreateODataReadFunction() {
     read_entity_set.named_parameters["skip"] = LogicalTypeId::UBIGINT;
     read_entity_set.named_parameters["expand"] = LogicalTypeId::VARCHAR;
     read_entity_set.named_parameters["count"] = LogicalTypeId::BOOLEAN;
+    read_entity_set.named_parameters["max_page_size"] = LogicalTypeId::UBIGINT;
     // Off by default: turning today's silently-wrong queries into hard
     // failures would be its own regression. On, a value we cannot convert
     // fails the query instead of arriving as an indistinguishable NULL.

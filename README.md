@@ -410,12 +410,23 @@ WHERE Country = 'Germany';
 -- Fail the query on the first value that cannot be converted to its column
 -- type, instead of receiving it as a NULL that looks like server-sent NULL
 SELECT * FROM odata_read('https://example.com/svc/Orders', strict_typing = true);
+
+-- Ask the service for larger pages, so a big extraction needs fewer round trips
+SELECT * FROM odata_read('https://example.com/svc/Orders', max_page_size = 5000);
 ```
 
 By default (`strict_typing = false`) a value that cannot be converted is
 returned as `NULL`, the rest of the row is kept, and a warning naming the
 column, the number of failures and the first offending value is printed once
 per scan. Values are never silently replaced by `0`, `''` or `false`.
+
+`max_page_size` sends `Prefer: odata.maxpagesize=N`, which is OData's way for a
+client to ask for larger pages. It is a *preference*: a service is free to
+ignore it or to cap it lower, and the reader follows whatever pages it actually
+gets. Omit the parameter to send no preference at all — that is not the same as
+sending a default, since a `Prefer` header can itself change how a service
+pages. Raising it is the supported answer when a very large extraction hits the
+10,000-page server-driven paging ceiling.
 
 Attach usage:
 

@@ -6,6 +6,17 @@
 
 namespace erpl_web {
 
+std::string BuildPageLimitExceededMessage(idx_t limit, const std::string& last_url)
+{
+    return "OData server-driven paging exceeded the limit of " + std::to_string(limit) +
+           " pages; the service keeps advertising a next link. Either the service is "
+           "looping, or this extraction genuinely needs more pages than the limit allows. "
+           "In that case narrow the read with a filter, or ask the service for larger pages "
+           "with the max_page_size parameter (odata_read(..., max_page_size => 5000)), which "
+           "sends Prefer: odata.maxpagesize. Last URL: " + last_url;
+}
+
+
 
 // ----------------------------------------------------------------------
 
@@ -213,11 +224,7 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
             // extraction has no way to guess that a narrower query or a larger server page
             // size is the answer, and a bare "limit exceeded" reads like a bug in us.
             throw std::runtime_error(
-                "OData server-driven paging exceeded the limit of " + std::to_string(MAX_PAGE_REQUESTS) +
-                " pages; the service keeps advertising a next link. Either the service is "
-                "looping, or this extraction genuinely needs more pages than the limit "
-                "allows - in which case narrow the read with a filter, or ask the service "
-                "for larger pages. Last URL: " + resolved_next_url.ToString());
+                BuildPageLimitExceededMessage(MAX_PAGE_REQUESTS, resolved_next_url.ToString()));
         }
         page_requests++;
 
