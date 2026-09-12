@@ -604,7 +604,17 @@ void OdpODataReadBindData::UpdateODataClientWithResponse(const std::string& url,
         if (!odata_bind_data_) {
             throw duckdb::InternalException("Failed to update OData client with response");
         }
-        
+
+        // The replacement carries no column selection, so it has to be re-applied here -
+        // at the single place the instance is replaced - rather than at each call site.
+        // FetchAndLoadNextPage did re-apply it; HandleInitialLoad and HandleDeltaFetch did
+        // not, so the FIRST page of every scan ran in all-columns mode and an explicitly
+        // projected column came back NULL for every row, with the row count still correct
+        // (GitHub #179).
+        if (!active_column_ids_.empty()) {
+            odata_bind_data_->ActivateColumns(active_column_ids_);
+        }
+
         ERPL_TRACE_DEBUG("ODP_BIND_DATA", "OData client updated successfully with pre-fetched response");
         
     } catch (const std::exception& e) {
@@ -785,12 +795,10 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
     // Use entity_set_url_ as the canonical URL; the actual content comes from the fetched page.
     UpdateODataClientWithResponse(entity_set_url_, next_result.response->RawContent());
 
-    // Re-apply column projection: UpdateODataClientWithResponse creates a fresh
-    // ODataReadBindData that has no column selection. Without this, the new instance
-    // falls back to "all columns" mode and can write out-of-bounds into a projected chunk.
-    if (!active_column_ids_.empty()) {
-        odata_bind_data_->ActivateColumns(active_column_ids_);
-    }
+    // Column projection is re-applied inside UpdateODataClientWithResponse itself, so it
+    // covers this call and the two in HandleInitialLoad / HandleDeltaFetch alike. It used
+    // to be re-applied only here, which is why only page two onwards was ever projected
+    // correctly (GitHub #179).
 
     ERPL_TRACE_INFO("ODP_BIND_DATA", pending_next_url_.empty()
         ? "Last ODP page loaded into odata_bind_data_"
