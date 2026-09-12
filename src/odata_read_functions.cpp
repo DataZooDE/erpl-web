@@ -1,3 +1,5 @@
+#include <optional>
+#include <limits>
 #include "duckdb/function/table_function.hpp"
 
 #include "datazoo/oauth2/http_client.hpp"
@@ -173,6 +175,19 @@ void ProcessNamedParameters(ODataReadBindData *bind_data,
       bind_data->SetStrictTyping(strict_value);
   }
 
+  // Handle MAX_PAGE_SIZE parameter
+  if (input.named_parameters.find("max_page_size") !=
+      input.named_parameters.end()) {
+    // Validation is shared with odp_odata_read so the same parameter cannot behave
+    // differently depending on which reader is asked (GitHub #185).
+    const auto requested =
+        ValidateMaxPageSizeParameter(input.named_parameters["max_page_size"]);
+    ERPL_TRACE_DEBUG("ODATA_BIND",
+                     duckdb::StringUtil::Format(
+                         "Named parameter 'max_page_size' set to: %d", requested));
+    bind_data->GetODataClient()->SetMaxPageSize(requested);
+  }
+
   // Handle COUNT parameter
   if (input.named_parameters.find("count") != input.named_parameters.end()) {
       auto count_value =
@@ -217,8 +232,17 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
                       "Binding OData read function for URL: %s", url.c_str()));
 
   try {
+    // Read and validate max_page_size BEFORE probing. The probe response is page one -
+    // FromProbeResult buffers it - and for an unprojected read the URL never changes, so
+    // that buffer is never refetched. Applying the preference only afterwards left the
+    // first page at the service's default size (GitHub #185).
+    std::optional<uint32_t> max_page_size;
+    if (input.named_parameters.find("max_page_size") != input.named_parameters.end()) {
+      max_page_size = ValidateMaxPageSizeParameter(input.named_parameters["max_page_size"]);
+    }
+
     // Single probe to determine content type and version
-    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params);
+    auto probe_result = ODataClientFactory::ProbeUrl(url, auth_params, max_page_size);
 
   // Create appropriate bind data based on probe result with fallback heuristic
   duckdb::unique_ptr<ODataReadBindData> bind_data;
@@ -232,6 +256,16 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
   // Set return types and names based on content type
   ODataReadBindHelpers::SetupSchemaFromProbeResult(
       probe_result, bind_data.get(), return_types, names);
+
+  // A service root lists entity sets rather than reading one, and the block below - which
+  // is where max_page_size is applied to the client - is skipped for it. The preference
+  // still rides the probe request (it is passed to ProbeUrl above), but nothing would
+  // carry it onto any later request, so apply it here too rather than accepting the
+  // parameter and quietly ignoring it (GitHub #185).
+  if (probe_result.is_service_root && max_page_size.has_value() &&
+      bind_data->GetODataClient() != nullptr) {
+    bind_data->GetODataClient()->SetMaxPageSize(max_page_size.value());
+  }
 
   // Handle named parameters and URL expand clause (only for entity-set mode)
   if (!probe_result.is_service_root) {
@@ -301,6 +335,7 @@ TableFunctionSet CreateODataReadFunction() {
     read_entity_set.named_parameters["skip"] = LogicalTypeId::UBIGINT;
     read_entity_set.named_parameters["expand"] = LogicalTypeId::VARCHAR;
     read_entity_set.named_parameters["count"] = LogicalTypeId::BOOLEAN;
+    read_entity_set.named_parameters["max_page_size"] = LogicalTypeId::UBIGINT;
     // Off by default: turning today's silently-wrong queries into hard
     // failures would be its own regression. On, a value we cannot convert
     // fails the query instead of arriving as an indistinguishable NULL.

@@ -174,6 +174,7 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
 
     // Store the current OData version before creating new client
     auto current_version = odata_client->GetODataVersion();
+  const auto current_max_page_size = odata_client->GetMaxPageSize();
   // Datasphere's dual-URL state. CloneForScan carries these, and this rebuild used to
   // throw them away one statement later on every projecting or filtered query - which is
   // why a SELECT * test could not reproduce the loss: SELECT * takes the early return
@@ -186,6 +187,9 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
   odata_client = std::make_shared<ODataEntitySetClient>(
       http_client, updated_url, auth_params);
 
+  if (current_max_page_size.has_value()) {
+    odata_client->SetMaxPageSize(current_max_page_size.value());
+  }
   if (!current_metadata_context.empty()) {
     odata_client->SetMetadataContextUrl(current_metadata_context);
   }
