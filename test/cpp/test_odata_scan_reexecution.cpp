@@ -292,12 +292,20 @@ TEST_CASE("a body truncated mid-stream fails cleanly and spares the database",
     auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + entity_url + "')");
     INFO("truncated read reported: "
          << (result->HasError() ? result->GetError() : std::string("no error")));
-    // Either outcome is defensible - refusing the half-document, or parsing what arrived.
-    // What is not defensible is taking the process or the database down with it.
-    if (!result->HasError()) {
-        REQUIRE(ScalarOf(result) >= 0);
-    } else {
+    // Two outcomes are acceptable: refuse the half document, or deliver all four rows.
+    // A SILENT PREFIX is not - reporting success over two of four rows is a wrong answer
+    // presented as a right one, which is a worse failure than the crash #166 started from.
+    //
+    // The earlier version of this assertion was `ScalarOf(result) >= 0`, which no result
+    // can fail. It was written to say "we do not mind which outcome" and instead said
+    // nothing at all - the exact assert-values-not-absence-of-a-crash trap this file was
+    // supposed to close.
+    if (result->HasError()) {
         REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
+    } else {
+        INFO("a truncated body was reported as success with " << ScalarOf(result)
+             << " of 4 rows - a silent partial extraction");
+        REQUIRE(ScalarOf(result) == 4);
     }
 
     auto after = con.Query("SELECT 42");
@@ -339,9 +347,6 @@ TEST_CASE("a truncated $metadata document fails cleanly and spares the database"
         REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
     } else {
         REQUIRE(ScalarOf(result) == 2);
-    }
-    if (result->HasError()) {
-        REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
     }
 
     auto after = con.Query("SELECT 42");
