@@ -224,6 +224,12 @@ TEST_CASE("a Datasphere dual-URL asset re-executes correctly",
     server.OnPath(data_prefix + "/MYASSET",
                   CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM},
                                                   entity_url + "?$format=json&$skiptoken=2")));
+
+    // Datasphere's parameterized shape: input parameters become a key predicate on the
+    // asset plus a /Set suffix.
+    server.OnPath(data_prefix + "/MYASSET(P_YEAR=2026)/Set",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA, AIRLINE_FM,
+                                                            AIRLINE_MU, AIRLINE_AF})));
     server.OnPath("/oauth/token",
                   CannedResponse::Json(
                       R"({"access_token":"test-token","token_type":"Bearer","expires_in":3600})"));
@@ -245,6 +251,18 @@ TEST_CASE("a Datasphere dual-URL asset re-executes correctly",
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->RowCount() == 4);
     }
+
+    // GitHub #190: with INPUT PARAMETERS present, GetMetadataContextUrl() used to clear the
+    // stored context URL unconditionally - treating the service's own @odata.context as a
+    // cache that parameters invalidate. That made the #186 carry a no-op for exactly the
+    // parameterized Datasphere reads it was written for. The parameters here are what
+    // triggers that path; without them this case cannot see the defect.
+    auto parameterized = con.Query(
+        "SELECT Name FROM datasphere_read_relational('" + server.Url(data_prefix) +
+        "', 'MYASSET', secret => 'ds', params => MAP{'P_YEAR': '2026'}) ORDER BY Name");
+    INFO((parameterized->HasError() ? parameterized->GetError() : std::string()));
+    REQUIRE_FALSE(parameterized->HasError());
+    REQUIRE(parameterized->RowCount() == 4);
 
     // A PROJECTING query is the shape that matters: SELECT * leaves the URL unchanged and
     // takes the early return in UpdateUrlFromPredicatePushdown, so it never reaches the

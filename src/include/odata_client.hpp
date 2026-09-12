@@ -178,7 +178,13 @@ public:
     void DetectODataVersion();
     
     // Set metadata context URL directly (for Datasphere dual-URL pattern)
-    void SetMetadataContextUrl(const std::string& context_url) { metadata_context_url = context_url; }
+    // Records an AUTHORITATIVE context URL - the @odata.context the service itself
+    // returned, stored at bind time for Datasphere's dual-URL shape. Distinct from the
+    // memoised derivation below, which is only a cache (GitHub #190).
+    void SetMetadataContextUrl(const std::string& context_url) {
+        metadata_context_url = context_url;
+        metadata_context_url_is_authoritative = true;
+    }
     
     // Set OData version directly to skip metadata fetching
     void SetODataVersionDirectly(ODataVersion version) { odata_version = version; }
@@ -282,6 +288,10 @@ protected:
     std::shared_ptr<TResponse> current_response;
     ODataVersion odata_version;
     std::string metadata_context_url; // For Datasphere dual-URL pattern
+    // True when metadata_context_url came from the service's own @odata.context rather
+    // than from resolveMetadataUrl(). Only the derived form is a cache that input
+    // parameters can invalidate (GitHub #190).
+    bool metadata_context_url_is_authoritative = false;
     idx_t page_requests = 0;          // Pages fetched via a next link on this client
     std::optional<uint32_t> max_page_size_;  // Prefer: odata.maxpagesize=N, when asked for
 
