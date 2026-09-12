@@ -436,6 +436,18 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
     // follow that page's next link without re-fetching it, while keeping the cursor
     // private. Deliberately NOT odata_client->current_response: after one execution that
     // is the LAST page, and resuming from it would return nothing.
+    // Datasphere's dual-URL shape: FromEntitySetRoot stores the @odata.context metadata
+    // URL and the entity-set name from its fragment at bind time, gated on
+    // IsDatasphereUrl. A clone that adopts page one never runs the code that derives them
+    // (it lives in ODataEntitySetClient::Get()), so without carrying them the clone
+    // resolves $metadata from the data URL and works from an empty entity-set name
+    // (GitHub #186).
+    if (!odata_client->StoredMetadataContextUrl().empty()) {
+      scan_client->SetMetadataContextUrl(odata_client->StoredMetadataContextUrl());
+    }
+    if (!odata_client->GetEntitySetName().empty()) {
+      scan_client->SetEntitySetName(odata_client->GetEntitySetName());
+    }
     if (first_page_response_ != nullptr) {
       scan_client->AdoptResponse(first_page_response_);
     }
@@ -640,11 +652,14 @@ namespace {
 
 // Returns the object that owns the scan state for this execution.
 //
-// odata_read(), the ATTACHed odata_table_scan and the SAC readers use
-// ODataReadGlobalState, so each execution of a bound plan gets its own state.
-// The Datasphere readers reuse ODataReadScan with their own init-global
-// functions, which still return a bare GlobalTableFunctionState; those keep the
-// historical behaviour of scanning straight out of the bind data.
+// odata_read(), the ATTACHed odata_table_scan, the SAC readers and both
+// Datasphere readers all return ODataReadGlobalState, so each execution of a
+// bound plan gets its own state.
+//
+// The fallback to the bind data remains for any caller that still supplies a
+// bare GlobalTableFunctionState. It is not a safe default - it is the historical
+// behaviour that made the second EXECUTE of a bound plan return nothing - so a
+// new reader should return ODataReadGlobalState rather than rely on it.
 ODataReadBindData &ResolveScanState(const duckdb::FunctionData *bind_data,
                                     const GlobalTableFunctionState *global_state) {
   auto *odata_global = dynamic_cast<const ODataReadGlobalState *>(global_state);

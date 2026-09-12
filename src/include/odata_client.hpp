@@ -496,11 +496,21 @@ public:
     
     // Override to check if input parameters are present
     bool HasInputParameters() const override { return !input_parameters.empty(); }
+    // Read back so the client re-mint sites can carry them. They survive today only
+    // because PrefetchFirstPage re-applies them afterwards, which is an accident of
+    // ordering rather than a property of the re-mint (GitHub #186).
+    const std::map<std::string, std::string> &GetInputParameters() const { return input_parameters; }
 
     // Explicitly set the current entity set name from an @odata.context value or fragment
     void SetEntitySetNameFromContextFragment(const std::string &context_or_fragment);
     // Explicitly set the current entity set name directly
     void SetEntitySetName(const std::string &entity_name) { current_entity_name_from_fragment = entity_name; }
+    // Read back so CloneForScan can carry it. Both this and the stored metadata context
+    // URL are set at bind time for Datasphere's dual-URL shape and are NOT re-derivable
+    // from a clone that adopts page one, because the derivation lives inside
+    // ODataEntitySetClient::Get() which such a clone never reaches (GitHub #186).
+    const std::string &GetEntitySetName() const { return current_entity_name_from_fragment; }
+    const std::string &StoredMetadataContextUrl() const { return metadata_context_url; }
 
     // Public access to entity type information for navigation property filtering
     EntityType GetCurrentEntityType();

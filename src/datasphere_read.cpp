@@ -187,25 +187,36 @@ static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> DatasphereReadRelati
     auto column_ids = input.column_ids;
 
     ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_INIT", "Initializing with " + std::to_string(column_ids.size()) + " columns");
-    
-    // Activate columns and add filters
-    bind_data.ActivateColumns(column_ids);
-    bind_data.AddFilters(input.filters);
-    
-    // Ensure input parameters are still available in OData client
-    auto input_params = bind_data.GetInputParameters();
+
+    // Projection, filter pushdown and the first-page prefetch all mutate scan state, so
+    // they run against a private clone and the bind data stays exactly as bind left it.
+    // Scanning straight out of the bind data - which is what returning a bare
+    // GlobalTableFunctionState made ResolveScanState do - meant the second EXECUTE of a
+    // bound plan found the row buffer already drained and returned nothing, silently
+    // (GitHub #75).
+    auto scan_state = bind_data.CloneForScan();
+
+    scan_state->ActivateColumns(column_ids);
+    scan_state->AddFilters(input.filters);
+
+    // Input parameters live on the OData client, and CloneForScan mints a fresh one, so
+    // they are re-applied to the clone here. They also survive the pushdown rebuild below,
+    // which now carries them explicitly - before that they came back only because
+    // PrefetchFirstPage re-applies them afterwards, which is an accident of ordering
+    // rather than a property of the re-mint.
+    auto input_params = scan_state->GetInputParameters();
     if (!input_params.empty()) {
-        auto odata_client = bind_data.GetODataClient();
+        auto odata_client = scan_state->GetODataClient();
         if (odata_client) {
             odata_client->SetInputParameters(input_params);
             ERPL_TRACE_INFO("DATASPHERE_RELATIONAL_INIT", "Re-applied " + std::to_string(input_params.size()) + " input parameters");
         }
     }
-    
-    // Update URL with predicate pushdown
-    bind_data.UpdateUrlFromPredicatePushdown();
 
-    return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
+    scan_state->UpdateUrlFromPredicatePushdown();
+    scan_state->PrefetchFirstPage();
+
+    return duckdb::make_uniq<ODataReadGlobalState>(std::move(scan_state));
 }
 
 duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
@@ -236,13 +247,7 @@ duckdb::TableFunctionSet CreateDatasphereReadRelationalFunction() {
         DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadRelationalBind), DatasphereReadRelationalTableInitGlobalState);
     relational_function_3_params.filter_pushdown = true;
     relational_function_3_params.projection_pushdown = true;
-    relational_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
-                                                          const duckdb::FunctionData *bind_data,
-                                                          const duckdb::GlobalTableFunctionState *gstate) -> double {
-        if (!bind_data) return -1.0;
-        auto odata_bind = static_cast<const ODataReadBindData *>(bind_data);
-        return odata_bind ? odata_bind->GetProgressFraction() : -1.0;
-    };
+    relational_function_3_params.table_scan_progress = ODataReadTableProgress;
     relational_function_3_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_3_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     relational_function_3_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
@@ -351,23 +356,26 @@ static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> DatasphereReadAnalyt
     auto column_ids = input.column_ids;
 
     ERPL_TRACE_DEBUG("DATASPHERE_ANALYTICAL_INIT", "Initializing with " + std::to_string(column_ids.size()) + " columns");
-    
-    bind_data.ActivateColumns(column_ids);
-    bind_data.AddFilters(input.filters);
 
-    // Ensure input parameters are still available in OData client
-    auto input_params = bind_data.GetInputParameters();
+    // Private per-execution scan state; see the relational reader above (GitHub #75).
+    auto scan_state = bind_data.CloneForScan();
+
+    scan_state->ActivateColumns(column_ids);
+    scan_state->AddFilters(input.filters);
+
+    auto input_params = scan_state->GetInputParameters();
     if (!input_params.empty()) {
-        auto odata_client = bind_data.GetODataClient();
+        auto odata_client = scan_state->GetODataClient();
         if (odata_client) {
             odata_client->SetInputParameters(input_params);
             ERPL_TRACE_INFO("DATASPHERE_ANALYTICAL_INIT", "Re-applied " + std::to_string(input_params.size()) + " input parameters");
         }
     }
 
-    bind_data.UpdateUrlFromPredicatePushdown();
+    scan_state->UpdateUrlFromPredicatePushdown();
+    scan_state->PrefetchFirstPage();
 
-    return duckdb::make_uniq<duckdb::GlobalTableFunctionState>();
+    return duckdb::make_uniq<ODataReadGlobalState>(std::move(scan_state));
 }
 
 duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction() {
@@ -400,13 +408,7 @@ duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction() {
         DATAZOO_GUARD(ERPL_WEB_BANNER, ODataReadScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereReadAnalyticalBind), DatasphereReadAnalyticalTableInitGlobalState);
     analytical_function_3_params.filter_pushdown = true;
     analytical_function_3_params.projection_pushdown = true;
-    analytical_function_3_params.table_scan_progress = [](duckdb::ClientContext &context,
-                                                          const duckdb::FunctionData *bind_data,
-                                                          const duckdb::GlobalTableFunctionState *gstate) -> double {
-        if (!bind_data) return -1.0;
-        auto odata_bind = static_cast<const ODataReadBindData *>(bind_data);
-        return odata_bind ? odata_bind->GetProgressFraction() : -1.0;
-    };
+    analytical_function_3_params.table_scan_progress = ODataReadTableProgress;
     analytical_function_3_params.named_parameters["top"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     analytical_function_3_params.named_parameters["skip"] = duckdb::LogicalType(duckdb::LogicalTypeId::UBIGINT);
     analytical_function_3_params.named_parameters["params"] = duckdb::LogicalType::MAP(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), 
