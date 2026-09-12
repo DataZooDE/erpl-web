@@ -19,8 +19,27 @@ using namespace duckdb;
 
 struct BcShowCompaniesBindData : public TableFunctionData {
     std::unique_ptr<ODataReadBindData> odata_bind_data;
-    bool finished = false;
 };
+
+// Per-execution scan state (GitHub #191). `finished` lived on the bind data and was never
+// reset, so a second EXECUTE of a bound plan returned zero rows silently.
+class BcShowCompaniesGlobalState : public GlobalTableFunctionState {
+public:
+    explicit BcShowCompaniesGlobalState(std::unique_ptr<ODataReadBindData> scan_state)
+        : scan_state(std::move(scan_state)) {}
+
+    ODataReadBindData &Scan() { return *scan_state; }
+    bool finished = false;
+
+private:
+    std::unique_ptr<ODataReadBindData> scan_state;
+};
+
+static unique_ptr<GlobalTableFunctionState> BcShowCompaniesInitGlobalState(
+    ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->CastNoConst<BcShowCompaniesBindData>();
+    return make_uniq<BcShowCompaniesGlobalState>(bind_data.odata_bind_data->CloneForScan());
+}
 
 static unique_ptr<FunctionData> BcShowCompaniesBind(
     ClientContext &context,
@@ -56,22 +75,22 @@ static unique_ptr<FunctionData> BcShowCompaniesBind(
 }
 
 static void BcShowCompaniesScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-    auto &bind_data = data.bind_data->CastNoConst<BcShowCompaniesBindData>();
+    auto &gstate = data.global_state->Cast<BcShowCompaniesGlobalState>();
 
-    if (bind_data.finished) {
+    if (gstate.finished) {
         return;
     }
 
-    auto rows_fetched = bind_data.odata_bind_data->FetchNextResult(output);
-    if (!bind_data.odata_bind_data->HasMoreResults() && rows_fetched == 0) {
-        bind_data.finished = true;
+    auto rows_fetched = gstate.Scan().FetchNextResult(output);
+    if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
+        gstate.finished = true;
     }
 }
 
 TableFunctionSet CreateBcShowCompaniesFunction() {
     TableFunctionSet set("bc_show_companies");
 
-    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesBind));
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowCompaniesBind), BcShowCompaniesInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -84,8 +103,27 @@ TableFunctionSet CreateBcShowCompaniesFunction() {
 
 struct BcShowEntitiesBindData : public TableFunctionData {
     std::unique_ptr<ODataReadBindData> odata_bind_data;
-    bool finished = false;
 };
+
+// Per-execution scan state (GitHub #191). `finished` lived on the bind data and was never
+// reset, so a second EXECUTE of a bound plan returned zero rows silently.
+class BcShowEntitiesGlobalState : public GlobalTableFunctionState {
+public:
+    explicit BcShowEntitiesGlobalState(std::unique_ptr<ODataReadBindData> scan_state)
+        : scan_state(std::move(scan_state)) {}
+
+    ODataReadBindData &Scan() { return *scan_state; }
+    bool finished = false;
+
+private:
+    std::unique_ptr<ODataReadBindData> scan_state;
+};
+
+static unique_ptr<GlobalTableFunctionState> BcShowEntitiesInitGlobalState(
+    ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->CastNoConst<BcShowEntitiesBindData>();
+    return make_uniq<BcShowEntitiesGlobalState>(bind_data.odata_bind_data->CloneForScan());
+}
 
 static unique_ptr<FunctionData> BcShowEntitiesBind(
     ClientContext &context,
@@ -121,22 +159,22 @@ static unique_ptr<FunctionData> BcShowEntitiesBind(
 }
 
 static void BcShowEntitiesScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-    auto &bind_data = data.bind_data->CastNoConst<BcShowEntitiesBindData>();
+    auto &gstate = data.global_state->Cast<BcShowEntitiesGlobalState>();
 
-    if (bind_data.finished) {
+    if (gstate.finished) {
         return;
     }
 
-    auto rows_fetched = bind_data.odata_bind_data->FetchNextResult(output);
-    if (!bind_data.odata_bind_data->HasMoreResults() && rows_fetched == 0) {
-        bind_data.finished = true;
+    auto rows_fetched = gstate.Scan().FetchNextResult(output);
+    if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
+        gstate.finished = true;
     }
 }
 
 TableFunctionSet CreateBcShowEntitiesFunction() {
     TableFunctionSet set("bc_show_entities");
 
-    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesBind));
+    TableFunction func({}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcShowEntitiesBind), BcShowEntitiesInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
 
     set.AddFunction(func);
@@ -152,8 +190,20 @@ struct BcDescribeBindData : public TableFunctionData {
     std::vector<std::string> property_types;
     std::vector<bool> is_nullable;
     std::vector<bool> is_key;
+};
+
+// Per-execution row cursor (GitHub #191). It lived on the bind data and was never reset,
+// so a second EXECUTE of a bound plan resumed past the end and returned nothing. The
+// describe payload itself is immutable and stays shared.
+class BcDescribeGlobalState : public GlobalTableFunctionState {
+public:
     idx_t current_row = 0;
 };
+
+static unique_ptr<GlobalTableFunctionState> BcDescribeInitGlobalState(
+    ClientContext &context, TableFunctionInitInput &input) {
+    return make_uniq<BcDescribeGlobalState>();
+}
 
 static unique_ptr<FunctionData> BcDescribeBind(
     ClientContext &context,
@@ -232,14 +282,15 @@ static unique_ptr<FunctionData> BcDescribeBind(
 
 static void BcDescribeScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
     auto &bind_data = data.bind_data->CastNoConst<BcDescribeBindData>();
+    auto &gstate = data.global_state->Cast<BcDescribeGlobalState>();
 
     idx_t count = 0;
-    while (bind_data.current_row < bind_data.property_names.size() && count < STANDARD_VECTOR_SIZE) {
-        output.SetValue(0, count, Value(bind_data.property_names[bind_data.current_row]));
-        output.SetValue(1, count, Value(bind_data.property_types[bind_data.current_row]));
-        output.SetValue(2, count, Value(bind_data.is_nullable[bind_data.current_row]));
-        output.SetValue(3, count, Value(bind_data.is_key[bind_data.current_row]));
-        bind_data.current_row++;
+    while (gstate.current_row < bind_data.property_names.size() && count < STANDARD_VECTOR_SIZE) {
+        output.SetValue(0, count, Value(bind_data.property_names[gstate.current_row]));
+        output.SetValue(1, count, Value(bind_data.property_types[gstate.current_row]));
+        output.SetValue(2, count, Value(bind_data.is_nullable[gstate.current_row]));
+        output.SetValue(3, count, Value(bind_data.is_key[gstate.current_row]));
+        gstate.current_row++;
         count++;
     }
 
@@ -249,7 +300,7 @@ static void BcDescribeScan(ClientContext &context, TableFunctionInput &data, Dat
 TableFunctionSet CreateBcDescribeFunction() {
     TableFunctionSet set("bc_describe");
 
-    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeBind));
+    TableFunction func({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BcDescribeBind), BcDescribeInitGlobalState);
     func.named_parameters["secret"] = LogicalType::VARCHAR;
     func.named_parameters["company"] = LogicalType::VARCHAR;
 

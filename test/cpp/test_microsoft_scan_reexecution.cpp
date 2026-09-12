@@ -317,3 +317,83 @@ TEST_CASE("the URL hatch guard is not fooled by userinfo", "[ms_reexec][security
                 "http://LOCALHOST:8080/api/data/v9.2");
     }
 }
+
+// GitHub #191. The catalog functions beside bc_read/crm_read keep their cursor on the BIND
+// DATA and register no init_global at all, so a re-executed bound plan resumes from a
+// drained cursor and returns nothing - the #75 class, in the last readers carrying it.
+//
+// #191 was filed from SOURCE READING because these could not be driven against the local
+// server: they bind their schema entirely from $metadata (FromEntitySetClient with no
+// buffered response), and edm_trippin.xml has no `companies` set, so bind failed with
+// "Table function must return at least one column" and nothing about the scan could be
+// reached. edm_business_central_min.xml exists to close exactly that gap.
+TEST_CASE("a bound bc_show_companies plan returns every row on each execution",
+          "[ms_reexec][catalog]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/$metadata", "edm_business_central_min.xml");
+    server.OnPath("/companies",
+                  CannedResponse::Json(MakeV4Page(
+                      server.Url("/$metadata") + "#companies",
+                      {R"({"id":"11111111-2222-3333-4444-555555555555","name":"Alpha","displayName":"Alpha Ltd"})",
+                       R"({"id":"66666666-7777-8888-9999-000000000000","name":"Beta","displayName":"Beta GmbH"})"})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query(
+        "CREATE SECRET bccat (TYPE business_central, PROVIDER config, "
+        "TENANT_ID 'loopback', CLIENT_ID 'id', CLIENT_SECRET 'sec', "
+        "ENVIRONMENT '" + server.BaseUrl() + "', ACCESS_TOKEN 'test-token', "
+        "EXPIRES_AT '" + FarFutureEpoch() + "')");
+    INFO((secret->HasError() ? secret->GetError() : std::string()));
+    REQUIRE_FALSE(secret->HasError());
+
+    auto prep = con.Query("PREPARE cats AS SELECT COUNT(*) FROM bc_show_companies(secret => 'bccat')");
+    INFO((prep->HasError() ? prep->GetError() : std::string()));
+    REQUIRE_FALSE(prep->HasError());
+
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE cats");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(ScalarOf(result) == 2);
+    }
+}
+
+// bc_describe keeps a row cursor rather than a `finished` flag, but it is the same defect:
+// the cursor lived on the bind data and was never reset, so a second EXECUTE resumed past
+// the end. The describe payload itself is immutable and stays shared - only the cursor
+// needed to move (GitHub #191).
+TEST_CASE("a bound bc_describe plan returns every row on each execution",
+          "[ms_reexec][catalog]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/$metadata", "edm_business_central_min.xml");
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query(
+        "CREATE SECRET bcdesc (TYPE business_central, PROVIDER config, "
+        "TENANT_ID 'loopback', CLIENT_ID 'id', CLIENT_SECRET 'sec', "
+        "ENVIRONMENT '" + server.BaseUrl() + "', ACCESS_TOKEN 'test-token', "
+        "EXPIRES_AT '" + FarFutureEpoch() + "')");
+    INFO((secret->HasError() ? secret->GetError() : std::string()));
+    REQUIRE_FALSE(secret->HasError());
+
+    auto prep = con.Query(
+        "PREPARE d AS SELECT COUNT(*) FROM bc_describe('customers', secret => 'bcdesc')");
+    INFO((prep->HasError() ? prep->GetError() : std::string()));
+    REQUIRE_FALSE(prep->HasError());
+
+    // customer declares three properties in the fixture.
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE d");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(ScalarOf(result) == 3);
+    }
+}
