@@ -270,3 +270,32 @@ TEST_CASE("the URL hatches are case-insensitive about the scheme",
                 "https://api.businesscentral.dynamics.com/v2.0/tenant/production/api/v2.0");
     }
 }
+
+// GitHub #194. "http://127.0.0.1:pw@evil.example/" has 127.0.0.1:pw as USERINFO and
+// evil.example as the host - HttpUrl::ParseUrl reads it that way (its regex captures
+// user/password/host separately). A guard that stops at the first ':' sees "127.0.0.1" and
+// approves, so the bearer token went to the attacker's host in cleartext. Unlike the
+// case-sensitivity gap this one was live. Found by the continuous agent-crew review.
+TEST_CASE("the URL hatch guard is not fooled by userinfo", "[ms_reexec][security]") {
+    SECTION("a loopback-looking userinfo does not launder a foreign host") {
+        REQUIRE_THROWS_AS(
+            erpl_web::DataverseUrlBuilder::BuildApiUrl("http://127.0.0.1:pw@evil.example"),
+            duckdb::InvalidInputException);
+        REQUIRE_THROWS_AS(
+            erpl_web::DataverseUrlBuilder::BuildApiUrl("http://localhost:pw@evil.example"),
+            duckdb::InvalidInputException);
+        REQUIRE_THROWS_AS(
+            erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://localhost@evil.example"),
+            duckdb::InvalidInputException);
+    }
+
+    SECTION("real loopback with credentials is still accepted") {
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://user:pw@127.0.0.1:8080") ==
+                "http://user:pw@127.0.0.1:8080/api/data/v9.2");
+    }
+
+    SECTION("the loopback host compare is case-insensitive") {
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://LOCALHOST:8080") ==
+                "http://LOCALHOST:8080/api/data/v9.2");
+    }
+}

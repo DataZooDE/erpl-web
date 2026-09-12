@@ -49,7 +49,21 @@ void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
         return;  // not an absolute URL at all; the caller handles its own forms
     }
 
-    const std::string after_scheme = url.substr(std::string("http://").size());
+    std::string after_scheme = url.substr(std::string("http://").size());
+
+    // Strip userinfo FIRST. "http://127.0.0.1:pw@evil.example/" has 127.0.0.1:pw as
+    // user:password and evil.example as the host - HttpUrl::ParseUrl reads it that way -
+    // but a parse that stops at the first ':' sees "127.0.0.1" and approves. That was a
+    // live bypass: the guard passed, and the bearer token went to the attacker's host in
+    // cleartext (GitHub #194).
+    const auto authority_end = after_scheme.find('/');
+    const auto at = after_scheme.rfind('@', authority_end == std::string::npos
+                                                ? std::string::npos
+                                                : authority_end);
+    if (at != std::string::npos) {
+        after_scheme = after_scheme.substr(at + 1);
+    }
+
     std::string host;
     if (!after_scheme.empty() && after_scheme.front() == '[') {
         // Bracketed IPv6: the port separator is the colon AFTER the ']', and the address
@@ -63,7 +77,10 @@ void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
 
     // The host must BE a loopback name, not merely start with one - a prefix test lets
     // "localhost.evil.example" through.
-    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") {
+    // Hosts are case-insensitive too, so LOCALHOST must be treated as localhost - the
+    // scheme check was made case-insensitive while this one was left byte-exact.
+    const auto host_lower = LowercaseAscii(host);
+    if (host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "[::1]") {
         return;
     }
 
