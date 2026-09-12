@@ -181,6 +181,7 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
   // specifically to work around this same loss (GitHub #186).
   const auto current_metadata_context = odata_client->StoredMetadataContextUrl();
   const auto current_entity_set_name = odata_client->GetEntitySetName();
+  const auto current_input_parameters = odata_client->GetInputParameters();
 
   odata_client = std::make_shared<ODataEntitySetClient>(
       http_client, updated_url, auth_params);
@@ -190,6 +191,9 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
   }
   if (!current_entity_set_name.empty()) {
     odata_client->SetEntitySetName(current_entity_set_name);
+  }
+  if (!current_input_parameters.empty()) {
+    odata_client->SetInputParameters(current_input_parameters);
   }
     
     // Preserve the OData version to avoid metadata fetching

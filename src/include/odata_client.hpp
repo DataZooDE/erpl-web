@@ -496,6 +496,10 @@ public:
     
     // Override to check if input parameters are present
     bool HasInputParameters() const override { return !input_parameters.empty(); }
+    // Read back so the client re-mint sites can carry them. They survive today only
+    // because PrefetchFirstPage re-applies them afterwards, which is an accident of
+    // ordering rather than a property of the re-mint (GitHub #186).
+    const std::map<std::string, std::string> &GetInputParameters() const { return input_parameters; }
 
     // Explicitly set the current entity set name from an @odata.context value or fragment
     void SetEntitySetNameFromContextFragment(const std::string &context_or_fragment);

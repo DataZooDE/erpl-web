@@ -200,7 +200,10 @@ static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> DatasphereReadRelati
     scan_state->AddFilters(input.filters);
 
     // Input parameters live on the OData client, and CloneForScan mints a fresh one, so
-    // they have to be re-applied to the clone rather than to the bind data's client.
+    // they are re-applied to the clone here. They also survive the pushdown rebuild below,
+    // which now carries them explicitly - before that they came back only because
+    // PrefetchFirstPage re-applies them afterwards, which is an accident of ordering
+    // rather than a property of the re-mint.
     auto input_params = scan_state->GetInputParameters();
     if (!input_params.empty()) {
         auto odata_client = scan_state->GetODataClient();
