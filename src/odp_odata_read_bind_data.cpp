@@ -50,6 +50,42 @@ OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
     ValidateEntitySetUrl();
 }
 
+duckdb::unique_ptr<OdpODataReadBindData> OdpODataReadBindData::CloneForScan() const {
+    ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Cloning ODP bind data for a new execution");
+
+    // force_full_load and import_delta_token are ONE-SHOT bind options, and are
+    // deliberately not forwarded to the clone.
+    //
+    // Bind has already applied them: force_full_load reset the subscription, and
+    // import_delta_token was written to it. Replaying them per execution would mean a
+    // prepared statement re-imports the same token on every EXECUTE, so execution 2 could
+    // never advance past the token execution 1 consumed - the subscription would be pinned
+    // forever at the imported position. The clone instead resolves the subscription bind
+    // left behind, which is exactly the state those options produced (GitHub #188).
+    auto clone = duckdb::make_uniq<OdpODataReadBindData>(
+        context_, entity_set_url_, secret_name_, /*force_full_load=*/false,
+        /*import_delta_token=*/std::string(), max_page_size_);
+
+    if (initialized_) {
+        clone->Initialize();
+    }
+
+    // Column activation is held on the wrapper rather than the inner bind data (GitHub
+    // #58): the inner instance is replaced wholesale on every page, and only the wrapper
+    // remembers the selection well enough to re-apply it to the replacement. A clone that
+    // did not carry it would run page 2 onwards in all-columns mode.
+    if (!active_column_ids_.empty()) {
+        clone->ActivateColumns(active_column_ids_);
+    }
+
+    // Result modifiers (pushed LIMIT / ORDER BY) are deliberately not carried, because
+    // AddResultModifiers is intentionally never called on either bind data - see the note
+    // at odata_read_functions.hpp. If that path is ever wired up, modifier state has to be
+    // copied here too.
+
+    return clone;
+}
+
 // ============================================================================
 // Core DuckDB Table Function Interface (Delegated)
 // ============================================================================
