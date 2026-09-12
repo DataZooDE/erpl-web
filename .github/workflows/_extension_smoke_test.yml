@@ -38,23 +38,50 @@ on:
         default: ""
 
 jobs:
+  # The matrix is filtered here rather than with a job-level `if`, because the `matrix`
+  # context is NOT available in a job-level `if` - a workflow using one fails validation
+  # and spawns no jobs at all.
+  #
+  # The membership test is delimiter-safe: the arch names overlap, so a bare substring
+  # test would make excluding `windows_amd64_rtools` also drop `windows_amd64`.
+  select-archs:
+    name: Select architectures
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter.outputs.matrix }}
+      any: ${{ steps.filter.outputs.any }}
+    steps:
+      - id: filter
+        shell: bash
+        env:
+          EXCLUDE_ARCHS: ${{ inputs.exclude_archs }}
+        run: |
+          set -euo pipefail
+          all='[{"arch":"linux_amd64","runner":"ubuntu-24.04"},
+                {"arch":"osx_arm64","runner":"macos-latest"},
+                {"arch":"windows_amd64","runner":"windows-latest"}]'
+          excluded=";${EXCLUDE_ARCHS};"
+          # Bind the element to $e first: inside the `|` the `.` is $ex (a string), so
+          # `.arch` there would index a string rather than the matrix entry.
+          matrix=$(echo "$all" | jq -c --arg ex "$excluded" \
+            '[.[] | . as $e | select(($ex | contains(";" + $e.arch + ";")) | not)]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$matrix" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Smoke-testing: $matrix"
+
   smoke-test:
     name: Smoke test (${{ matrix.arch }})
+    needs: select-archs
+    if: needs.select-archs.outputs.any == 'true'
     strategy:
       # Run all platforms even if one fails so we see the full picture
       fail-fast: false
       matrix:
-        include:
-          - arch: linux_amd64
-            runner: ubuntu-24.04
-          - arch: osx_arm64
-            runner: macos-latest
-          - arch: windows_amd64
-            runner: windows-latest
-    # Delimiter-safe membership test. Comparing bare substrings would make excluding
-    # `windows_amd64_rtools` also skip `windows_amd64`, since one name contains the other;
-    # wrapping both sides in ';' compares whole entries.
-    if: ${{ !contains(format(';{0};', inputs.exclude_archs), format(';{0};', matrix.arch)) }}
+        include: ${{ fromJSON(needs.select-archs.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
 
     steps:
