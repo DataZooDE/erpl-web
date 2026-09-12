@@ -1590,11 +1590,12 @@ is a stricter requirement than it looks — see the next bullet.
   on an ABAP Cloud developer trial.
 - A source CDS view is provided as `scripts/sap/zjr_odp_v.ddls.abap` over the table in
   `scripts/sap/zjr_odp_data.tabl.abap`, for a fixture whose contents you control.
-- **Delta is a separate matter.** `RODPS_REPL_ODP_GET_DETAIL` reports
-  `supports_delta = ' '` for ABAP-CDS sources on this system even with
-  `@Analytics.dataExtraction.delta.byElement`, so SAP returns no `__delta` link and no
-  `DeltaLinksOf*` entity set is generated (`CL_RSODP_ODATA_ODP_OUT_MPC` guards it with
-  `CHECK i_supports_delta = ...`). The reader correctly stays in initial-load mode and
-  logs *"change tracking not established"*. Testing the delta lifecycle end to end needs a
-  genuinely delta-capable ODP (CDC-based extraction, or a BW/SAPI source).
+- **Delta is a separate matter, but it does work here.** `CL_RSODP_ODATA_ODP_OUT_MPC`
+  guards the `DeltaLinksOf*` entity set with `CHECK i_supports_delta = ...`, so everything
+  depends on what `RODPS_REPL_ODP_GET_DETAIL` reports. With
+  `@Analytics.dataExtraction.delta.byElement` it reports `supports_delta = ' '` and the
+  reader correctly stays in initial-load mode, logging *"change tracking not
+  established"* — which reads like a reader defect and is not one. Switching the CDS view
+  to `delta.changeDataCapture.automatic` flips it, and the full lifecycle then works
+  end to end; `test/sql/sap/odp_odata_delta.test` proves it against `Z_ODP_DL2_SRV`.
 
