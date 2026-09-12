@@ -61,11 +61,22 @@ struct CannedResponse {
     std::string body;
     std::map<std::string, std::string> headers;  // extra response headers
 
+    // When set, the server announces the full body length and then writes only this
+    // many bytes before dropping the connection. That is what a real service looks like
+    // when it dies mid-response, and it is the shape GitHub #166 suspects behind a
+    // segfault that appeared once against the public TripPin service and never again:
+    // a short read reaching a parser that assumed a complete document. 0 means "send the
+    // body whole", which is every other response.
+    std::size_t truncate_after_bytes = 0;
+
     static CannedResponse Json(std::string body, int status = 200);
     static CannedResponse Xml(std::string body, int status = 200);
     static CannedResponse Error(int status, std::string body = std::string());
 
     CannedResponse &WithHeader(const std::string &name, const std::string &value);
+
+    // Cut the body short after `bytes`, announcing the untruncated length.
+    CannedResponse &TruncatedAfter(std::size_t bytes);
 };
 
 using RequestMatcher = std::function<bool(const RecordedRequest &)>;

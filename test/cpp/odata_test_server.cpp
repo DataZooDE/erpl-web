@@ -236,6 +236,12 @@ CannedResponse &CannedResponse::WithHeader(const std::string &name, const std::s
     return *this;
 }
 
+CannedResponse &CannedResponse::TruncatedAfter(std::size_t bytes)
+{
+    truncate_after_bytes = bytes;
+    return *this;
+}
+
 // ----------------------------------------------------------------------
 // ODataTestServer
 
@@ -317,7 +323,27 @@ ODataTestServer::ODataTestServer() : impl(std::make_unique<Impl>())
             }
 
             response.status = canned.status;
-            response.set_content(canned.body, canned.content_type.c_str());
+            if (canned.truncate_after_bytes > 0 &&
+                canned.truncate_after_bytes < canned.body.size()) {
+                // Announce the whole body, deliver a prefix, then fail the provider so
+                // httplib closes the connection. The client sees a short read against a
+                // declared Content-Length - a service dying mid-response.
+                const auto body = canned.body;
+                const auto cut = canned.truncate_after_bytes;
+                response.set_content_provider(
+                    body.size(), canned.content_type.c_str(),
+                    [body, cut](std::size_t offset, std::size_t length,
+                                duckdb_httplib_openssl::DataSink &sink) -> bool {
+                        if (offset >= cut) {
+                            return false;  // give up mid-body
+                        }
+                        const auto take = std::min(length, cut - offset);
+                        sink.write(body.data() + offset, take);
+                        return true;
+                    });
+            } else {
+                response.set_content(canned.body, canned.content_type.c_str());
+            }
             for (const auto &header : canned.headers) {
                 if (ToLowerAscii(header.first) == "content-type") {
                     continue;
