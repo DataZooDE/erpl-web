@@ -1,3 +1,4 @@
+#include "odata_url_helpers.hpp"
 #include "datasphere_read.hpp"
 #include "datasphere_client.hpp"
 #include "odata_read_functions.hpp"
@@ -76,7 +77,11 @@ namespace {
     // Helper function to build the analytical data URL
     std::string BuildAnalyticalDataUrl(const std::string& space_id, const std::string& asset_id, 
                                        const std::string& tenant, const std::string& data_center) {
-        if (space_id.find("http") == 0) {
+        if (LooksLikeAbsoluteHttpUrl(space_id)) {
+            // Same rule as the Business Central and Dataverse hatches: this URL is taken
+            // verbatim from the caller and carries an OAuth bearer token, so plain http is
+            // allowed only for loopback.
+            RequireSecureOrLoopbackUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
             EnsureAssetSegmentPattern(data_url, asset_id);
             return data_url;
@@ -89,7 +94,8 @@ namespace {
     // Helper function to build the data URL
     std::string BuildDataUrl(const std::string& space_id, const std::string& asset_id, 
                             const std::string& tenant, const std::string& data_center) {
-        if (space_id.find("http") == 0) {
+        if (LooksLikeAbsoluteHttpUrl(space_id)) {
+            RequireSecureOrLoopbackUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
             EnsureAssetSegmentPattern(data_url, asset_id);
             return data_url;

@@ -11,6 +11,9 @@ std::string DataverseUrlBuilder::BuildApiUrl(const std::string &environment_url,
     if (!base.empty() && base.back() == '/') {
         base.pop_back();
     }
+    // environment_url is taken verbatim from the secret and carries an OAuth bearer token,
+    // so it gets the same rule as the Business Central and Datasphere hatches.
+    RequireSecureOrLoopbackUrl(base, "Dataverse 'environment_url'");
     return base + "/api/data/" + api_version;
 }
 

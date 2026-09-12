@@ -1,9 +1,80 @@
+#include <algorithm>
+#include <cctype>
 #include "odata_url_helpers.hpp"
 #include "odata_text_scanning.hpp"
 #include "yyjson.hpp"
 #include <sstream>
 
 namespace erpl_web {
+
+namespace {
+
+// RFC 3986 schemes are case-insensitive, so the guard must be too. The byte-exact form was
+// inert only because HttpUrl's own parser is likewise lowercase-only, so an uppercase
+// scheme fails to connect rather than shipping anything - but a credential guard should
+// not depend on a second parser's case sensitivity to do its job (GitHub #193).
+std::string LowercaseAscii(const std::string &value)
+{
+    std::string out = value;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+}  // namespace
+
+bool LooksLikeAbsoluteHttpUrl(const std::string &value)
+{
+    const auto lowered = LowercaseAscii(value);
+    return lowered.rfind("https://", 0) == 0 || lowered.rfind("http://", 0) == 0;
+}
+
+void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
+{
+    if (!LooksLikeAbsoluteHttpUrl(url)) {
+        // Not an absolute http(s) URL. If it carries some OTHER scheme, refuse it rather
+        // than wave it through; otherwise it is a bare name and the caller handles it.
+        const auto colon = url.find(':');
+        const auto slash = url.find('/');
+        if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
+            throw duckdb::InvalidInputException(
+                "%s must be an http:// or https:// URL; '%s' names an unsupported scheme "
+                "(schemes are matched case-insensitively).",
+                what.c_str(), url.c_str());
+        }
+        return;
+    }
+
+    // Parse with the SAME parser that will open the socket. A hand-rolled authority parse
+    // here was wrong twice: it read userinfo as the host (GitHub #194), and then its fix
+    // took the LAST '@' while HttpUrl takes the first - so
+    // "http://x:y@evil.example@127.0.0.1/" was approved as loopback while the transport
+    // dials evil.example@127.0.0.1. A guard that disagrees with the dialer is not a guard,
+    // and the only way it cannot disagree is to ask the dialer (GitHub #198).
+    HttpUrl parsed(url);
+    const std::string scheme = LowercaseAscii(parsed.Scheme());
+    const std::string host = LowercaseAscii(parsed.Host());
+
+    if (scheme == "https") {
+        return;
+    }
+
+    // Note: bracketed IPv6 is deliberately NOT accepted. HttpUrl's host class excludes
+    // ':', so "http://[::1]:8080" parses with host "[" and could never be dialled -
+    // advertising it as a supported loopback form would be advertising something that
+    // does not work.
+    if (host == "localhost" || host == "127.0.0.1") {
+        return;
+    }
+
+    throw duckdb::InvalidInputException(
+        "%s may only use plain http:// for a loopback address (localhost or 127.0.0.1); "
+        "'%s' resolves to host '%s' and would send the OAuth bearer token unencrypted. "
+        "Use https:// instead.",
+        what.c_str(), url.c_str(), parsed.Host().c_str());
+}
+
+
 
 std::shared_ptr<HttpClient> CreateODataHttpClient() {
     HttpParams http_params;

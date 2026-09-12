@@ -16,6 +16,25 @@ static std::string ValueToString(const duckdb::Value &value) {
 
 // URL Builder implementation
 std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id, const std::string &environment) {
+    // An `environment` that is already a URL is used as the API base verbatim. Without
+    // this the host is hardcoded, so bc_read cannot be pointed at a local server and its
+    // behaviour cannot be tested at all - which is how it kept a per-execution-state
+    // defect nobody could reproduce (GitHub #182). DatasphereReadRelational has had the
+    // same escape hatch on space_id for as long as it has existed.
+    // Shared predicate: the three hatches must agree on what counts as "already a URL",
+    // or the comment claiming one shared rule is false. A case-sensitive trigger also let
+    // an uppercase scheme skip the hatch entirely and get embedded into the real endpoint
+    // as an environment segment (GitHub #193).
+    if (LooksLikeAbsoluteHttpUrl(environment)) {
+        std::string base = environment;
+        while (!base.empty() && base.back() == '/') {
+            base.pop_back();
+        }
+        // Shared with Datasphere's space_id and Dataverse's environment_url hatches, so the
+        // loopback rule - and the IPv6 and prefix subtleties in it - has one implementation.
+        RequireSecureOrLoopbackUrl(base, "Business Central 'environment'");
+        return base;
+    }
     return "https://api.businesscentral.dynamics.com/v2.0/" + tenant_id + "/" + environment + "/api/v2.0";
 }
 
