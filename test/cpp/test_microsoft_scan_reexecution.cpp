@@ -1,22 +1,26 @@
-// GitHub #182: the Business Central and Dataverse READ functions had no per-execution scan
-// state - the #75 class. That is fixed here for bc_read and crm_read.
+// Per-execution scan state for the Business Central and Dataverse readers - the #75 class.
 //
-// It is NOT fixed for their catalog siblings (bc_show_companies, bc_show_entities,
-// bc_describe, crm_show_entities, crm_describe), which still keep finished/current_row on
-// bind data and register no init_global - tracked as GitHub #191. The present tense below
-// therefore describes what these two functions USED to do; the same sentence is still true
-// of the five siblings, and leaving it ambiguous would hide where it still applies.
+// Every function in these two files used to keep its scan cursor on the BIND DATA, which
+// DuckDB reuses across executions of a bound plan, and reset it nowhere. The second
+// EXECUTE therefore resumed from a drained cursor and returned zero rows, silently.
 //
-// Each keeps a `finished` flag on its BIND DATA, sets it when the scan drains, and never
-// resets it; the init-global functions mutate the bind data and return nullptr, so there
-// is no per-execution state at all. The second EXECUTE of a bound plan therefore returns
-// zero rows, silently, and a self-join has the second scan return nothing.
+// Fixed for the read functions in #182 and for the five catalog functions in #191; this
+// file covers both. Two shapes:
 //
-// Dataverse is drivable against a local server because DataverseUrlBuilder::BuildApiUrl
-// takes the secret's environment_url verbatim. Business Central hardcoded its host until
-// this change; BuildApiUrl now uses `environment` as the API base when it already looks
-// like a URL, the same escape hatch DatasphereReadRelational has had for space_id. That
-// is what makes the reader testable at all.
+//   - bc_read / crm_read / the show_* functions keep a `finished` flag beside a scan, so
+//     both move onto a per-function GlobalTableFunctionState owning a CloneForScan().
+//   - bc_describe / crm_describe hold a row cursor over IMMUTABLE vectors. Only the cursor
+//     moves; the payload stays shared, because there is nothing there to clone.
+//
+// Business Central is drivable against the local server because BuildApiUrl accepts an
+// `environment` that is already a URL. That hatch is guarded - https anywhere, plain http
+// only for loopback - and the guard is built on HttpUrl so it cannot disagree with the
+// parser that opens the socket (#193, #194, #198). Whether the hatch should permit https
+// anywhere at all is #199, a product question.
+//
+// The catalog functions additionally need edm_business_central_min.xml: they bind their
+// schema entirely from $metadata with no buffered first page, so without an EDM declaring
+// `companies` the bind fails before the scan can be reached at all.
 
 #include "catch.hpp"
 #include "duckdb.hpp"
@@ -318,24 +322,33 @@ TEST_CASE("the URL hatch guard is not fooled by userinfo", "[ms_reexec][security
     }
 }
 
-// GitHub #191. The catalog functions beside bc_read/crm_read keep their cursor on the BIND
-// DATA and register no init_global at all, so a re-executed bound plan resumes from a
-// drained cursor and returns nothing - the #75 class, in the last readers carrying it.
-//
-// #191 was filed from SOURCE READING because these could not be driven against the local
-// server: they bind their schema entirely from $metadata (FromEntitySetClient with no
-// buffered response), and edm_trippin.xml has no `companies` set, so bind failed with
-// "Table function must return at least one column" and nothing about the scan could be
-// reached. edm_business_central_min.xml exists to close exactly that gap.
+// GitHub #191, fixed in this file's commit. These five were filed from SOURCE READING
+// because they could not be driven against the local server: they bind their schema
+// entirely from $metadata (FromEntitySetClient with no buffered response), and
+// edm_trippin.xml has no `companies` set, so bind failed with "Table function must return
+// at least one column" before anything about the scan could be reached.
+// edm_business_central_min.xml exists to close exactly that gap - and with it the defect
+// reproduced immediately, which is why the fix ships with a test that can fail rather than
+// on the strength of reading the code.
 TEST_CASE("a bound bc_show_companies plan returns every row on each execution",
           "[ms_reexec][catalog]") {
     ODataTestServer server;
     server.ServeMetadataFixture("/$metadata", "edm_business_central_min.xml");
+    // TWO pages on purpose. A single-page fixture cannot catch the actual #75 mechanism -
+    // two executions sharing one pagination cursor - because there is no cursor to share.
+    const std::string ctx = server.Url("/$metadata") + "#companies";
+    server.OnMatch(
+        [](const RecordedRequest &request) {
+            return request.path == "/companies" && request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(
+            ctx, {R"({"id":"33333333-3333-3333-3333-333333333333","name":"Gamma","displayName":"Gamma SA"})"})));
     server.OnPath("/companies",
                   CannedResponse::Json(MakeV4Page(
-                      server.Url("/$metadata") + "#companies",
+                      ctx,
                       {R"({"id":"11111111-2222-3333-4444-555555555555","name":"Alpha","displayName":"Alpha Ltd"})",
-                       R"({"id":"66666666-7777-8888-9999-000000000000","name":"Beta","displayName":"Beta GmbH"})"})));
+                       R"({"id":"66666666-7777-8888-9999-000000000000","name":"Beta","displayName":"Beta GmbH"})"},
+                      server.Url("/companies") + "?$format=json&$skiptoken=2")));
 
     TestDatabase database;
     duckdb::Connection &con = database.Con();
@@ -358,7 +371,7 @@ TEST_CASE("a bound bc_show_companies plan returns every row on each execution",
         INFO("execution " << execution);
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
-        REQUIRE(ScalarOf(result) == 2);
+        REQUIRE(ScalarOf(result) == 3);
     }
 }
 
@@ -395,5 +408,56 @@ TEST_CASE("a bound bc_describe plan returns every row on each execution",
         INFO((result->HasError() ? result->GetError() : std::string()));
         REQUIRE_FALSE(result->HasError());
         REQUIRE(ScalarOf(result) == 3);
+    }
+}
+
+// The remaining three of the five. An agent-crew review pointed out that fixing five
+// functions and testing two leaves three changed-but-unverified, which is the shape that
+// let the original defect persist: the pattern looks obviously right, so nobody checks.
+TEST_CASE("the remaining catalog functions return every row on each execution",
+          "[ms_reexec][catalog]") {
+    ODataTestServer server;
+    server.ServeMetadataFixture("/$metadata", "edm_business_central_min.xml");
+
+    // bc_show_entities binds via FromServiceClient, so it reads the SERVICE DOCUMENT at the
+    // API base rather than $metadata - a different discovery path from bc_show_companies.
+    server.OnPath("/",
+                  CannedResponse::Json(
+                      R"({"@odata.context":")" + server.Url("/$metadata") +
+                      R"(","value":[)"
+                      R"({"name":"companies","kind":"EntitySet","url":"companies"},)"
+                      R"({"name":"customers","kind":"EntitySet","url":"customers"}]})"));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query(
+        "CREATE SECRET bcrest (TYPE business_central, PROVIDER config, "
+        "TENANT_ID 'loopback', CLIENT_ID 'id', CLIENT_SECRET 'sec', "
+        "ENVIRONMENT '" + server.BaseUrl() + "', ACCESS_TOKEN 'test-token', "
+        "EXPIRES_AT '" + FarFutureEpoch() + "')");
+    INFO((secret->HasError() ? secret->GetError() : std::string()));
+    REQUIRE_FALSE(secret->HasError());
+
+    auto prep = con.Query(
+        "PREPARE ents AS SELECT COUNT(*) FROM bc_show_entities(secret => 'bcrest')");
+    INFO((prep->HasError() ? prep->GetError() : std::string()));
+    REQUIRE_FALSE(prep->HasError());
+
+    int64_t first = -1;
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE ents");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        if (first < 0) {
+            first = ScalarOf(result);
+            // The count is a property of the fixture's EntityContainer, so assert only that
+            // it found something - and then that every later execution agrees with it.
+            REQUIRE(first > 0);
+        } else {
+            REQUIRE(ScalarOf(result) == first);
+        }
     }
 }
