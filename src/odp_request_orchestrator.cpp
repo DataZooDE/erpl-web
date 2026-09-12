@@ -153,7 +153,13 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteNextPage
     // whatever host it names would hand the bearer token to that host, so follow
     // the rule HttpClient already applies to redirects: same origin keeps the
     // credentials, anything else does not (#101).
-    const bool same_origin = service_origin_url_.empty() || IsSameOrigin(service_origin_url_, next_url);
+    // Fail CLOSED on an unset origin. Written as `empty() || IsSameOrigin(...)` this gate
+    // attached credentials to whatever host the server named whenever the origin had not
+    // been recorded yet - the wrong polarity for a credential decision. Today's call
+    // ordering happens to set it first, so this was latent rather than exploitable, but
+    // "we don't know the origin" must mean "send nothing", not "send everything"
+    // (GitHub #187).
+    const bool same_origin = !service_origin_url_.empty() && IsSameOrigin(service_origin_url_, next_url);
     if (!same_origin) {
         ERPL_TRACE_WARN("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
             "Server-supplied next link points at a different origin than the service (%s -> %s); "
