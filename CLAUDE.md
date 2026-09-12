@@ -351,6 +351,47 @@ The build system supports **mold linker** for faster linking (macOS/Linux):
 - Can reduce link time by 50-70% compared to default linker
 - Falls back to default linker if mold not found
 
+## Git: never verify a fix against the working tree
+
+`git checkout <ref> -- <path>` updates the **index as well as the working tree**. Restoring
+that file afterwards with `cp` puts it back in the working tree only — the index keeps the
+reverted version, and the next commit silently takes it.
+
+This has silently reverted a committed fix three times in this repo (GitHub #146, #191/#200,
+and the branch that fixed #196). Each time every local test run passed, because the test
+binary is built from the **working tree**: the code that was tested was not the code that was
+committed. `git status` shows nothing once the working tree is restored.
+
+**Red-checking a fix** — temporarily reverting it to prove a test fails — is the operation
+that triggers this, and it is a good practice worth keeping. Do it safely:
+
+```bash
+# Safe: worktree copy, never touches the index of your branch
+cp src/thing.cpp /tmp/thing.keep
+python3 - <<'EOF'   # or sed/patch — anything that writes ONLY the file
+...revert the change in place...
+EOF
+make dev && ./build/debug/... "[tag]"     # expect red
+cp /tmp/thing.keep src/thing.cpp          # restore
+```
+
+Never `git checkout <ref> -- <path>` for this. If you need a pristine copy of another
+revision, redirect it instead — `git show <ref>:<path> > <path>` writes the file without
+touching the index.
+
+**Before pushing any branch, audit what it actually changed:**
+
+```bash
+git diff origin/main HEAD --name-only        # every file the branch touches
+git diff origin/main HEAD -- <file>          # and what it did to each one
+```
+
+A file you only reverted-and-restored will appear here and nowhere else. Checking
+`git status`, or checking only the files you believe you edited, is what failed all three
+times.
+
+---
+
 ## C++ Code Standards & Best Practices
 
 **You must act as a Senior C++ Software Engineer and produce well-readable, maintainable, and high-quality code.**

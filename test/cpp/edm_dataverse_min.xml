@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal Dataverse EDMX for the catalog-function tests.
+
+  crm_show_entities binds against the EntityDefinitions endpoint via
+  FromEntitySetClient with no buffered response, so its schema comes entirely from
+  $metadata. Without an EDM declaring EntityDefinitions the bind fails with
+  "Table function must return at least one column" and the scan cannot be reached -
+  the same wall that kept GitHub #191 unreproducible until a fixture existed.
+
+  Only the properties the readers project are declared.
+-->
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Microsoft.Dynamics.CRM" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="EntityMetadata">
+        <Key>
+          <PropertyRef Name="MetadataId" />
+        </Key>
+        <Property Name="MetadataId" Type="Edm.String" Nullable="false" />
+        <Property Name="LogicalName" Type="Edm.String" />
+        <Property Name="EntitySetName" Type="Edm.String" />
+        <Property Name="SchemaName" Type="Edm.String" />
+      </EntityType>
+      <EntityContainer Name="System">
+        <EntitySet Name="EntityDefinitions" EntityType="Microsoft.Dynamics.CRM.EntityMetadata" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
