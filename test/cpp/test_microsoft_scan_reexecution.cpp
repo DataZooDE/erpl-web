@@ -17,6 +17,7 @@
 
 #include "odata_test_server.hpp"
 #include "business_central_client.hpp"
+#include "dataverse_client.hpp"
 
 #include <ctime>
 #include <string>
@@ -200,5 +201,29 @@ TEST_CASE("the Business Central URL hatch refuses plain http off loopback",
     SECTION("a non-URL environment still builds the real BC endpoint") {
         REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("tenant", "production") ==
                 "https://api.businesscentral.dynamics.com/v2.0/tenant/production/api/v2.0");
+    }
+}
+
+// The same rule applies to Dataverse's environment_url, which is also taken verbatim from
+// a secret and also carries a bearer token. Raised by an agent-crew review as an
+// unapplied-fix: the loopback restriction went onto Business Central's hatch and not onto
+// its siblings.
+TEST_CASE("the Dataverse URL hatch refuses plain http off loopback",
+          "[ms_reexec][crm][security]") {
+    SECTION("loopback and https are accepted") {
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://127.0.0.1:8080") ==
+                "http://127.0.0.1:8080/api/data/v9.2");
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://[::1]:8080") ==
+                "http://[::1]:8080/api/data/v9.2");
+        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("https://org.crm.dynamics.com") ==
+                "https://org.crm.dynamics.com/api/data/v9.2");
+    }
+
+    SECTION("plain http elsewhere is refused") {
+        REQUIRE_THROWS_AS(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://evil.example"),
+                          duckdb::InvalidInputException);
+        REQUIRE_THROWS_AS(
+            erpl_web::DataverseUrlBuilder::BuildApiUrl("http://127.0.0.1.evil.example"),
+            duckdb::InvalidInputException);
     }
 }

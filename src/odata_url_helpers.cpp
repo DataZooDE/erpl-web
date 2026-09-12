@@ -5,6 +5,41 @@
 
 namespace erpl_web {
 
+void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
+{
+    if (url.rfind("https://", 0) == 0) {
+        return;
+    }
+    if (url.rfind("http://", 0) != 0) {
+        return;  // not an absolute URL at all; the caller handles its own forms
+    }
+
+    const std::string after_scheme = url.substr(std::string("http://").size());
+    std::string host;
+    if (!after_scheme.empty() && after_scheme.front() == '[') {
+        // Bracketed IPv6: the port separator is the colon AFTER the ']', and the address
+        // itself is full of colons.
+        const auto close = after_scheme.find(']');
+        host = (close == std::string::npos) ? after_scheme : after_scheme.substr(0, close + 1);
+    } else {
+        const auto host_end = after_scheme.find_first_of(":/");
+        host = (host_end == std::string::npos) ? after_scheme : after_scheme.substr(0, host_end);
+    }
+
+    // The host must BE a loopback name, not merely start with one - a prefix test lets
+    // "localhost.evil.example" through.
+    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") {
+        return;
+    }
+
+    throw duckdb::InvalidInputException(
+        "%s may only use plain http:// for a loopback address (localhost, 127.0.0.1 or "
+        "[::1]); '%s' would send the OAuth bearer token unencrypted. Use https:// instead.",
+        what.c_str(), url.c_str());
+}
+
+
+
 std::shared_ptr<HttpClient> CreateODataHttpClient() {
     HttpParams http_params;
     http_params.url_encode = false;

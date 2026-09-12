@@ -6,6 +6,20 @@
 
 namespace erpl_web {
 
+// Guard for the "an already-absolute URL is used verbatim" hatches that several readers
+// expose so they can be pointed at a local server (Business Central's `environment`,
+// Datasphere's `space_id`, Dataverse's `environment_url`).
+//
+// All three carry an OAuth bearer token, and all three hardcoded https before the hatch
+// existed. Accepting plain http anywhere would make a testability affordance into a
+// credential-in-cleartext path, and the same-origin guard would not object because the
+// configured URL IS the origin. https is allowed anywhere; plain http only for loopback.
+//
+// `what` names the setting in the error, so the caller is told which of theirs is wrong.
+void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what);
+
+
+
 // The HTTP client every OData consumer needs.
 //
 // url_encode is off because the OData layer has already encoded what needs encoding:
