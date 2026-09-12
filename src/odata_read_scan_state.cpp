@@ -640,11 +640,14 @@ namespace {
 
 // Returns the object that owns the scan state for this execution.
 //
-// odata_read(), the ATTACHed odata_table_scan and the SAC readers use
-// ODataReadGlobalState, so each execution of a bound plan gets its own state.
-// The Datasphere readers reuse ODataReadScan with their own init-global
-// functions, which still return a bare GlobalTableFunctionState; those keep the
-// historical behaviour of scanning straight out of the bind data.
+// odata_read(), the ATTACHed odata_table_scan, the SAC readers and both
+// Datasphere readers all return ODataReadGlobalState, so each execution of a
+// bound plan gets its own state.
+//
+// The fallback to the bind data remains for any caller that still supplies a
+// bare GlobalTableFunctionState. It is not a safe default - it is the historical
+// behaviour that made the second EXECUTE of a bound plan return nothing - so a
+// new reader should return ODataReadGlobalState rather than rely on it.
 ODataReadBindData &ResolveScanState(const duckdb::FunctionData *bind_data,
                                     const GlobalTableFunctionState *global_state) {
   auto *odata_global = dynamic_cast<const ODataReadGlobalState *>(global_state);
