@@ -174,9 +174,23 @@ void ODataReadBindData::UpdateUrlFromPredicatePushdown() {
 
     // Store the current OData version before creating new client
     auto current_version = odata_client->GetODataVersion();
+  // Datasphere's dual-URL state. CloneForScan carries these, and this rebuild used to
+  // throw them away one statement later on every projecting or filtered query - which is
+  // why a SELECT * test could not reproduce the loss: SELECT * takes the early return
+  // above and never reaches here. business_central_catalog.cpp pre-warms caches
+  // specifically to work around this same loss (GitHub #186).
+  const auto current_metadata_context = odata_client->StoredMetadataContextUrl();
+  const auto current_entity_set_name = odata_client->GetEntitySetName();
 
   odata_client = std::make_shared<ODataEntitySetClient>(
       http_client, updated_url, auth_params);
+
+  if (!current_metadata_context.empty()) {
+    odata_client->SetMetadataContextUrl(current_metadata_context);
+  }
+  if (!current_entity_set_name.empty()) {
+    odata_client->SetEntitySetName(current_entity_set_name);
+  }
     
     // Preserve the OData version to avoid metadata fetching
     if (current_version != ODataVersion::UNKNOWN) {

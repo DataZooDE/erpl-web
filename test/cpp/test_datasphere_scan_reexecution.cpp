@@ -185,16 +185,16 @@ TEST_CASE("two datasphere_read_analytical scans of one call each see every row",
 // a DIFFERENT metadata URL. FromEntitySetRoot stores that context URL and the entity-set
 // name from its fragment at bind time, gated on IsDatasphereUrl.
 //
-// An agent-crew review flagged that CloneForScan did not copy either field and called it a
-// regression. It copies them now - a clone should be complete without depending on caller
-// ordering - but in fairness to the record: I could NOT construct a failing case. Two
-// attempts, one with metadata served only under the context path and one with the
-// entity-set name deliberately different from the data URL's last segment, both pass with
-// the copy removed. A clone that adopts page one never re-resolves metadata or the entity
-// type, so the fields are unobservable through SQL on today's paths.
+// Two places threw that state away. CloneForScan did not copy it, and
+// UpdateUrlFromPredicatePushdown rebuilt the client preserving only the OData version -
+// undoing the copy one statement later. Both are fixed; this case pins both.
 //
-// What this case therefore is: end-to-end cover for the dual-URL shape across re-execution,
-// which nothing else had. It is not a regression guard, and calling it one would be wrong.
+// The projecting query is the load-bearing part. An earlier version of this case used only
+// SELECT *, which leaves the URL unchanged and takes the early return in
+// UpdateUrlFromPredicatePushdown, so it never reaches the rebuild - and I wrongly reported
+// the defect as unreproducible on that basis. A projection changes the URL, rebuilds the
+// client, and the reader then asks for $metadata under the DATA path, which is what the
+// final loop catches.
 TEST_CASE("a Datasphere dual-URL asset re-executes correctly",
           "[datasphere_reexec][dualurl]") {
     ODataTestServer server;
@@ -245,6 +245,20 @@ TEST_CASE("a Datasphere dual-URL asset re-executes correctly",
         REQUIRE_FALSE(result->HasError());
         REQUIRE(result->RowCount() == 4);
     }
+
+    // A PROJECTING query is the shape that matters: SELECT * leaves the URL unchanged and
+    // takes the early return in UpdateUrlFromPredicatePushdown, so it never reaches the
+    // client rebuild. A projection changes the URL, rebuilds the client, and any client
+    // state not carried across that rebuild is lost there.
+    auto projected = con.Query("SELECT Name FROM " + read + " ORDER BY Name");
+    INFO((projected->HasError() ? projected->GetError() : std::string()));
+    REQUIRE_FALSE(projected->HasError());
+    REQUIRE(projected->RowCount() == 4);
+
+    // Metadata must have been fetched from the CONTEXT path; an empty set here would make
+    // the loop below assert nothing.
+    INFO("metadata was never fetched from the context path");
+    REQUIRE_FALSE(server.RequestsFor(meta_prefix + "/$metadata").empty());
 
     // Nothing may have asked for metadata under the DATA path - that is the shape the
     // dropped context URL produces.
