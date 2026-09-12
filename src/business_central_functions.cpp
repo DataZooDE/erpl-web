@@ -263,7 +263,23 @@ TableFunctionSet CreateBcDescribeFunction() {
 
 struct BcReadBindData : public TableFunctionData {
     std::unique_ptr<ODataReadBindData> odata_bind_data;
+};
+
+// Owns the scan state for ONE execution of a bound plan (GitHub #182).
+//
+// `finished` used to live on the bind data and was never reset, so the second EXECUTE of
+// a prepared statement returned zero rows deterministically and silently. Both it and the
+// row buffer now belong to the per-execution clone.
+class BcReadGlobalState : public GlobalTableFunctionState {
+public:
+    explicit BcReadGlobalState(std::unique_ptr<ODataReadBindData> scan_state)
+        : scan_state(std::move(scan_state)) {}
+
+    ODataReadBindData &Scan() { return *scan_state; }
     bool finished = false;
+
+private:
+    std::unique_ptr<ODataReadBindData> scan_state;
 };
 
 static unique_ptr<FunctionData> BcReadBind(
@@ -338,37 +354,42 @@ static unique_ptr<GlobalTableFunctionState> BcReadInitGlobalState(
 
     auto &bind_data = input.bind_data->CastNoConst<BcReadBindData>();
 
-    // Activate columns for projection pushdown
-    bind_data.odata_bind_data->ActivateColumns(input.column_ids);
+    // Projection, filter pushdown and the first-page prefetch all mutate scan state, so
+    // they run against a private clone; the bind data stays as bind left it. Returning
+    // nullptr here - with the scan reading the bind data directly - is what made a second
+    // EXECUTE return nothing (GitHub #182).
+    auto scan_state = bind_data.odata_bind_data->CloneForScan();
 
-    // Add filters for predicate pushdown
-    bind_data.odata_bind_data->AddFilters(input.filters);
+    scan_state->ActivateColumns(input.column_ids);
+    scan_state->AddFilters(input.filters);
+    scan_state->UpdateUrlFromPredicatePushdown();
+    scan_state->PrefetchFirstPage();
 
-    // Update URL with pushdown predicates
-    bind_data.odata_bind_data->UpdateUrlFromPredicatePushdown();
-
-    // Prefetch first page
-    bind_data.odata_bind_data->PrefetchFirstPage();
-
-    return nullptr;
+    return make_uniq<BcReadGlobalState>(std::move(scan_state));
 }
 
 static void BcReadScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-    auto &bind_data = data.bind_data->CastNoConst<BcReadBindData>();
+    auto &gstate = data.global_state->Cast<BcReadGlobalState>();
 
-    if (bind_data.finished) {
+    if (gstate.finished) {
         return;
     }
 
-    auto rows_fetched = bind_data.odata_bind_data->FetchNextResult(output);
-    if (!bind_data.odata_bind_data->HasMoreResults() && rows_fetched == 0) {
-        bind_data.finished = true;
+    auto rows_fetched = gstate.Scan().FetchNextResult(output);
+    if (!gstate.Scan().HasMoreResults() && rows_fetched == 0) {
+        gstate.finished = true;
     }
 }
 
-static double BcReadProgress(ClientContext &context, const FunctionData *bind_data_p, const GlobalTableFunctionState *) {
-    auto &bind_data = bind_data_p->Cast<BcReadBindData>();
-    return bind_data.odata_bind_data->GetProgressFraction();
+static double BcReadProgress(ClientContext &context, const FunctionData *bind_data_p,
+                              const GlobalTableFunctionState *global_state) {
+    // Progress lives on the per-execution clone, so reading it off the bind data would
+    // report a scan that is no longer the one running (GitHub #182).
+    if (global_state == nullptr) {
+        return -1.0;
+    }
+    auto &gstate = const_cast<GlobalTableFunctionState *>(global_state)->Cast<BcReadGlobalState>();
+    return gstate.Scan().GetProgressFraction();
 }
 
 TableFunctionSet CreateBcReadFunction() {

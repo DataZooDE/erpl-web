@@ -16,6 +16,18 @@ static std::string ValueToString(const duckdb::Value &value) {
 
 // URL Builder implementation
 std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id, const std::string &environment) {
+    // An `environment` that is already a URL is used as the API base verbatim. Without
+    // this the host is hardcoded, so bc_read cannot be pointed at a local server and its
+    // behaviour cannot be tested at all - which is how it kept a per-execution-state
+    // defect nobody could reproduce (GitHub #182). DatasphereReadRelational has had the
+    // same escape hatch on space_id for as long as it has existed.
+    if (environment.rfind("http://", 0) == 0 || environment.rfind("https://", 0) == 0) {
+        std::string base = environment;
+        while (!base.empty() && base.back() == '/') {
+            base.pop_back();
+        }
+        return base;
+    }
     return "https://api.businesscentral.dynamics.com/v2.0/" + tenant_id + "/" + environment + "/api/v2.0";
 }
 
