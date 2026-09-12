@@ -436,6 +436,18 @@ duckdb::unique_ptr<ODataReadBindData> ODataReadBindData::CloneForScan() const {
     // follow that page's next link without re-fetching it, while keeping the cursor
     // private. Deliberately NOT odata_client->current_response: after one execution that
     // is the LAST page, and resuming from it would return nothing.
+    // Datasphere's dual-URL shape: FromEntitySetRoot stores the @odata.context metadata
+    // URL and the entity-set name from its fragment at bind time, gated on
+    // IsDatasphereUrl. A clone that adopts page one never runs the code that derives them
+    // (it lives in ODataEntitySetClient::Get()), so without carrying them the clone
+    // resolves $metadata from the data URL and works from an empty entity-set name
+    // (GitHub #186).
+    if (!odata_client->StoredMetadataContextUrl().empty()) {
+      scan_client->SetMetadataContextUrl(odata_client->StoredMetadataContextUrl());
+    }
+    if (!odata_client->GetEntitySetName().empty()) {
+      scan_client->SetEntitySetName(odata_client->GetEntitySetName());
+    }
     if (first_page_response_ != nullptr) {
       scan_client->AdoptResponse(first_page_response_);
     }

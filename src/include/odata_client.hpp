@@ -501,6 +501,12 @@ public:
     void SetEntitySetNameFromContextFragment(const std::string &context_or_fragment);
     // Explicitly set the current entity set name directly
     void SetEntitySetName(const std::string &entity_name) { current_entity_name_from_fragment = entity_name; }
+    // Read back so CloneForScan can carry it. Both this and the stored metadata context
+    // URL are set at bind time for Datasphere's dual-URL shape and are NOT re-derivable
+    // from a clone that adopts page one, because the derivation lives inside
+    // ODataEntitySetClient::Get() which such a clone never reaches (GitHub #186).
+    const std::string &GetEntitySetName() const { return current_entity_name_from_fragment; }
+    const std::string &StoredMetadataContextUrl() const { return metadata_context_url; }
 
     // Public access to entity type information for navigation property filtering
     EntityType GetCurrentEntityType();
