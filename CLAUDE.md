@@ -556,6 +556,11 @@ The build matrix is defined in `extension-ci-tools/config/distribution_matrix.js
 
 **Current configuration excludes** (see `exclude_archs` in MainDistributionPipeline.yml):
 - `windows_amd64_rtools`, `windows_amd64_mingw` - Excluded for faster builds
+- `windows_amd64` - Excluded **on the v1.4.5 legs only**. That leg's pinned vcpkg commit
+  acquires `msys2-runtime 3.5.4-2` to build openssl, and MSYS2 has dropped that build from
+  every mirror (all six 404), so the leg fails before compiling anything and re-running
+  cannot help. v1.5.5 still builds and ships `windows_amd64`. Restore it by bumping the
+  v1.4.5 `vcpkg_commit`. See GitHub #174.
 - `wasm_mvp`, `wasm_eh`, `wasm_threads` - WebAssembly variants excluded
 - `linux_arm64`, `linux_amd64_musl` - Excluded to reduce build time
 
