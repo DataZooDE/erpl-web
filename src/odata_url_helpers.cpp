@@ -1,3 +1,4 @@
+#include <atomic>
 #include <algorithm>
 #include <cctype>
 #include "odata_url_helpers.hpp"
@@ -22,6 +23,47 @@ std::string LowercaseAscii(const std::string &value)
 }
 
 }  // namespace
+
+namespace {
+// Process-wide, like HttpTlsPolicy: this is a session knob, and the guard is called from
+// deep inside URL construction where no ClientContext is in scope.
+std::atomic<bool> g_custom_service_urls_allowed{false};
+}  // namespace
+
+void ServiceUrlPolicy::SetCustomServiceUrlsAllowed(bool allowed)
+{
+    g_custom_service_urls_allowed.store(allowed);
+}
+
+bool ServiceUrlPolicy::CustomServiceUrlsAllowed()
+{
+    return g_custom_service_urls_allowed.load();
+}
+
+void RequireGatedServiceUrl(const std::string &url, const std::string &what)
+{
+    RequireSecureOrLoopbackUrl(url, what);
+
+    if (!LooksLikeAbsoluteHttpUrl(url) || ServiceUrlPolicy::CustomServiceUrlsAllowed()) {
+        return;
+    }
+
+    HttpUrl parsed(url);
+    // Same case rule as RequireSecureOrLoopbackUrl below. These two disagreed: that one
+    // lowercases the host, this one compared it raw, so https://LOCALHOST passed the
+    // first check and was then refused by the gate.
+    const auto host = LowercaseAscii(parsed.Host());
+    if (host == "localhost" || host == "127.0.0.1") {
+        return;  // a local test server, which is what the hatch is for
+    }
+
+    throw duckdb::InvalidInputException(
+        "%s points at '%s'. This service's OAuth token audience is fixed, so its token would "
+        "be sent to a host it was not minted for. If you are deliberately proxying the "
+        "service, opt in with SET erpl_unsafe_allow_custom_service_urls = "
+        "'I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE'.",
+        what.c_str(), host.c_str());
+}
 
 bool LooksLikeAbsoluteHttpUrl(const std::string &value)
 {

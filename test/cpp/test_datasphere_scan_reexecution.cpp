@@ -20,6 +20,7 @@
 #include "duckdb.hpp"
 
 #include "odata_test_server.hpp"
+#include "odata_url_helpers.hpp"
 
 #include <string>
 
@@ -314,11 +315,35 @@ TEST_CASE("the Datasphere space_id hatch refuses plain http off loopback",
     // A caller mistake, not a broken invariant of ours.
     REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
 
-    // https anywhere is still accepted - the guard must not have become "loopback only".
-    auto https_ok = con.Query(
+    // Datasphere's token audience is a fixed 'default'/'apiaccess' scope, so a non-loopback
+    // https host is GATED (GitHub #199) - it is not simply accepted.
+    //
+    // This assertion used to read "https anywhere is still accepted", checking only that
+    // the error did not mention "loopback". The gate's message does not contain that word
+    // either, so that check survived the behaviour change without failing: it could no
+    // longer detect anything. Asserting the gate explicitly instead.
+    auto gated = con.Query(
         "SELECT * FROM datasphere_read_relational('https://tenant.datasphere.example/sp', 'A', "
         "secret => 'dssec')");
-    REQUIRE(https_ok->HasError());  // it will fail to CONNECT, but not on the guard
-    INFO("https error was: " << https_ok->GetError());
-    REQUIRE(https_ok->GetError().find("loopback") == std::string::npos);
+    REQUIRE(gated->HasError());
+    INFO("gated error was: " << gated->GetError());
+    REQUIRE(gated->GetError().find("erpl_unsafe_allow_custom_service_urls") != std::string::npos);
+
+    // ...and permitted once the caller opts in. RAII because the policy is process-wide.
+    {
+        struct OptInGuard {
+            OptInGuard() { erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(true); }
+            ~OptInGuard() { erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(false); }
+        } opt_in;
+
+        auto allowed = con.Query(
+            "SELECT * FROM datasphere_read_relational('https://tenant.datasphere.example/sp', 'A', "
+            "secret => 'dssec')");
+        // It will fail to CONNECT to a host that does not exist - the point is that it no
+        // longer fails on the GATE.
+        REQUIRE(allowed->HasError());
+        INFO("opted-in error was: " << allowed->GetError());
+        REQUIRE(allowed->GetError().find("erpl_unsafe_allow_custom_service_urls") ==
+                std::string::npos);
+    }
 }
