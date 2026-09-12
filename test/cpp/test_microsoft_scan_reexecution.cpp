@@ -186,8 +186,12 @@ TEST_CASE("the Business Central URL hatch refuses plain http off loopback",
                 "http://127.0.0.1:8080");
         REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://localhost:8080/") ==
                 "http://localhost:8080");
-        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://[::1]:8080") ==
-                "http://[::1]:8080");
+        // Bracketed IPv6 is deliberately NOT among the accepted forms: HttpUrl's host
+        // class excludes ':', so "http://[::1]:8080" parses with host "[" and could never
+        // be dialled. Asserting it here would lock in a property the stack does not hold
+        // (GitHub #198).
+        REQUIRE_THROWS_AS(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://[::1]:8080"),
+                          duckdb::InvalidInputException);
     }
 
     SECTION("https is accepted anywhere") {
@@ -219,8 +223,8 @@ TEST_CASE("the Dataverse URL hatch refuses plain http off loopback",
     SECTION("loopback and https are accepted") {
         REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://127.0.0.1:8080") ==
                 "http://127.0.0.1:8080/api/data/v9.2");
-        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://[::1]:8080") ==
-                "http://[::1]:8080/api/data/v9.2");
+        REQUIRE_THROWS_AS(erpl_web::DataverseUrlBuilder::BuildApiUrl("http://[::1]:8080"),
+                          duckdb::InvalidInputException);
         REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("https://org.crm.dynamics.com") ==
                 "https://org.crm.dynamics.com/api/data/v9.2");
     }
@@ -248,14 +252,18 @@ TEST_CASE("the URL hatches are case-insensitive about the scheme",
                           duckdb::InvalidInputException);
     }
 
-    SECTION("an uppercase scheme on loopback is still accepted") {
-        REQUIRE(erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "HTTP://127.0.0.1:8080") ==
-                "HTTP://127.0.0.1:8080");
-    }
-
-    SECTION("uppercase HTTPS is accepted anywhere") {
-        REQUIRE(erpl_web::DataverseUrlBuilder::BuildApiUrl("HTTPS://org.crm.dynamics.com") ==
-                "HTTPS://org.crm.dynamics.com/api/data/v9.2");
+    // An uppercase scheme is now REFUSED, for both hosts. An earlier version of this test
+    // asserted it was accepted, which was wrong in the same way as the [::1] case:
+    // HttpUrl's scheme group is (https?), lowercase-only, so "HTTP://..." parses as a path
+    // with no host and can never be dialled. Refusing it up front with a message beats
+    // accepting it and failing to connect later (GitHub #198).
+    SECTION("an uppercase scheme is refused, loopback or not") {
+        REQUIRE_THROWS_AS(
+            erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "HTTP://127.0.0.1:8080"),
+            duckdb::InvalidInputException);
+        REQUIRE_THROWS_AS(
+            erpl_web::DataverseUrlBuilder::BuildApiUrl("HTTPS://org.crm.dynamics.com"),
+            duckdb::InvalidInputException);
     }
 
     // Anything carrying some other scheme is now refused rather than waved through.
@@ -286,6 +294,16 @@ TEST_CASE("the URL hatch guard is not fooled by userinfo", "[ms_reexec][security
             duckdb::InvalidInputException);
         REQUIRE_THROWS_AS(
             erpl_web::BusinessCentralUrlBuilder::BuildApiUrl("t", "http://localhost@evil.example"),
+            duckdb::InvalidInputException);
+    }
+
+    // The guard's own fix for #194 used rfind('@') (LAST), while HttpUrl's userinfo class
+    // ends at the FIRST '@'. For this URL the old guard saw host 127.0.0.1 and approved,
+    // while the transport dials "evil.example@127.0.0.1". Building the guard on HttpUrl is
+    // what makes the two agree by construction (GitHub #198).
+    SECTION("a doubled userinfo cannot disagree with the dialer") {
+        REQUIRE_THROWS_AS(
+            erpl_web::DataverseUrlBuilder::BuildApiUrl("http://x:y@evil.example@127.0.0.1/"),
             duckdb::InvalidInputException);
     }
 

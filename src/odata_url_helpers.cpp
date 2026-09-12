@@ -31,63 +31,47 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value)
 
 void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
 {
-    const auto lowered = LowercaseAscii(url);
-
-    if (lowered.rfind("https://", 0) == 0) {
-        return;
-    }
-    if (lowered.rfind("http://", 0) != 0) {
-        // A value carrying some OTHER scheme is refused rather than waved through. Passing
-        // it through is how anything unrecognised used to reach the verbatim path.
+    if (!LooksLikeAbsoluteHttpUrl(url)) {
+        // Not an absolute http(s) URL. If it carries some OTHER scheme, refuse it rather
+        // than wave it through; otherwise it is a bare name and the caller handles it.
         const auto colon = url.find(':');
         const auto slash = url.find('/');
         if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
             throw duckdb::InvalidInputException(
-                "%s must be an http:// or https:// URL; '%s' names an unsupported scheme.",
+                "%s must be an http:// or https:// URL; '%s' names an unsupported scheme "
+                "(schemes are matched case-insensitively).",
                 what.c_str(), url.c_str());
         }
-        return;  // not an absolute URL at all; the caller handles its own forms
+        return;
     }
 
-    std::string after_scheme = url.substr(std::string("http://").size());
+    // Parse with the SAME parser that will open the socket. A hand-rolled authority parse
+    // here was wrong twice: it read userinfo as the host (GitHub #194), and then its fix
+    // took the LAST '@' while HttpUrl takes the first - so
+    // "http://x:y@evil.example@127.0.0.1/" was approved as loopback while the transport
+    // dials evil.example@127.0.0.1. A guard that disagrees with the dialer is not a guard,
+    // and the only way it cannot disagree is to ask the dialer (GitHub #198).
+    HttpUrl parsed(url);
+    const std::string scheme = LowercaseAscii(parsed.Scheme());
+    const std::string host = LowercaseAscii(parsed.Host());
 
-    // Strip userinfo FIRST. "http://127.0.0.1:pw@evil.example/" has 127.0.0.1:pw as
-    // user:password and evil.example as the host - HttpUrl::ParseUrl reads it that way -
-    // but a parse that stops at the first ':' sees "127.0.0.1" and approves. That was a
-    // live bypass: the guard passed, and the bearer token went to the attacker's host in
-    // cleartext (GitHub #194).
-    const auto authority_end = after_scheme.find('/');
-    const auto at = after_scheme.rfind('@', authority_end == std::string::npos
-                                                ? std::string::npos
-                                                : authority_end);
-    if (at != std::string::npos) {
-        after_scheme = after_scheme.substr(at + 1);
+    if (scheme == "https") {
+        return;
     }
 
-    std::string host;
-    if (!after_scheme.empty() && after_scheme.front() == '[') {
-        // Bracketed IPv6: the port separator is the colon AFTER the ']', and the address
-        // itself is full of colons.
-        const auto close = after_scheme.find(']');
-        host = (close == std::string::npos) ? after_scheme : after_scheme.substr(0, close + 1);
-    } else {
-        const auto host_end = after_scheme.find_first_of(":/");
-        host = (host_end == std::string::npos) ? after_scheme : after_scheme.substr(0, host_end);
-    }
-
-    // The host must BE a loopback name, not merely start with one - a prefix test lets
-    // "localhost.evil.example" through.
-    // Hosts are case-insensitive too, so LOCALHOST must be treated as localhost - the
-    // scheme check was made case-insensitive while this one was left byte-exact.
-    const auto host_lower = LowercaseAscii(host);
-    if (host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "[::1]") {
+    // Note: bracketed IPv6 is deliberately NOT accepted. HttpUrl's host class excludes
+    // ':', so "http://[::1]:8080" parses with host "[" and could never be dialled -
+    // advertising it as a supported loopback form would be advertising something that
+    // does not work.
+    if (host == "localhost" || host == "127.0.0.1") {
         return;
     }
 
     throw duckdb::InvalidInputException(
-        "%s may only use plain http:// for a loopback address (localhost, 127.0.0.1 or "
-        "[::1]); '%s' would send the OAuth bearer token unencrypted. Use https:// instead.",
-        what.c_str(), url.c_str());
+        "%s may only use plain http:// for a loopback address (localhost or 127.0.0.1); "
+        "'%s' resolves to host '%s' and would send the OAuth bearer token unencrypted. "
+        "Use https:// instead.",
+        what.c_str(), url.c_str(), parsed.Host().c_str());
 }
 
 
