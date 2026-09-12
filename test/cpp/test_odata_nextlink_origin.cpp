@@ -77,6 +77,12 @@ TEST_CASE("a cross-origin next link never receives the caller's credentials",
     auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + trusted.Url("/svc/Airlines") +
                             "')");
     INFO((result->HasError() ? result->GetError() : std::string()));
+    // Assert the read actually succeeded and spanned both pages. Without this the whole
+    // test can pass on a build where binding or page-one parsing broke: the next link is
+    // never followed, the foreign-host loop below iterates zero times, and the #183 guard
+    // goes untested while the test stays green.
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 2);
 
     // The trusted host must have been given the credential - otherwise this test would
     // pass for the wrong reason, having never authenticated at all.
@@ -89,8 +95,12 @@ TEST_CASE("a cross-origin next link never receives the caller's credentials",
     INFO("the trusted service was never sent credentials, so this proves nothing");
     REQUIRE(trusted_was_authenticated);
 
-    // The foreign host may be contacted - following the link is the documented behaviour -
-    // but it must never see the caller's credentials.
+    // The foreign host MUST have been contacted - following a next link is the documented
+    // behaviour, and an empty request set would make the loop below assert nothing.
+    INFO("the cross-origin next link was never followed, so the guard is untested");
+    REQUIRE_FALSE(foreign.RequestsFor("/steal/Airlines").empty());
+
+    // ...but it must never see the caller's credentials.
     for (const auto &request : foreign.Requests()) {
         INFO("foreign host " << request.method << " " << request.target
                              << " Authorization=[" << request.Header("Authorization") << "]");
