@@ -149,8 +149,16 @@ ODataEntitySetClient::ODataEntitySetClient(std::shared_ptr<HttpClient> http_clie
 
 std::string ODataEntitySetClient::GetMetadataContextUrl()
 {
-    if (!input_parameters.empty()) {
-        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Input parameters present, clearing cached metadata URL");
+    // Input parameters can change what resolveMetadataUrl() would produce, so the MEMOISED
+    // derivation below is invalidated when they are present. An authoritative value - the
+    // @odata.context the service returned, stored at bind time - is not a cache and is not
+    // invalidated by them: it is what the service said its metadata lives at, regardless of
+    // which parameters the query passes.
+    //
+    // Clearing both was why the #186 carry was a no-op for exactly the parameterized
+    // Datasphere reads it was written for (GitHub #190).
+    if (!input_parameters.empty() && !metadata_context_url_is_authoritative) {
+        ERPL_TRACE_DEBUG("ODATA_CLIENT", "Input parameters present, clearing derived metadata URL");
         metadata_context_url.clear();
     }
 
@@ -170,6 +178,8 @@ std::string ODataEntitySetClient::GetMetadataContextUrl()
     if (metadata_context_url != final_url) {
         ERPL_TRACE_INFO("ODATA_CLIENT", "Resolved metadata URL: " + final_url);
         metadata_context_url = final_url;
+        // Derived, not authoritative: this one IS a cache.
+        metadata_context_url_is_authoritative = false;
     }
     return metadata_context_url;
 }
