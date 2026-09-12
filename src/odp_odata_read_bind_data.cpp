@@ -50,6 +50,28 @@ OdpODataReadBindData::OdpODataReadBindData(duckdb::ClientContext& context,
     ValidateEntitySetUrl();
 }
 
+duckdb::unique_ptr<OdpODataReadBindData> OdpODataReadBindData::CloneForScan() const {
+    ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Cloning ODP bind data for a new execution");
+
+    auto clone = duckdb::make_uniq<OdpODataReadBindData>(
+        context_, entity_set_url_, secret_name_, force_full_load_, import_delta_token_,
+        max_page_size_);
+
+    if (initialized_) {
+        clone->Initialize();
+    }
+
+    // Column activation is held on the wrapper rather than the inner bind data (GitHub
+    // #58): the inner instance is replaced wholesale on every page, and only the wrapper
+    // remembers the selection well enough to re-apply it to the replacement. A clone that
+    // did not carry it would run page 2 onwards in all-columns mode.
+    if (!active_column_ids_.empty()) {
+        clone->ActivateColumns(active_column_ids_);
+    }
+
+    return clone;
+}
+
 // ============================================================================
 // Core DuckDB Table Function Interface (Delegated)
 // ============================================================================

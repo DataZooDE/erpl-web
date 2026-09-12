@@ -163,6 +163,21 @@ public:
     void Initialize();
 
     /**
+     * @brief Build a private copy of this bind data for one execution of a bound plan.
+     *
+     * All mutable scan state - the inner ODataReadBindData's row buffer and pagination
+     * cursor, the audit id, the staged delta token - lives on the instance, so sharing one
+     * between executions makes the second EXECUTE of a prepared statement find the buffer
+     * already drained and return nothing (GitHub #146, the #75 class).
+     *
+     * The clone re-runs Initialize(), which re-resolves the SAME subscription rather than
+     * creating a second one: (service_url, entity_set_name) is unique in the repository and
+     * CreateSubscription returns the existing id for an active row. The audit id and the
+     * delta-token staging slot start empty, which is what they must be for a new execution.
+     */
+    duckdb::unique_ptr<OdpODataReadBindData> CloneForScan() const;
+
+    /**
      * @brief Called when the scan is finished, however it finished.
      *
      * Commits a staged delta token. The scan can end WITHOUT a final zero-row
