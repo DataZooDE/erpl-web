@@ -9,6 +9,14 @@ namespace erpl_web {
 
 uint32_t ValidateMaxPageSizeParameter(const duckdb::Value& value)
 {
+    // NULL reaches GetValue<uint64_t>() as 0 on some paths and throws on others; either
+    // way "max_page_size => NULL" is a caller mistake that deserves its own message rather
+    // than the reject-zero one, which would misdescribe what they wrote (GitHub #185).
+    if (value.IsNull()) {
+        throw duckdb::InvalidInputException(
+            "max_page_size must be a positive integer, not NULL; omit the parameter to send "
+            "no page-size preference at all");
+    }
     const auto requested = value.GetValue<uint64_t>();
     if (requested == 0) {
         throw duckdb::InvalidInputException(

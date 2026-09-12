@@ -257,6 +257,16 @@ ODataReadBind(ClientContext &context, TableFunctionBindInput &input,
   ODataReadBindHelpers::SetupSchemaFromProbeResult(
       probe_result, bind_data.get(), return_types, names);
 
+  // A service root lists entity sets rather than reading one, and the block below - which
+  // is where max_page_size is applied to the client - is skipped for it. The preference
+  // still rides the probe request (it is passed to ProbeUrl above), but nothing would
+  // carry it onto any later request, so apply it here too rather than accepting the
+  // parameter and quietly ignoring it (GitHub #185).
+  if (probe_result.is_service_root && max_page_size.has_value() &&
+      bind_data->GetODataClient() != nullptr) {
+    bind_data->GetODataClient()->SetMaxPageSize(max_page_size.value());
+  }
+
   // Handle named parameters and URL expand clause (only for entity-set mode)
   if (!probe_result.is_service_root) {
     // Process named parameters (top, skip, expand)

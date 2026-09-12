@@ -283,3 +283,27 @@ TEST_CASE("odata_read sends the page-size preference on the very first request",
     REQUIRE(requests.front().Header("Prefer").find("odata.maxpagesize=1000") !=
             std::string::npos);
 }
+
+// Raised by an agent-crew review (F12). NULL is a distinct caller mistake from zero and
+// deserves its own message: reporting "must be greater than 0" for a NULL misdescribes
+// what the caller actually wrote.
+TEST_CASE("odata_read rejects a NULL page size with its own message", "[odata_maxpagesize]") {
+    ODataTestServer server;
+    const std::string entity_url = server.Url("/nullmps/Airlines");
+    const std::string context = server.Url("/nullmps/$metadata") + "#Airlines";
+
+    server.ServeMetadataFixture("/nullmps/$metadata", "edm_trippin.xml");
+    server.OnPath("/nullmps/Airlines", CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result =
+        con.Query("SELECT COUNT(*) FROM odata_read('" + entity_url + "', max_page_size=NULL)");
+    REQUIRE(result->HasError());
+    INFO(result->GetError());
+    REQUIRE(result->GetError().find("NULL") != std::string::npos);
+    // A caller mistake, not a broken invariant of ours.
+    REQUIRE(result->GetErrorObject().Type() != duckdb::ExceptionType::INTERNAL);
+}
