@@ -129,6 +129,7 @@ public:
     ODataClient(std::shared_ptr<HttpClient> http_client, const HttpUrl& url, std::shared_ptr<HttpAuthParams> auth_params)
         : http_client(http_client)
         , url(url) 
+        , service_origin_url(url)
         , auth_params(auth_params)
         , odata_version(ODataVersion::UNKNOWN) // Start with unknown version, will be detected from metadata
     {}
@@ -223,7 +224,14 @@ protected:
     // the key did match was the same page URL under two different credentials, which served
     // one caller's rows to another.
     std::shared_ptr<HttpClient> http_client;
+    // The pagination cursor. Server-driven paging assigns the service-supplied
+    // @odata.nextLink / __next to this, so it is NOT a trustworthy identity for the
+    // service: after page one it is whatever the last response asked us to fetch.
     HttpUrl url;
+    // The service this client was opened against, fixed at construction and never
+    // reassigned. Credential decisions compare against THIS, never against `url`
+    // (GitHub #183).
+    const HttpUrl service_origin_url;
     std::shared_ptr<HttpAuthParams> auth_params;
     std::shared_ptr<TResponse> current_response;
     ODataVersion odata_version;
@@ -253,13 +261,13 @@ protected:
         // carrying its bearer token - to a host of its choosing. The ODP path and the
         // redirect handler already do this; the generic path did not.
         if (auth_params != nullptr) {
-            if (modified_url.IsSameOrigin(url)) {
+            if (modified_url.IsSameOrigin(service_origin_url)) {
                 http_request.AuthHeadersFromParams(*auth_params);
             } else {
                 ERPL_TRACE_WARN("ODATA_CLIENT",
                                 "Not sending credentials to '" + modified_url.ToString() +
                                 "': it is a different origin from the service this client was "
-                                "opened against ('" + url.ToString() + "').");
+                                "opened against ('" + service_origin_url.ToString() + "').");
             }
         }
 
@@ -317,13 +325,13 @@ protected:
         // the caller's bearer token or basic credential. The generic request path has had
         // this guard since the nextLink case; the metadata path was missed.
         if (auth_params != nullptr) {
-            if (metadata_request.url.IsSameOrigin(url)) {
+            if (metadata_request.url.IsSameOrigin(service_origin_url)) {
                 metadata_request.AuthHeadersFromParams(*auth_params);
             } else {
                 ERPL_TRACE_WARN("ODATA_CLIENT",
                                 "Not sending credentials to '" + metadata_request.url.ToString() +
                                 "': the @odata.context names a different origin from the service "
-                                "this client was opened against ('" + url.ToString() + "').");
+                                "this client was opened against ('" + service_origin_url.ToString() + "').");
             }
         }
         
@@ -429,7 +437,7 @@ protected:
             
             if (auth_params != nullptr) {
                 // Same rule as above: the retry URL is derived from service-supplied input.
-                if (metadata_request.url.IsSameOrigin(url)) {
+                if (metadata_request.url.IsSameOrigin(service_origin_url)) {
                     metadata_request.AuthHeadersFromParams(*auth_params);
                 } else {
                     ERPL_TRACE_WARN("ODATA_CLIENT",

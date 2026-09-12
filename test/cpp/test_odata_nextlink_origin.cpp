@@ -1,0 +1,99 @@
+// GitHub #183: a cross-origin @odata.nextLink receives the caller's Authorization header.
+//
+// ODataEntitySetClient::Get() assigns the server-supplied next link to the member `url`
+// before calling DoHttpGet(request_url). DoHttpGet's guard reads
+//
+//     if (modified_url.IsSameOrigin(url)) { http_request.AuthHeadersFromParams(...); }
+//
+// where `url` is DoHttpGet's own PARAMETER, not the service the client was opened against.
+// modified_url is that same parameter plus input parameters, which are query string only,
+// so the comparison is a URL against itself and always passes. The guard cannot fire on
+// the path it was written for.
+//
+// Server-driven paging follows whatever URL the service puts in @odata.nextLink / __next,
+// so a hostile or compromised service returns an absolute link to a host it controls and
+// harvests the caller's bearer token.
+
+#include "catch.hpp"
+#include "duckdb.hpp"
+
+#include "odata_test_server.hpp"
+
+#include <string>
+
+using erpl_web::test_support::CannedResponse;
+using erpl_web::test_support::MakeV4Page;
+using erpl_web::test_support::ODataTestServer;
+
+namespace {
+
+class TestDatabase {
+public:
+    TestDatabase()
+    {
+        config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true));
+        database = duckdb::make_uniq<duckdb::DuckDB>(nullptr, &config);
+        connection = duckdb::make_uniq<duckdb::Connection>(*database);
+    }
+
+    duckdb::Connection &Con() const { return *connection; }
+
+private:
+    duckdb::DBConfig config;
+    duckdb::unique_ptr<duckdb::DuckDB> database;
+    duckdb::unique_ptr<duckdb::Connection> connection;
+};
+
+const char *const AIRLINE_AA = R"({"AirlineCode":"AA","Name":"American Airlines"})";
+const char *const AIRLINE_FM = R"({"AirlineCode":"FM","Name":"Shanghai Airline"})";
+
+}  // namespace
+
+TEST_CASE("a cross-origin next link never receives the caller's credentials",
+          "[odata_origin][security]") {
+    // Declared before the database so both outlive every connection that talks to them.
+    ODataTestServer trusted;
+    ODataTestServer foreign;
+
+    const std::string context = trusted.Url("/svc/$metadata") + "#Airlines";
+    trusted.ServeMetadataFixture("/svc/$metadata", "edm_trippin.xml");
+
+    // Page one is served by the service the user named, and points at a DIFFERENT host.
+    trusted.OnPath("/svc/Airlines",
+                   CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA},
+                                                   foreign.Url("/steal/Airlines"))));
+    foreign.OnPath("/steal/Airlines", CannedResponse::Json(MakeV4Page(context, {AIRLINE_FM})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // A secret scoped to the trusted service, so the reader has a credential to leak.
+    auto secret = con.Query("CREATE SECRET leaky (TYPE http_basic, USERNAME 'victim', "
+                            "PASSWORD 'hunter2', SCOPE '" + trusted.BaseUrl() + "')");
+    INFO((secret->HasError() ? secret->GetError() : std::string()));
+    REQUIRE_FALSE(secret->HasError());
+
+    auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + trusted.Url("/svc/Airlines") +
+                            "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+
+    // The trusted host must have been given the credential - otherwise this test would
+    // pass for the wrong reason, having never authenticated at all.
+    bool trusted_was_authenticated = false;
+    for (const auto &request : trusted.RequestsFor("/svc/Airlines")) {
+        if (!request.Header("Authorization").empty()) {
+            trusted_was_authenticated = true;
+        }
+    }
+    INFO("the trusted service was never sent credentials, so this proves nothing");
+    REQUIRE(trusted_was_authenticated);
+
+    // The foreign host may be contacted - following the link is the documented behaviour -
+    // but it must never see the caller's credentials.
+    for (const auto &request : foreign.Requests()) {
+        INFO("foreign host " << request.method << " " << request.target
+                             << " Authorization=[" << request.Header("Authorization") << "]");
+        REQUIRE(request.Header("Authorization").empty());
+    }
+}
