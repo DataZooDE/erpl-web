@@ -505,3 +505,56 @@ TEST_CASE("wiring conversion reporting into the bc_read scan does not break the 
     REQUIRE_FALSE(result->HasError());
     REQUIRE(ScalarOf(result) == 2);
 }
+
+// The two Dataverse catalog functions #191 fixed but did not test. An agent-crew review
+// pointed out that five functions were changed and three tested, which leaves two
+// changed-but-unverified - the shape that let this defect survive in seven places.
+//
+// crm_show_entities reads the EntityDefinitions endpoint, so it needs its own EDM:
+// edm_dataverse_min.xml, for the same reason edm_business_central_min.xml exists.
+TEST_CASE("a bound crm_show_entities plan returns every row on each execution",
+          "[ms_reexec][catalog]") {
+    ODataTestServer server;
+    const std::string api = "/api/data/v9.2";
+    server.ServeMetadataFixture(api + "/$metadata", "edm_dataverse_min.xml");
+
+    const std::string ctx = server.Url(api + "/$metadata") + "#EntityDefinitions";
+    // Two pages, so a shared pagination cursor would be observable.
+    server.OnMatch(
+        [api](const RecordedRequest &request) {
+            return request.path == api + "/EntityDefinitions" &&
+                   request.QueryParam("$skiptoken") == "2";
+        },
+        CannedResponse::Json(MakeV4Page(
+            ctx, {R"({"MetadataId":"m3","LogicalName":"lead","EntitySetName":"leads","SchemaName":"Lead"})"})));
+    server.OnPath(api + "/EntityDefinitions",
+                  CannedResponse::Json(MakeV4Page(
+                      ctx,
+                      {R"({"MetadataId":"m1","LogicalName":"account","EntitySetName":"accounts","SchemaName":"Account"})",
+                       R"({"MetadataId":"m2","LogicalName":"contact","EntitySetName":"contacts","SchemaName":"Contact"})"},
+                      server.Url(api + "/EntityDefinitions") + "?$format=json&$skiptoken=2")));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto secret = con.Query(
+        "CREATE SECRET crmcat (TYPE dataverse, PROVIDER config, "
+        "TENANT_ID 'loopback', CLIENT_ID 'id', CLIENT_SECRET 'sec', "
+        "ENVIRONMENT_URL '" + server.BaseUrl() + "', ACCESS_TOKEN 'test-token', "
+        "EXPIRES_AT '" + FarFutureEpoch() + "')");
+    INFO((secret->HasError() ? secret->GetError() : std::string()));
+    REQUIRE_FALSE(secret->HasError());
+
+    auto prep = con.Query("PREPARE ce AS SELECT COUNT(*) FROM crm_show_entities(secret => 'crmcat')");
+    INFO((prep->HasError() ? prep->GetError() : std::string()));
+    REQUIRE_FALSE(prep->HasError());
+
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE ce");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(ScalarOf(result) == 3);
+    }
+}
