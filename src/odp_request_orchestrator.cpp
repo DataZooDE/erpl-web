@@ -210,6 +210,54 @@ std::string OdpRequestOrchestrator::ExtractDeltaToken(const ODataEntitySetRespon
     return delta_token;
 }
 
+std::string OdpRequestOrchestrator::FetchDeltaTokenFromDeltaLinks(const HttpUrl& entity_set_url)
+{
+    // .../<service>/FactsOfX  ->  .../<service>/DeltaLinksOfFactsOfX
+    auto path = entity_set_url.Path();
+    const auto last_slash = path.rfind('/');
+    if (last_slash == std::string::npos || last_slash + 1 >= path.size()) {
+        return std::string();
+    }
+    const auto entity_set_name = path.substr(last_slash + 1);
+    if (entity_set_name.rfind("DeltaLinksOf", 0) == 0) {
+        return std::string();  // never recurse into the delta-links set itself
+    }
+
+    HttpUrl delta_links_url(entity_set_url);
+    delta_links_url.Path(path.substr(0, last_slash + 1) + "DeltaLinksOf" + entity_set_name);
+    delta_links_url.Query("?$format=json");
+
+    try {
+        HttpRequest request(HttpMethod::GET, delta_links_url);
+        request.headers["Accept"] = "application/json";
+        if (auth_params_ != nullptr && delta_links_url.IsSameOrigin(entity_set_url)) {
+            request.AuthHeadersFromParams(*auth_params_);
+        }
+
+        auto response = http_client_->SendRequest(request);
+        if (!response || response->Code() < 200 || response->Code() >= 300) {
+            ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR",
+                             "DeltaLinksOf lookup did not succeed; staying in initial-load mode");
+            return std::string();
+        }
+
+        const auto token = ODataDeltaLink::ExtractTokenFromDeltaLinksPayload(response->Content());
+        if (token.empty()) {
+            ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", "DeltaLinksOf carried no token");
+        } else {
+            ERPL_TRACE_INFO("ODP_ORCHESTRATOR",
+                            "Recovered delta token from DeltaLinksOf: " + token.substr(0, 20) + "...");
+        }
+        return token;
+    } catch (const std::exception& e) {
+        // Never fail the extraction over this: the rows have already been delivered, and a
+        // missing token only costs a full re-read next time.
+        ERPL_TRACE_WARN("ODP_ORCHESTRATOR",
+                        std::string("DeltaLinksOf lookup failed: ") + e.what());
+        return std::string();
+    }
+}
+
 std::string OdpRequestOrchestrator::BuildDeltaUrl(const std::string& base_url, const std::string& delta_token) {
     ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR", duckdb::StringUtil::Format(
         "Building delta URL from base: %s, token: %s", base_url, delta_token.substr(0, 20) + "..."));
@@ -356,9 +404,23 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteRequest(
         // Extract delta token if present
         result.extracted_delta_token = ExtractDeltaToken(*result.response);
 
+
         // Check for next page
         auto next_url = result.response->NextUrl();
         result.has_more_pages = next_url.has_value() && !next_url->empty();
+
+        // The body does not always carry a delta link. When the server confirmed change
+        // tracking and this was the terminal page, ask the service for the token rather
+        // than silently dropping back to initial-load mode and re-extracting everything on
+        // the next read (GitHub #169). Checked after has_more_pages is known, because only
+        // the last page of an extraction can carry a token.
+        if (result.extracted_delta_token.empty() && result.preference_applied &&
+            !result.has_more_pages) {
+            ERPL_TRACE_DEBUG("ODP_ORCHESTRATOR",
+                             "Change tracking was applied but the response carried no delta link; "
+                             "asking the service for the current token");
+            result.extracted_delta_token = FetchDeltaTokenFromDeltaLinks(request.url);
+        }
 
         LogResponseDetails(result, operation_type);
         

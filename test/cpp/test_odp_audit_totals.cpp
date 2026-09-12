@@ -73,3 +73,42 @@ TEST_CASE("the ODP audit row records the whole extraction, not the last chunk",
     REQUIRE_FALSE(recorded.IsNull());
     REQUIRE(recorded.GetValue<int64_t>() == static_cast<int64_t>(ROW_COUNT));
 }
+
+// GitHub #169: a full extraction whose body carries no __delta must still leave the
+// subscription able to do a delta next time. Before this, the token stayed empty and every
+// later read re-extracted the entire dataset - silently, since the rows were all correct.
+TEST_CASE("a delta token is recovered from DeltaLinksOf when the body has none",
+          "[odp_audit][odp_delta]") {
+    ODataTestServer server;
+    const std::string service = "/sap/opu/odata/sap/Z_TEST_SRV";
+
+    server.ServeMetadataFixture(service + "/$metadata", "edm_sap_odp_bw_fact.xml");
+    server.ServeMetadataFixture(service + "/FactsOf0D_NW_C01/$metadata",
+                                "edm_sap_odp_bw_fact.xml");
+
+    // The extraction: rows, change tracking confirmed, and deliberately NO __delta.
+    server.OnPath(service + "/FactsOf0D_NW_C01",
+                  CannedResponse::Json(MakeOdpPage(3))
+                      .WithHeader("Preference-Applied", "odata.track-changes"));
+
+    // The service still knows the token, through the delta-links collection.
+    server.OnPath(service + "/DeltaLinksOfFactsOf0D_NW_C01",
+                  CannedResponse::Json(
+                      R"({"d":{"results":[{"DeltaToken":"D_RECOVERED_0001",)"
+                      R"("IsInitialLoad":"True"}]}})"));
+
+    odp_test::TempDatabase db("odp_delta_recovery");
+    auto &con = db.Conn();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto read = con.Query("SELECT COUNT(*) FROM odp_odata_read('" + server.Url(service + "/FactsOf0D_NW_C01") + "')");
+    INFO((read->HasError() ? read->GetError() : std::string()));
+    REQUIRE_FALSE(read->HasError());
+    REQUIRE(read->GetValue(0, 0).GetValue<int64_t>() == 3);
+
+    auto state = con.Query("SELECT delta_token FROM erpl_web.odp_subscriptions");
+    REQUIRE_FALSE(state->HasError());
+    REQUIRE(state->RowCount() == 1);
+    INFO("stored delta token: " << state->GetValue(0, 0).ToString());
+    CHECK(state->GetValue(0, 0).ToString() == "D_RECOVERED_0001");
+}

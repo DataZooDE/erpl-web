@@ -47,6 +47,11 @@ public:
 
     // Convenience: the token carried by a payload, "" when the payload has no delta link.
     static std::string ExtractDeltaToken(const std::string &json_body);
+
+    // Read a token out of a DeltaLinksOf<EntitySet> collection response. The rows carry a
+    // DeltaToken property directly rather than a link with a "!deltatoken" sigil, and an
+    // initial-load row is preferred when several are present. See GitHub #169.
+    static std::string ExtractTokenFromDeltaLinksPayload(const std::string &json_body);
 };
 
 class ODataUrlResolver {
