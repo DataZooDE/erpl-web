@@ -4,6 +4,8 @@
 #include "yyjson.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -350,6 +352,33 @@ std::string PollForSessionId(const std::function<std::string()> &fetch,
     }
 }
 
+
+// Server-supplied text reaches error messages and traces. Keep it short and strip anything
+// that would corrupt a log line; the full value is never what makes a message useful.
+static std::string SummariseForMessage(const std::string &value) {
+    constexpr size_t MAX_LENGTH = 80;
+    std::string summary;
+    summary.reserve(std::min(value.size(), MAX_LENGTH));
+    for (const char c : value.substr(0, MAX_LENGTH)) {
+        summary.push_back((static_cast<unsigned char>(c) < 0x20 || c == 0x7f) ? '?' : c);
+    }
+    if (value.size() > MAX_LENGTH) {
+        summary += "...";
+    }
+    return summary;
+}
+
+// What actually matters for a value about to be placed in a request header is that it
+// cannot terminate or split that header. So this rejects control characters - CR and LF
+// above all - and nothing else. A stricter RFC 7230 *token* charset was the first attempt
+// and was wrong: real Graph session ids look like "cluster=WEU;session=<guid>", so ';'
+// alone would have rejected every live session. Its own test caught that.
+static bool IsHeaderSafeValue(const std::string &value) {
+    return std::none_of(value.begin(), value.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+    });
+}
+
 // The session id from a body that IS a workbook session, or empty while a long-running
 // operation is still working. Throws when the operation reports failure.
 //
@@ -382,13 +411,33 @@ std::string ExtractWorkbookSessionId(const std::string &json_body) {
     const auto lowered = duckdb::StringUtil::Lower(status);
     if (lowered == "failed" || lowered == "cancelled" || lowered == "canceled") {
         throw duckdb::IOException(
-            "Microsoft Graph reported the workbook session operation as '" + status + "'.");
-    }
-    if (lowered == "notstarted" || lowered == "running" || lowered == "inprogress") {
-        return "";  // keep waiting; the id here belongs to the operation
+            "Microsoft Graph reported the workbook session operation as '" +
+            SummariseForMessage(status) + "'.");
     }
 
-    // No status at all is the immediate (201) case: the body is the session itself.
+    // An ACCEPT list, not a reject list. Listing the not-ready statuses and returning the id
+    // for everything else meant any status Graph adds later - or any spelling this code has
+    // not seen - would be read as "ready" and hand back an operation id as a session id,
+    // which is the defect this predicate exists to prevent. Unknown means keep waiting; the
+    // budget turns a genuinely unknown vocabulary into a clear timeout rather than a wrong
+    // session id.
+    const bool is_session_body = status.empty();  // immediate (201): the body IS the session
+    const bool is_completed = (lowered == "succeeded" || lowered == "completed");
+    if (!is_session_body && !is_completed) {
+        return "";
+    }
+
+    // This value goes into a request header. A session id carrying CR/LF or other control
+    // characters would split the header, and it arrives from the service, so it is checked
+    // rather than trusted - the cheapest place to stop it is before it is ever used. An
+    // EMPTY id is not an error here: it means the body carried none, which the caller reads
+    // as "nothing usable yet".
+    if (!session_id.empty() && !IsHeaderSafeValue(session_id)) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned a workbook session id containing characters that cannot "
+            "be sent in a header: '" + SummariseForMessage(session_id) + "'.");
+    }
+
     return session_id;
 }
 
@@ -409,7 +458,6 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
         graph_client.PostWithHeaders(session_url, session_body, prefer_header);
 
     std::string monitor_url;
-    std::string immediate_id;
     if (auto *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0)) {
         auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
         if (auto *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource")) {
@@ -417,22 +465,23 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
                 monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
             }
         }
-        if (auto *id_val = duckdb_yyjson::yyjson_obj_get(root, "id")) {
-            if (duckdb_yyjson::yyjson_is_str(id_val)) {
-                immediate_id = duckdb_yyjson::yyjson_get_str(id_val);
-            }
-        }
         duckdb_yyjson::yyjson_doc_free(doc);
     }
 
     if (monitor_url.empty()) {
-        // Immediate (201): the session id is in the response.
-        if (immediate_id.empty()) {
+        // Immediate (201): the body IS the session - but it is read through the SAME
+        // predicate as a polled body, never with a second inline "id" lookup. Reading it
+        // inline here re-entered the exact defect the predicate was written for: a create
+        // response carrying a status but no monitor in the body returned the OPERATION id
+        // as the workbook-session-id, on a path no test could see because the tests drive
+        // the predicate directly (GitHub #217, found again by the crew review).
+        const auto session_id = ExtractWorkbookSessionId(session_response);
+        if (session_id.empty()) {
             throw duckdb::IOException(
-                "Microsoft Graph returned neither a session id nor a status monitor when opening "
-                "a workbook session for: " + file_path);
+                "Microsoft Graph returned neither a usable session id nor a status monitor when "
+                "opening a workbook session for: " + file_path);
         }
-        return immediate_id;
+        return session_id;
     }
 
     // The monitor URL comes out of the createSession RESPONSE BODY, so it gets the same

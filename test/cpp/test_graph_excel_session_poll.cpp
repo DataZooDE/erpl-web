@@ -165,6 +165,38 @@ TEST_CASE("the readiness predicate fails fast when the operation failed",
                       duckdb::IOException);
 }
 
+// An ACCEPT list, not a reject list. Listing the not-ready statuses and returning the id
+// for everything else meant any status Graph adds later - or any spelling this code has not
+// seen - would read as "ready" and hand back an operation id as a session id. Unknown must
+// mean keep waiting.
+TEST_CASE("the readiness predicate waits on a status it does not recognise",
+          "[graph_excel][poll]") {
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-1","status":"pending"})").empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-1","status":"queued"})").empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-1","status":"whatever-comes-next"})")
+                .empty());
+}
+
+// The session id is sent in a request header. What matters is that it cannot terminate or
+// split that header, so control characters are refused - and nothing else is. A first
+// version of this checked the RFC 7230 *token* charset, which rejected the ';' that every
+// real Graph session id contains: the test caught it, but only because a realistic id was
+// among the cases. Contract tests need a real-shaped positive case, not just the negatives.
+TEST_CASE("the readiness predicate refuses a session id that cannot go in a header",
+          "[graph_excel][poll][security]") {
+    REQUIRE_THROWS_AS(
+        erpl_web::ExtractWorkbookSessionId("{\"id\":\"abc\\r\\nX-Injected: 1\"}"),
+        duckdb::IOException);
+    REQUIRE_THROWS_AS(erpl_web::ExtractWorkbookSessionId("{\"id\":\"abc\\tdef\"}"),
+                      duckdb::IOException);
+
+    // A realistic Graph session id survives, spaces and all.
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(
+                R"({"id":"cluster=WEU;session=1a2b3c4d-5e6f.7g8h_9i0j"})") ==
+            "cluster=WEU;session=1a2b3c4d-5e6f.7g8h_9i0j");
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"has space"})") == "has space");
+}
+
 TEST_CASE("the readiness predicate tolerates a body it cannot use", "[graph_excel][poll]") {
     REQUIRE(erpl_web::ExtractWorkbookSessionId("not json").empty());
     REQUIRE(erpl_web::ExtractWorkbookSessionId("{}").empty());
