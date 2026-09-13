@@ -69,14 +69,7 @@ static bool InitTeamsScan(GraphPagedScanState &state, const TeamsBindData &bd, D
 }
 
 static yyjson_val *NextTeamsItem(GraphPagedScanState &state, const TeamsBindData &bd) {
-    yyjson_val *item = yyjson_arr_iter_next(&state.item_iter);
-    if (item) {
-        return item;
-    }
-    if (state.next_url.empty() || !FetchTeamsPage(state, bd, state.next_url)) {
-        return nullptr;
-    }
-    return yyjson_arr_iter_next(&state.item_iter);
+    return state.NextItem([&](const std::string &url) { return FetchTeamsPage(state, bd, url); });
 }
 
 static std::string GetNamedStr(TableFunctionBindInput &input, const char *name) {

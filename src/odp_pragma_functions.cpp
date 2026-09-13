@@ -3,6 +3,7 @@
 #include "tracing.hpp"
 #include "duckdb_argument_helper.hpp"
 #include "telemetry.hpp"
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -46,7 +47,8 @@ duckdb::unique_ptr<duckdb::FunctionData> OdpListSubscriptionsBind(duckdb::Client
 
 void OdpListSubscriptionsScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data, duckdb::DataChunk &output) {
     auto &bind_data = data.bind_data->CastNoConst<OdpListSubscriptionsBindData>();
-    
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+
     ERPL_TRACE_DEBUG("ODP_LIST_SUBSCRIPTIONS_SCAN", "Starting subscription list scan");
     
     try {
@@ -57,7 +59,7 @@ void OdpListSubscriptionsScan(duckdb::ClientContext &context, duckdb::TableFunct
         
         // Return subscriptions in batches
         const idx_t target = STANDARD_VECTOR_SIZE;
-        idx_t start_idx = bind_data.next_index;
+        idx_t start_idx = state.current_index;
         idx_t end_idx = std::min(start_idx + target, static_cast<idx_t>(bind_data.subscriptions.size()));
         idx_t count = end_idx - start_idx;
         
@@ -92,7 +94,7 @@ void OdpListSubscriptionsScan(duckdb::ClientContext &context, duckdb::TableFunct
         }
         
         output.SetCardinality(count);
-        bind_data.next_index = end_idx;
+        state.current_index = end_idx;
         
         ERPL_TRACE_INFO("ODP_LIST_SUBSCRIPTIONS_SCAN", duckdb::StringUtil::Format("Returned %zu subscriptions", count));
         
@@ -241,6 +243,8 @@ duckdb::TableFunctionSet CreateOdpListSubscriptionsFunction() {
         OdpListSubscriptionsBind
     );
     
+    list_function.init_global = ScanRowCursorState::Init;
+
     function_set.AddFunction(list_function);
     
     ERPL_TRACE_INFO("ODP_PRAGMA_REGISTRATION", "ODP_LIST_SUBSCRIPTIONS function registered successfully");

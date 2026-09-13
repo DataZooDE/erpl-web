@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/function/table_function.hpp"
+#include "scan_row_cursor.hpp"
 #include "yyjson.hpp"
 #include <string>
 
@@ -97,20 +98,53 @@ struct GraphPagedScanState : public duckdb::GlobalTableFunctionState {
     // Parses one page body, takes its @odata.nextLink as the next page to fetch, and
     // points the iterator at `array_key`.
     bool LoadPage(const std::string &body, const char *array_key = "value") {
-        FreeDoc();
-        current_doc = duckdb_yyjson::yyjson_read(body.c_str(), body.size(), 0);
-        if (!current_doc) {
+        // Parse and validate before touching the cursor: a page that turns out to be
+        // unusable must leave the previous position intact rather than installing a
+        // half-loaded document and a next link belonging to the page that failed.
+        auto *doc = duckdb_yyjson::yyjson_read(body.c_str(), body.size(), 0);
+        if (!doc) {
             return false;
         }
-        auto *root = duckdb_yyjson::yyjson_doc_get_root(current_doc);
-        auto *next = duckdb_yyjson::yyjson_obj_get(root, "@odata.nextLink");
-        next_url = (next && duckdb_yyjson::yyjson_is_str(next)) ? duckdb_yyjson::yyjson_get_str(next) : "";
+        auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
         auto *arr = duckdb_yyjson::yyjson_obj_get(root, array_key);
         if (!arr || !duckdb_yyjson::yyjson_is_arr(arr)) {
+            duckdb_yyjson::yyjson_doc_free(doc);
             return false;
         }
+
+        FreeDoc();
+        current_doc = doc;
+        auto *next = duckdb_yyjson::yyjson_obj_get(root, "@odata.nextLink");
+        next_url = (next && duckdb_yyjson::yyjson_is_str(next)) ? duckdb_yyjson::yyjson_get_str(next) : "";
         duckdb_yyjson::yyjson_arr_iter_init(arr, &item_iter);
         return true;
+    }
+
+    // Returns the next item, crossing page boundaries. `fetch_page` is called with the
+    // next link and must load that page into this state (returning false to give up).
+    //
+    // It keeps following links across EMPTY pages: a service may serve a page whose array
+    // is empty while still advertising a next page, and stopping at the first such page
+    // silently drops everything after it. A service that hands back the link it was just
+    // called with would spin here forever, so that is treated as the end.
+    template <class FetchPage>
+    duckdb_yyjson::yyjson_val *NextItem(FetchPage &&fetch_page) {
+        if (auto *item = duckdb_yyjson::yyjson_arr_iter_next(&item_iter)) {
+            return item;
+        }
+        while (!next_url.empty()) {
+            const std::string requested = next_url;
+            if (!fetch_page(requested)) {
+                return nullptr;
+            }
+            if (auto *item = duckdb_yyjson::yyjson_arr_iter_next(&item_iter)) {
+                return item;
+            }
+            if (next_url == requested) {
+                return nullptr;
+            }
+        }
+        return nullptr;
     }
 
 private:
@@ -119,19 +153,6 @@ private:
             duckdb_yyjson::yyjson_doc_free(current_doc);
             current_doc = nullptr;
         }
-    }
-};
-
-// Per-execution cursor for a scan that walks IMMUTABLE row vectors already materialised
-// on the bind data (the Entra readers). Only the position is per-execution; the payload
-// is shared, because there is nothing there to clone.
-struct GraphRowCursorState : public duckdb::GlobalTableFunctionState {
-    duckdb::idx_t current_idx = 0;
-    bool done = false;
-
-    static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
-                                                                    duckdb::TableFunctionInitInput &) {
-        return duckdb::make_uniq<GraphRowCursorState>();
     }
 };
 

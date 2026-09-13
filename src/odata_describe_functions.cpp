@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include "erpl_web_banner.hpp"
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -448,7 +449,8 @@ static void ODataDescribeScan(
     DataChunk &output
 ) {
     auto &bind_data = data_p.bind_data->CastNoConst<ODataDescribeBindData>();
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     if (!bind_data.data_loaded) {
         ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Loading metadata for: " + bind_data.url);
         
@@ -479,12 +481,12 @@ static void ODataDescribeScan(
     }
     
     // Output single row
-    if (!bind_data.result_row.empty()) {
+    if (!state.finished && !bind_data.result_row.empty()) {
         for (idx_t i = 0; i < bind_data.result_row.size(); i++) {
             output.SetValue(i, 0, bind_data.result_row[i]);
         }
         output.SetCardinality(1);
-        bind_data.result_row.clear();  // Clear to indicate we've returned the row
+        state.finished = true;  // The row is emitted once per EXECUTION, not once per bind
     } else {
         output.SetCardinality(0);
     }
@@ -495,6 +497,7 @@ TableFunctionSet CreateODataDescribeFunction() {
     TableFunctionSet describe_func("odata_describe");
     
     TableFunction describe_function({LogicalTypeId::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataDescribeScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataDescribeBind));
+    describe_function.init_global = ScanRowCursorState::Init;
     describe_function.named_parameters["secret"] = LogicalTypeId::VARCHAR;
     
     describe_func.AddFunction(describe_function);

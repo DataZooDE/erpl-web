@@ -11,6 +11,7 @@
 #include "telemetry.hpp"
 #include <algorithm>
 #include <optional>
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -267,11 +268,12 @@ using SacShowModelsBindData = SacGenericBindData<SacModel>;
 // Scan function for sac_list_models
 static void SacShowModelsScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                               duckdb::DataChunk &output) {
-    auto &bind_data = data_p.bind_data->CastNoConst<SacShowModelsBindData>();
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data_p.bind_data->Cast<SacShowModelsBindData>();
 
     idx_t count = 0;
-    while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
-        const auto &model = bind_data.items[bind_data.current_index];
+    while (state.current_index < bind_data.items.size() && count < output.GetCapacity()) {
+        const auto &model = bind_data.items[state.current_index];
 
         SetStrCellNN(output.data[0], count, model.id.c_str());
         SetStrCellNN(output.data[1], count, model.name.c_str());
@@ -281,11 +283,11 @@ static void SacShowModelsScan(duckdb::ClientContext &context, duckdb::TableFunct
         SetStrCellNN(output.data[5], count, model.created_at.c_str());
         SetStrCellNN(output.data[6], count, model.last_modified_at.c_str());
 
-        bind_data.current_index++;
+        state.current_index++;
         count++;
     }
 
-    bind_data.finished = (bind_data.current_index >= bind_data.items.size());
+    state.finished = (state.current_index >= bind_data.items.size());
     output.SetCardinality(count);
 }
 
@@ -312,8 +314,6 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacShowModelsBind(
     // Populate bind data
     auto bind = duckdb::make_uniq<SacShowModelsBindData>();
     bind->items = models;
-    bind->current_index = 0;
-    bind->finished = models.empty();
 
     return std::move(bind);
 }
@@ -330,6 +330,8 @@ duckdb::TableFunctionSet CreateSacShowModelsFunction() {
     // Add optional named parameter for secret name
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
+    func.init_global = ScanRowCursorState::Init;
+
     function_set.AddFunction(func);
     return function_set;
 }
@@ -341,11 +343,12 @@ using SacShowStoriesBindData = SacGenericBindData<SacStory>;
 
 static void SacShowStoriesScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                duckdb::DataChunk &output) {
-    auto &bind_data = data_p.bind_data->CastNoConst<SacShowStoriesBindData>();
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data_p.bind_data->Cast<SacShowStoriesBindData>();
 
     idx_t count = 0;
-    while (bind_data.current_index < bind_data.items.size() && count < output.GetCapacity()) {
-        const auto &story = bind_data.items[bind_data.current_index];
+    while (state.current_index < bind_data.items.size() && count < output.GetCapacity()) {
+        const auto &story = bind_data.items[state.current_index];
 
         SetStrCellNN(output.data[0], count, story.id.c_str());
         SetStrCellNN(output.data[1], count, story.name.c_str());
@@ -355,11 +358,11 @@ static void SacShowStoriesScan(duckdb::ClientContext &context, duckdb::TableFunc
         SetStrCellNN(output.data[5], count, story.last_modified_at.c_str());
         SetStrCellNN(output.data[6], count, story.status.c_str());
 
-        bind_data.current_index++;
+        state.current_index++;
         count++;
     }
 
-    bind_data.finished = (bind_data.current_index >= bind_data.items.size());
+    state.finished = (state.current_index >= bind_data.items.size());
     output.SetCardinality(count);
 }
 
@@ -385,8 +388,6 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacShowStoriesBind(
     // Populate bind data
     auto bind = duckdb::make_uniq<SacShowStoriesBindData>();
     bind->items = stories;
-    bind->current_index = 0;
-    bind->finished = stories.empty();
 
     return std::move(bind);
 }
@@ -402,6 +403,8 @@ duckdb::TableFunctionSet CreateSacShowStoriesFunction() {
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
+    func.init_global = ScanRowCursorState::Init;
+
     function_set.AddFunction(func);
     return function_set;
 }
@@ -413,18 +416,19 @@ using SacGetModelInfoBindData = SacItemWithDetailsBindData<SacModel>;
 
 static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                 duckdb::DataChunk &output) {
-    auto &bind_data = data_p.bind_data->CastNoConst<SacGetModelInfoBindData>();
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data_p.bind_data->Cast<SacGetModelInfoBindData>();
 
     if (!bind_data.item_found) {
         output.SetCardinality(0);
-        bind_data.finished = true;
+        state.finished = true;
         return;
     }
 
     idx_t count = 0;
 
     // Output one row for the model with dimension list
-    if (bind_data.current_index == 0) {
+    if (state.current_index == 0) {
         // Build dimension list as comma-separated string
         std::string dims_str;
         for (size_t i = 0; i < bind_data.details.size(); ++i) {
@@ -439,11 +443,11 @@ static void SacGetModelInfoScan(duckdb::ClientContext &context, duckdb::TableFun
         SetStrCellNN(output.data[4], 0, dims_str.c_str());
         SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
 
-        bind_data.current_index++;
+        state.current_index++;
         count = 1;
     }
 
-    bind_data.finished = true;
+    state.finished = true;
     output.SetCardinality(count);
 }
 
@@ -478,8 +482,6 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetModelInfoBind(
     } else {
         bind->item_found = false;
     }
-    bind->current_index = 0;
-    bind->finished = false;
 
     return std::move(bind);
 }
@@ -495,6 +497,8 @@ duckdb::TableFunctionSet CreateSacGetModelInfoFunction() {
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
 
+    func.init_global = ScanRowCursorState::Init;
+
     function_set.AddFunction(func);
     return function_set;
 }
@@ -506,17 +510,18 @@ using SacGetStoryInfoBindData = SacSingleItemBindData<SacStory>;
 
 static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p,
                                 duckdb::DataChunk &output) {
-    auto &bind_data = data_p.bind_data->CastNoConst<SacGetStoryInfoBindData>();
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data_p.bind_data->Cast<SacGetStoryInfoBindData>();
 
     if (!bind_data.item_found) {
         output.SetCardinality(0);
-        bind_data.finished = true;
+        state.finished = true;
         return;
     }
 
     idx_t count = 0;
 
-    if (bind_data.current_index == 0) {
+    if (state.current_index == 0) {
         SetStrCellNN(output.data[0], 0, bind_data.item.id.c_str());
         SetStrCellNN(output.data[1], 0, bind_data.item.name.c_str());
         SetStrCellNN(output.data[2], 0, bind_data.item.description.c_str());
@@ -525,11 +530,11 @@ static void SacGetStoryInfoScan(duckdb::ClientContext &context, duckdb::TableFun
         SetStrCellNN(output.data[5], 0, bind_data.item.created_at.c_str());
         SetStrCellNN(output.data[6], 0, bind_data.item.last_modified_at.c_str());
 
-        bind_data.current_index++;
+        state.current_index++;
         count = 1;
     }
 
-    bind_data.finished = true;
+    state.finished = true;
     output.SetCardinality(count);
 }
 
@@ -563,8 +568,6 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacGetStoryInfoBind(
     } else {
         bind->item_found = false;
     }
-    bind->current_index = 0;
-    bind->finished = false;
 
     return std::move(bind);
 }
@@ -579,6 +582,8 @@ duckdb::TableFunctionSet CreateSacGetStoryInfoFunction() {
     );
 
     func.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+
+    func.init_global = ScanRowCursorState::Init;
 
     function_set.AddFunction(func);
     return function_set;

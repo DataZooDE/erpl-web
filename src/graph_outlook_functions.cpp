@@ -63,15 +63,7 @@ static bool InitScan(GraphPagedScanState &state, const OutlookBindData &bd, Data
 // Returns nullptr when all pages are exhausted.
 static yyjson_val *NextItem(GraphPagedScanState &state, const OutlookBindData &bd,
                              const char *array_key = "value") {
-    yyjson_val *item = yyjson_arr_iter_next(&state.item_iter);
-    if (item) {
-        return item;
-    }
-    // Current page exhausted — try the next page.
-    if (state.next_url.empty() || !FetchPage(state, bd, state.next_url, array_key)) {
-        return nullptr;
-    }
-    return yyjson_arr_iter_next(&state.item_iter);
+    return state.NextItem([&](const std::string &url) { return FetchPage(state, bd, url, array_key); });
 }
 
 // Named-parameter helper

@@ -7,6 +7,7 @@
 #include "odata_attach_functions.hpp"
 #include "telemetry.hpp"
 #include "erpl_web_banner.hpp"
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -151,7 +152,9 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
 static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) 
 {
     auto &data = data_p.bind_data->CastNoConst<ODataAttachBindData>();
-	if (data.IsFinished()) {
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+	if (state.finished) {
+		output.SetCardinality(0);
 		return;
 	}
 
@@ -163,7 +166,8 @@ static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, 
         auto table_view = table_relation->CreateView(svc_reference.name, data.Overwrite(), false);
     }
 	
-    data.SetFinished();
+    state.finished = true;
+    output.SetCardinality(0);
 }
 
 TableFunctionSet CreateODataAttachFunction()
@@ -171,6 +175,7 @@ TableFunctionSet CreateODataAttachFunction()
     TableFunctionSet function_set("odata_attach");
 
     TableFunction attach_service_ignore_complex({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataAttachScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataAttachBind));
+    attach_service_ignore_complex.init_global = ScanRowCursorState::Init;
     attach_service_ignore_complex.named_parameters["overwrite"] = LogicalTypeId::BOOLEAN;
     attach_service_ignore_complex.named_parameters["ignore"] = LogicalType::LIST(LogicalTypeId::VARCHAR);
     function_set.AddFunction(attach_service_ignore_complex);

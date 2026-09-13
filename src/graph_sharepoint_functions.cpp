@@ -625,12 +625,12 @@ void GraphSharePointFunctions::CreateItemScan(
     // The one-shot flag is therefore a per-execution emit cursor: a second EXECUTE of the
     // bound plan re-emits the same id and creates nothing further.
     auto &bind_data = data.bind_data->Cast<CreateItemBindData>();
-    auto &state = data.global_state->Cast<GraphRowCursorState>();
-    if (state.done) {
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
-    state.done = true;
+    state.finished = true;
     output.SetValue(0, 0, Value(bind_data.new_item_id));
     output.SetCardinality(1);
 }
@@ -867,7 +867,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
                                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
                                   DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemBind));
         create_item.named_parameters["secret"] = LogicalType::VARCHAR;
-        create_item.init_global = GraphRowCursorState::Init;
+        create_item.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(create_item);
         FunctionDescription desc;
         desc.description = "Create a new item in a SharePoint list. "

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include "erpl_web_banner.hpp"
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -1136,13 +1137,14 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
                                            duckdb::TableFunctionInput &data_p, 
                                            duckdb::DataChunk &output) {
     auto &bind_data = (DatasphereDescribeBindData &)*data_p.bind_data;
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     if (output.GetCapacity() == 0) {
         return;
     }
     
     // Check if we've already returned the data
-    if (bind_data.data_returned) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -1174,7 +1176,7 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
     }
     
     // Mark that we've returned the data
-    bind_data.data_returned = true;
+    state.finished = true;
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Returned actual space details for: " + bind_data.resource_id);
 }
@@ -1183,13 +1185,14 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
                                            duckdb::TableFunctionInput &data_p, 
                                            duckdb::DataChunk &output) {
     auto &bind_data = (DatasphereDescribeBindData &)*data_p.bind_data;
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     if (output.GetCapacity() == 0) {
         return;
     }
     
     // Check if we've already returned the data
-    if (bind_data.data_returned) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -1244,7 +1247,7 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
     }
     
     // Mark that we've returned the data
-    bind_data.data_returned = true;
+    state.finished = true;
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Returned actual asset details for: " + bind_data.resource_id + " in space: " + bind_data.space_id);
 }
@@ -1255,15 +1258,16 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
     
     // Single implementation using DWAAS core API to match CLI behavior exactly
     // Signature: no args → single VARCHAR column 'name'
-    function_set.AddFunction(duckdb::TableFunction(
+    auto scan_function = duckdb::TableFunction(
         {},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpacesListBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpacesListBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.space_names.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.space_names[bind.next_index].c_str());
-                bind.next_index++;
+            while (state.current_index < bind.space_names.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.space_names[state.current_index].c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1314,7 +1318,9 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             }
             return std::move(bind);
         }
-    ));
+    );
+    scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(scan_function);
 
     return function_set;
 }
@@ -1323,17 +1329,18 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
     duckdb::TableFunctionSet function_set("datasphere_show_assets");
     
     // Replace with DWAAS core API listing across multiple object categories
-    function_set.AddFunction(duckdb::TableFunction(
+    auto scan_function = duckdb::TableFunction(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
-                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
-                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
-                bind.next_index++;
+            while (state.current_index < bind.items.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.items[state.current_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[state.current_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[state.current_index].technical_name.c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1482,21 +1489,24 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             }
             return std::move(bind);
         }
-    ));
+    );
+    scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(scan_function);
 
     // Function 2: Show all assets from all accessible spaces (new functionality)
-    function_set.AddFunction(duckdb::TableFunction(
+    auto all_spaces_scan_function = duckdb::TableFunction(
         {},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
-                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
-                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
-                SetStrCellNN(output.data[3], count, bind.items[bind.next_index].space_name.c_str());
-                bind.next_index++;
+            while (state.current_index < bind.items.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.items[state.current_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[state.current_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[state.current_index].technical_name.c_str());
+                SetStrCellNN(output.data[3], count, bind.items[state.current_index].space_name.c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1659,7 +1669,9 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             return std::move(bind);
         }
-    ));
+    );
+    all_spaces_scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(all_spaces_scan_function);
 
     return function_set;
 }
@@ -1668,6 +1680,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_space");
     
     duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceBind));
+    describe_space.init_global = ScanRowCursorState::Init;
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1678,6 +1691,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     
     duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
                                         DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetBind));
+    describe_asset.init_global = ScanRowCursorState::Init;
     
     function_set.AddFunction(describe_asset);
     return function_set;

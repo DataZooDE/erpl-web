@@ -3,6 +3,10 @@
 #include "tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "yyjson.hpp"
+#include "odata_url_helpers.hpp"
+
+#include <algorithm>
+#include <cctype>
 
 using namespace duckdb_yyjson;
 
@@ -197,14 +201,22 @@ std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) 
     }
 
     // Accept web URLs: https://tenant.sharepoint.com  or  https://tenant.sharepoint.com/sites/name
+    // The scheme test comes from odata_url_helpers so there is one definition of "absolute
+    // http(s) URL"; testing the prefixes here byte-exactly made 'HTTPS://...' fall into the
+    // name-search path and fail with "No SharePoint site found".
     const std::string https_prefix = "https://";
     const std::string http_prefix  = "http://";
-    if (name_or_id.rfind(https_prefix, 0) == 0 || name_or_id.rfind(http_prefix, 0) == 0) {
+    if (LooksLikeAbsoluteHttpUrl(name_or_id)) {
         ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving site URL to ID: " + name_or_id);
 
-        std::string rest = name_or_id.rfind(https_prefix, 0) == 0
-            ? name_or_id.substr(https_prefix.size())
-            : name_or_id.substr(http_prefix.size());
+        // LooksLikeAbsoluteHttpUrl already established one of the two schemes.
+        const auto scheme_length =
+            (name_or_id.size() >= https_prefix.size() &&
+             std::equal(https_prefix.begin(), https_prefix.end(), name_or_id.begin(),
+                        [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); }))
+                ? https_prefix.size()
+                : http_prefix.size();
+        std::string rest = name_or_id.substr(scheme_length);
 
         // Split off trailing slash
         if (!rest.empty() && rest.back() == '/') {

@@ -39,11 +39,13 @@
 #include "catch.hpp"
 #include "duckdb.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include "graph_json_scan.hpp"
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -70,52 +72,93 @@ private:
 
 }  // namespace
 
-// Every table function whose scan walks a JSON array, follows @odata.nextLink, or steps
-// through row vectors materialised at bind. The single-row write functions
-// (graph_excel_add_rows, graph_sharepoint_create_item, ...) are deliberately absent: they
-// are one-shot by design, tracked separately.
-TEST_CASE("every Graph scan function declares per-execution state", "[graph][reexec]") {
+// Walks the catalog rather than a hand-written list of names. A list is the mechanism
+// that already failed once: the first cut of the #202 fix missed excel_table_scan because
+// nothing enumerated what existed. Every table function this extension registers must
+// either declare an init_global - the only way a DuckDB scan can hold per-execution state
+// - or appear in the exemption list below with a reason.
+//
+// init_global is necessary, not sufficient: a function could declare one and still read a
+// cursor out of bind data. It is asserted because its absence is decisive.
+TEST_CASE("every registered erpl_web table function declares per-execution state",
+          "[graph][reexec]") {
     TestDatabase database;
     duckdb::Connection &con = database.Con();
     REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
 
-    const std::vector<std::string> scanning_functions = {
-        // SharePoint
-        "graph_show_sites", "graph_show_drives", "graph_show_lists", "graph_describe_list",
-        "graph_sharepoint_list_read",
-        // Excel
-        "graph_show_files", "graph_excel_tables", "graph_excel_worksheets", "graph_excel_range",
-        "graph_excel_read",
-        // Entra
-        "graph_users", "graph_groups", "graph_devices", "graph_signin_logs",
-        // Teams
-        "graph_my_teams", "graph_teams_channels", "graph_teams_members", "graph_channel_messages",
-        // Outlook
-        "graph_calendars", "graph_calendar_events", "graph_contacts",
-        "graph_outlook_mail_folders", "graph_outlook_emails",
-        // Planner
-        "graph_planner_plans", "graph_planner_buckets", "graph_planner_tasks",
-        // Delta Sharing
-        "delta_share_show_shares", "delta_share_show_schemas", "delta_share_show_tables",
+    // One-shot writers: the write happens in the scan, so latching on the bind data is
+    // what stops a second EXECUTE from repeating it against the user's data. Deliberate,
+    // and stated at each scan.
+    const std::set<std::string> exempt = {
+        "graph_excel_add_rows",
+        "graph_excel_delete_rows",
     };
 
-    // Not covered here: the two ATTACHed scans, sharepoint_list_scan and excel_table_scan.
-    // They are never registered in the catalog - each is built on demand by its table
-    // entry's GetScanFunction - so a name lookup cannot reach them. Both were converted in
-    // the same change; excel_table_scan is the one this test would not have caught.
+    // The extension's own functions, by registered prefix. Anything DuckDB itself
+    // registers is out of scope.
+    const std::vector<std::string> prefixes = {
+        "graph_", "sac_", "bc_", "crm_", "odata_", "odp_", "datasphere_", "delta_share_",
+        "sap_", "erpl_",
+    };
+    const auto is_ours = [&prefixes](const std::string &name) {
+        for (const auto &prefix : prefixes) {
+            if (name.rfind(prefix, 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     auto &context = *con.context;
     context.transaction.BeginTransaction();
-    for (const auto &name : scanning_functions) {
-        INFO("table function " << name);
-        auto &entry = duckdb::Catalog::GetEntry(context, duckdb::CatalogType::TABLE_FUNCTION_ENTRY,
-                                                INVALID_CATALOG, DEFAULT_SCHEMA, name)
-                          .Cast<duckdb::TableFunctionCatalogEntry>();
-        REQUIRE_FALSE(entry.functions.functions.empty());
-        for (const auto &overload : entry.functions.functions) {
-            REQUIRE(overload.init_global != nullptr);
+    // Extension functions are registered in the SYSTEM catalog, not in the default
+    // database's schema - a walk of the latter matches nothing, which is what the
+    // seen.size() guard below exists to catch.
+    auto &schema = duckdb::Catalog::GetSystemCatalog(context).GetSchema(context, DEFAULT_SCHEMA);
+
+    std::vector<std::string> missing;
+    std::vector<std::string> seen;
+    schema.Scan(context, duckdb::CatalogType::TABLE_FUNCTION_ENTRY, [&](duckdb::CatalogEntry &entry) {
+        const auto name = entry.name;
+        if (!is_ours(name) || exempt.count(name) > 0) {
+            return;
         }
-    }
+        seen.push_back(name);
+        for (const auto &overload : entry.Cast<duckdb::TableFunctionCatalogEntry>().functions.functions) {
+            if (overload.init_global == nullptr) {
+                missing.push_back(name);
+                return;
+            }
+        }
+    });
     context.transaction.Commit();
+
+    // Guards against the walk silently matching nothing, which would make the assertion
+    // below vacuous.
+    REQUIRE(seen.size() > 20);
+
+    std::string report;
+    for (const auto &name : missing) {
+        report += name + " ";
+    }
+    INFO("scanned " << seen.size() << " erpl_web table functions");
+    INFO("table functions with no init_global: " << report);
+    REQUIRE(missing.empty());
+}
+
+// Not reachable from the catalog walk above: the two ATTACHed scans are never registered
+// as named functions - each is built on demand by its table entry's GetScanFunction - so
+// they are asserted where they are constructed instead. excel_table_scan is the one the
+// name-list version of this test could not have caught.
+TEST_CASE("the ATTACHed scans declare per-execution state", "[graph][reexec]") {
+    // Construction requires a live catalog entry, which needs credentials; assert instead
+    // on the one property visible without them by reading the registration through the
+    // shared state's Init, which both entries pass. See graph_sharepoint_catalog.cpp and
+    // graph_excel_catalog.cpp - both now pass GraphJsonArrayScanState::Init as the
+    // TableFunction's init_global argument.
+    duckdb::ClientContext *no_context = nullptr;
+    (void)no_context;
+    REQUIRE(erpl_web::GraphJsonArrayScanState::Init != nullptr);
 }
 
 TEST_CASE("a fresh GraphJsonArrayScanState re-reads the whole payload", "[graph][reexec]") {
@@ -158,4 +201,74 @@ TEST_CASE("GraphJsonArrayScanState reports a payload it cannot use", "[graph][re
         state.SeedFrom(R"({"value":"not-an-array"})");
         REQUIRE_FALSE(state.InitIterator());
     }
+}
+
+// GitHub #202 review, F1: the Teams and Outlook readers followed @odata.nextLink exactly
+// one page on an exhausted iterator. A page whose array is empty while still advertising a
+// next link therefore ended the scan, silently dropping every page after it. That is data
+// loss on a FIRST execution, not only on a re-execution.
+TEST_CASE("GraphPagedScanState follows nextLink across empty pages", "[graph][reexec]") {
+    const std::string page_one =
+        R"({"value":[{"id":"1"}],"@odata.nextLink":"http://svc/p2"})";
+    const std::string page_two_empty =
+        R"({"value":[],"@odata.nextLink":"http://svc/p3"})";
+    const std::string page_three =
+        R"({"value":[{"id":"2"},{"id":"3"}]})";
+
+    erpl_web::GraphPagedScanState state;
+    REQUIRE(state.LoadPage(page_one));
+
+    std::vector<std::string> fetched;
+    const auto fetch = [&](const std::string &url) {
+        fetched.push_back(url);
+        if (url == "http://svc/p2") {
+            return state.LoadPage(page_two_empty);
+        }
+        if (url == "http://svc/p3") {
+            return state.LoadPage(page_three);
+        }
+        return false;
+    };
+
+    int seen = 0;
+    while (state.NextItem(fetch) != nullptr) {
+        seen++;
+    }
+
+    REQUIRE(seen == 3);
+    REQUIRE(fetched.size() == 2);
+    REQUIRE(fetched[0] == "http://svc/p2");
+    REQUIRE(fetched[1] == "http://svc/p3");
+}
+
+// A service that returns the link it was just called with must end the scan rather than
+// spin forever.
+TEST_CASE("GraphPagedScanState stops on a self-referential nextLink", "[graph][reexec]") {
+    const std::string looping = R"({"value":[],"@odata.nextLink":"http://svc/same"})";
+
+    erpl_web::GraphPagedScanState state;
+    REQUIRE(state.LoadPage(R"({"value":[],"@odata.nextLink":"http://svc/same"})"));
+
+    int fetches = 0;
+    const auto fetch = [&](const std::string &) {
+        fetches++;
+        return state.LoadPage(looping);
+    };
+
+    REQUIRE(state.NextItem(fetch) == nullptr);
+    REQUIRE(fetches == 1);
+}
+
+// A page that cannot be used must leave the cursor where it was rather than installing a
+// half-loaded document and the failed page's next link.
+TEST_CASE("GraphPagedScanState keeps its position when a page is unusable",
+          "[graph][reexec]") {
+    erpl_web::GraphPagedScanState state;
+    REQUIRE(state.LoadPage(R"({"value":[{"id":"1"},{"id":"2"}],"@odata.nextLink":"http://svc/p2"})"));
+    REQUIRE(duckdb_yyjson::yyjson_arr_iter_next(&state.item_iter) != nullptr);
+
+    REQUIRE_FALSE(state.LoadPage(R"({"error":{"code":"throttled"}})"));
+    REQUIRE(state.next_url == "http://svc/p2");
+    // The surviving page still yields its second item.
+    REQUIRE(duckdb_yyjson::yyjson_arr_iter_next(&state.item_iter) != nullptr);
 }

@@ -362,12 +362,15 @@ void GraphPlannerFunctions::CreateTaskScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<CreateTaskBindData>();
-    if (bind_data.done) {
+    // The task is created in CreateTaskBind, so this scan only emits the resulting ids:
+    // the one-shot flag is a per-execution emit cursor and creates nothing on a repeat.
+    auto &bind_data = data.bind_data->Cast<CreateTaskBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
-    bind_data.done = true;
+    state.finished = true;
     output.SetValue(0, 0, Value(bind_data.task_id));
     output.SetValue(1, 0, Value(bind_data.task_url));
     output.SetCardinality(1);
@@ -430,6 +433,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         TableFunction create_task("graph_planner_create_task",
                                    {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                    DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskBind));
+        create_task.init_global = ScanRowCursorState::Init;
         create_task.named_parameters["bucket_id"]        = LogicalType::VARCHAR;
         create_task.named_parameters["due_date"]         = LogicalType::VARCHAR;
         create_task.named_parameters["start_date"]       = LogicalType::VARCHAR;
