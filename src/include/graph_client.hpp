@@ -15,6 +15,13 @@ public:
     GraphClient(std::shared_ptr<HttpAuthParams> auth_params, std::string trace_component);
 
     std::string Get(const std::string &url);
+
+    // Same as Get(), but for a URL the SERVICE supplied (an @odata.nextLink). The bearer
+    // token is attached only when the link names the same origin as `origin`; anything
+    // else is requested without credentials, so a hostile or misconfigured next link
+    // cannot collect a tenant access token. Mirrors the OData client (#183) and the ODP
+    // orchestrator (#101, #187). Fails CLOSED: an empty origin sends no credentials.
+    std::string GetServerSuppliedUrl(const std::string &url, const std::string &origin);
     std::string GetAllPagesMerged(const std::string &url);
 
     std::string Post(const std::string &url, const std::string &body);

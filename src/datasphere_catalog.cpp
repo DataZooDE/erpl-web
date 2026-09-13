@@ -1149,6 +1149,9 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
         return;
     }
     
+    // Bind-time snapshot by design: the details are fetched on the first execution and
+    // kept on the bind data, so re-executing a prepared statement replays them. The
+    // emit latch above is per-execution. See the contract in graph_json_scan.hpp.
     // Load resource details if not already loaded
     if (bind_data.resource_data.empty()) {
         bind_data.LoadResourceDetails(context);
@@ -1197,6 +1200,9 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
         return;
     }
     
+    // Bind-time snapshot by design: the details are fetched on the first execution and
+    // kept on the bind data, so re-executing a prepared statement replays them. The
+    // emit latch above is per-execution. See the contract in graph_json_scan.hpp.
     // Load resource details if not already loaded
     if (bind_data.resource_data.empty()) {
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Loading resource details for asset: " + bind_data.resource_id);

@@ -157,6 +157,10 @@ static void SapODataShowScan(duckdb::ClientContext &context,
     auto &state = data_p.global_state->Cast<ScanRowCursorState>();
 
     try {
+        // Bind-time snapshot by design: the service catalogue is fetched once and kept on
+        // the bind data, so a re-executed prepared statement replays it instead of
+        // re-discovering. The row cursor is per-execution, so every execution returns the
+        // full list. See the re-execution contract in graph_json_scan.hpp.
         if (!bind_data.data_loaded) {
             bind_data.LoadServiceData();
         }

@@ -111,7 +111,7 @@ OdpODataReadBindData &ResolveOdpScanState(const duckdb::FunctionData *bind_data,
                                           const duckdb::GlobalTableFunctionState *global_state) {
     auto *odp_global = dynamic_cast<const OdpODataReadGlobalState *>(global_state);
     if (odp_global == nullptr) {
-        throw duckdb::InternalException(
+        throw duckdb::NotImplementedException(
             "ODP scan has no per-execution state: the table function must register "
             "OdpODataReadGlobalState as its init_global");
     }

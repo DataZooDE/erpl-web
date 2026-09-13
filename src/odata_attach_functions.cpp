@@ -7,7 +7,6 @@
 #include "odata_attach_functions.hpp"
 #include "telemetry.hpp"
 #include "erpl_web_banner.hpp"
-#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -151,9 +150,14 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
 
 static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) 
 {
+    // One-shot by design, and the latch stays on the BIND DATA on purpose. This scan is a
+    // side-effecting DDL statement: it fetches the service document and creates a view per
+    // entity set with replace = Overwrite(), which defaults to false. Giving it
+    // per-execution state would make a second EXECUTE of a bound plan re-run the DDL and
+    // fail with "already exists" where it previously did nothing. See scan_row_cursor.hpp
+    // and the exemption list in test_graph_scan_reexecution.cpp.
     auto &data = data_p.bind_data->CastNoConst<ODataAttachBindData>();
-    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
-	if (state.finished) {
+	if (data.IsFinished()) {
 		output.SetCardinality(0);
 		return;
 	}
@@ -166,7 +170,7 @@ static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, 
         auto table_view = table_relation->CreateView(svc_reference.name, data.Overwrite(), false);
     }
 	
-    state.finished = true;
+    data.SetFinished();
     output.SetCardinality(0);
 }
 
@@ -175,7 +179,6 @@ TableFunctionSet CreateODataAttachFunction()
     TableFunctionSet function_set("odata_attach");
 
     TableFunction attach_service_ignore_complex({LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, ODataAttachScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ODataAttachBind));
-    attach_service_ignore_complex.init_global = ScanRowCursorState::Init;
     attach_service_ignore_complex.named_parameters["overwrite"] = LogicalTypeId::BOOLEAN;
     attach_service_ignore_complex.named_parameters["ignore"] = LogicalType::LIST(LogicalTypeId::VARCHAR);
     function_set.AddFunction(attach_service_ignore_complex);

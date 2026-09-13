@@ -48,7 +48,7 @@ struct ChannelMessagesBindData : public TeamsBindData {
 
 static bool FetchTeamsPage(GraphPagedScanState &state, const TeamsBindData &bd,
                            const std::string &url) {
-    const auto body = GraphClient(bd.auth_params, "GRAPH_TEAMS").Get(url);
+    const auto body = GraphClient(bd.auth_params, "GRAPH_TEAMS").GetServerSuppliedUrl(url, state.origin_url);
     return state.LoadPage(body);
 }
 
@@ -58,6 +58,8 @@ static bool InitTeamsScan(GraphPagedScanState &state, const TeamsBindData &bd, D
         return false;
     }
     if (!state.initialized) {
+        // The first URL's origin is what every later next link is measured against.
+        state.origin_url = bd.first_url;
         if (!FetchTeamsPage(state, bd, bd.first_url)) {
             state.done = true;
             output.SetCardinality(0);

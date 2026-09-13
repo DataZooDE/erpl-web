@@ -36,7 +36,7 @@ struct OutlookBindData : public TableFunctionData {
 // Fetch a single page (no pagination loop) and load it into the scan state.
 static bool FetchPage(GraphPagedScanState &state, const OutlookBindData &bd,
                       const std::string &url, const char *array_key = "value") {
-    const auto body = GraphClient(bd.auth_params, "GRAPH_OUTLOOK").Get(url);
+    const auto body = GraphClient(bd.auth_params, "GRAPH_OUTLOOK").GetServerSuppliedUrl(url, state.origin_url);
     return state.LoadPage(body, array_key);
 }
 
@@ -49,6 +49,8 @@ static bool InitScan(GraphPagedScanState &state, const OutlookBindData &bd, Data
         return false;
     }
     if (!state.initialized) {
+        // The first URL's origin is what every later next link is measured against.
+        state.origin_url = bd.first_url;
         if (!FetchPage(state, bd, bd.first_url, array_key)) {
             state.done = true;
             output.SetCardinality(0);

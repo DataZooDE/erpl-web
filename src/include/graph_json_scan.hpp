@@ -80,9 +80,20 @@ private:
 // page at a time (the Teams and Outlook readers). The paging position belongs here for
 // the same reason the iterator does: a bound plan executed twice must start at page one.
 struct GraphPagedScanState : public duckdb::GlobalTableFunctionState {
+    // Upper bound on pages followed in one scan, matching GraphClient::GetAllPagesMerged
+    // and ODataClient. Following links across empty pages (which the reader must do, see
+    // NextItem) makes an unbounded authenticated request loop reachable otherwise: the
+    // self-reference check below catches A->A but not A->B->A, nor a service that emits a
+    // fresh URL per request with an empty array every time.
+    static constexpr size_t MAX_PAGES = 10000;
+
     duckdb_yyjson::yyjson_doc *current_doc = nullptr;
     duckdb_yyjson::yyjson_arr_iter item_iter = {};
     std::string next_url;
+    // The origin of the FIRST url of this scan. A next link naming any other origin is
+    // fetched without credentials - see GraphClient::GetServerSuppliedUrl.
+    std::string origin_url;
+    size_t pages_followed = 0;
     bool initialized = false;
     bool done = false;
 
@@ -133,6 +144,12 @@ struct GraphPagedScanState : public duckdb::GlobalTableFunctionState {
             return item;
         }
         while (!next_url.empty()) {
+            if (++pages_followed > MAX_PAGES) {
+                throw duckdb::IOException(
+                    "Microsoft Graph paging exceeded " + std::to_string(MAX_PAGES) +
+                    " pages; the service keeps returning a next link. Aborting to avoid an "
+                    "unbounded request loop.");
+            }
             const std::string requested = next_url;
             if (!fetch_page(requested)) {
                 return nullptr;

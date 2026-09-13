@@ -92,13 +92,22 @@ TEST_CASE("every registered erpl_web table function declares per-execution state
     const std::set<std::string> exempt = {
         "graph_excel_add_rows",
         "graph_excel_delete_rows",
+        // Side-effecting DDL: creates a view per entity set with replace = Overwrite(),
+        // which defaults to false, so a second EXECUTE would fail with "already exists".
+        "odata_attach",
+        // The mutating HTTP verbs issue their request in the scan, so repeating it per
+        // execution would repeat the write. http_get / http_head do re-issue.
+        "http_post",
+        "http_put",
+        "http_patch",
+        "http_delete",
     };
 
     // The extension's own functions, by registered prefix. Anything DuckDB itself
     // registers is out of scope.
     const std::vector<std::string> prefixes = {
         "graph_", "sac_", "bc_", "crm_", "odata_", "odp_", "datasphere_", "delta_share_",
-        "sap_", "erpl_",
+        "sap_", "erpl_", "http_",
     };
     const auto is_ours = [&prefixes](const std::string &name) {
         for (const auto &prefix : prefixes) {
@@ -146,20 +155,14 @@ TEST_CASE("every registered erpl_web table function declares per-execution state
     REQUIRE(missing.empty());
 }
 
-// Not reachable from the catalog walk above: the two ATTACHed scans are never registered
-// as named functions - each is built on demand by its table entry's GetScanFunction - so
-// they are asserted where they are constructed instead. excel_table_scan is the one the
-// name-list version of this test could not have caught.
-TEST_CASE("the ATTACHed scans declare per-execution state", "[graph][reexec]") {
-    // Construction requires a live catalog entry, which needs credentials; assert instead
-    // on the one property visible without them by reading the registration through the
-    // shared state's Init, which both entries pass. See graph_sharepoint_catalog.cpp and
-    // graph_excel_catalog.cpp - both now pass GraphJsonArrayScanState::Init as the
-    // TableFunction's init_global argument.
-    duckdb::ClientContext *no_context = nullptr;
-    (void)no_context;
-    REQUIRE(erpl_web::GraphJsonArrayScanState::Init != nullptr);
-}
+// The two ATTACHed scans (sharepoint_list_scan, excel_table_scan) are never registered as
+// named functions - each is built on demand by its table entry's GetScanFunction - so the
+// walk above cannot reach them, and there is no assertion here that would catch a revert
+// of either wiring: constructing the TableFunction needs a live catalog entry, which needs
+// credentials. A first attempt asserted `GraphJsonArrayScanState::Init != nullptr`, which
+// is the address of a static member function and therefore always true - it was removed
+// rather than left looking like coverage. excel_table_scan, which the name-list version of
+// this test could not have caught either, is the reason this gap is called out.
 
 TEST_CASE("a fresh GraphJsonArrayScanState re-reads the whole payload", "[graph][reexec]") {
     const std::string payload = R"({"value":[{"id":"1"},{"id":"2"},{"id":"3"}]})";
@@ -271,4 +274,24 @@ TEST_CASE("GraphPagedScanState keeps its position when a page is unusable",
     REQUIRE(state.next_url == "http://svc/p2");
     // The surviving page still yields its second item.
     REQUIRE(duckdb_yyjson::yyjson_arr_iter_next(&state.item_iter) != nullptr);
+}
+
+// GitHub #202 third review, F4: following links across empty pages (which the reader must
+// do, see above) makes an unbounded authenticated request loop reachable. The
+// self-reference check catches A->A; a two-element cycle needs the page cap.
+TEST_CASE("GraphPagedScanState stops on a multi-element nextLink cycle", "[graph][reexec]") {
+    erpl_web::GraphPagedScanState state;
+    REQUIRE(state.LoadPage(R"({"value":[],"@odata.nextLink":"http://svc/a"})"));
+
+    // Alternates a -> b -> a -> ..., so no single step ever repeats its own URL.
+    size_t fetches = 0;
+    const auto fetch = [&](const std::string &url) {
+        fetches++;
+        const std::string other = (url == "http://svc/a") ? "http://svc/b" : "http://svc/a";
+        return state.LoadPage(R"({"value":[],"@odata.nextLink":")" + other + R"("})");
+    };
+
+    REQUIRE_THROWS_AS(state.NextItem(fetch), duckdb::IOException);
+    REQUIRE(fetches <= erpl_web::GraphPagedScanState::MAX_PAGES + 1);
+    REQUIRE(fetches > 1);
 }

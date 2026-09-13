@@ -451,6 +451,10 @@ static void ODataDescribeScan(
     auto &bind_data = data_p.bind_data->CastNoConst<ODataDescribeBindData>();
     auto &state = data_p.global_state->Cast<ScanRowCursorState>();
 
+    // Bind-time snapshot by design: the metadata is fetched on the first execution and
+    // kept on the bind data, so re-executing a prepared statement replays it rather than
+    // re-fetching. The cursor above is per-execution, so the row is emitted every time.
+    // See the re-execution contract in graph_json_scan.hpp.
     if (!bind_data.data_loaded) {
         ERPL_TRACE_INFO("ODATA_DESCRIBE_SCAN", "Loading metadata for: " + bind_data.url);
         

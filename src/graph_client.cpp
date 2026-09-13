@@ -111,6 +111,28 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
     }
 }
 
+std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std::string &origin) {
+    ERPL_TRACE_DEBUG(trace_component, "GET (server-supplied) request to: " + url);
+
+    HttpUrl http_url(url);
+    const bool same_origin = !origin.empty() && http_url.IsSameOrigin(HttpUrl(origin));
+    if (!same_origin) {
+        ERPL_TRACE_WARN(trace_component,
+                        "Server-supplied next link points at a different origin than the service (" +
+                            origin + " -> " + url + "); requesting it without credentials");
+    }
+
+    HttpRequest request(HttpMethod::GET, http_url);
+    if (auth_params && same_origin) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+    request.headers["Accept"] = "application/json";
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "GET");
+    return response->Content();
+}
+
 std::string GraphClient::Get(const std::string &url) {
     ERPL_TRACE_DEBUG(trace_component, "GET request to: " + url);
 

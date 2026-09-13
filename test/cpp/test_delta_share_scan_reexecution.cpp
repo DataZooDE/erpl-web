@@ -205,3 +205,35 @@ TEST_CASE("a bound delta_share_show_shares plan over an empty payload stays empt
     RequireStableAcrossExecutions(
         con, "SELECT COUNT(*) FROM delta_share_show_shares('" + profile.Path() + "')", 0);
 }
+
+// GitHub #202 third review, F2: the six http_* verbs were invisible to the catalog walk
+// (its prefix list omitted "http_") and all six latched on the bind data. The read verbs
+// now re-issue their request per execution; the mutating verbs stay one-shot by design.
+//
+// This lives here because the delta-share file already has an ODataTestServer fixture and
+// http_get is trivially drivable against one.
+TEST_CASE("a bound http_get plan issues its request on every execution",
+          "[delta_share][reexec][http]") {
+    ODataTestServer server;
+    server.OnPath("/ping", CannedResponse::Json(R"({"ok":true})"));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto prep = con.Query("PREPARE h AS SELECT status FROM http_get('" + server.Url("/ping") + "')");
+    INFO((prep->HasError() ? prep->GetError() : std::string("ok")));
+    REQUIRE_FALSE(prep->HasError());
+
+    for (int execution = 1; execution <= 3; execution++) {
+        auto result = con.Query("EXECUTE h");
+        INFO("execution " << execution);
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->RowCount() == 1);
+        REQUIRE(result->GetValue(0, 0).GetValue<int32_t>() == 200);
+    }
+
+    // One request per execution: the response is not a bind-time snapshot.
+    REQUIRE(server.RequestsFor("/ping").size() == 3);
+}
