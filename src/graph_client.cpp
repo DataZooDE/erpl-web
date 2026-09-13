@@ -114,32 +114,31 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
 std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std::string &origin) {
     ERPL_TRACE_DEBUG(trace_component, "GET (server-supplied) request to: " + url);
 
-    // Resolve the link against the trusted origin first: a RELATIVE next link is same-origin
-    // by construction, and comparing it unresolved would drop credentials on a legitimate
-    // page. An unparseable link is not a link we send credentials to, so a parse failure
-    // falls through to no-credentials rather than escaping as an exception. Mirrors
-    // OdpRequestOrchestrator::IsSameOrigin.
-    // Everything that can throw lives inside the try, including the construction of the
-    // URL itself: a link this client cannot even parse must degrade to "no credentials",
-    // not escape as an exception from the middle of a scan.
+    // Resolve the link against the trusted origin first: a RELATIVE next link is
+    // same-origin by construction, and comparing it unresolved would drop credentials on a
+    // legitimate page. Mirrors OdpRequestOrchestrator::IsSameOrigin.
+    //
+    // A link that cannot be resolved at all is refused outright rather than requested
+    // without credentials: sending an unparseable or unresolvable link to the network is
+    // not a safer fallback, it is just a different unknown. The one guarantee is that no
+    // path out of here attaches credentials to a URL whose origin was not established.
     duckdb::unique_ptr<HttpUrl> resolved;
     bool same_origin = false;
     try {
-        resolved = duckdb::make_uniq<HttpUrl>(url);
-        if (!origin.empty()) {
+        if (origin.empty()) {
+            resolved = duckdb::make_uniq<HttpUrl>(url);
+        } else {
             const HttpUrl trusted(origin);
             resolved = duckdb::make_uniq<HttpUrl>(HttpUrl::MergeWithBaseUrlIfRelative(trusted, url));
             same_origin = trusted.IsSameOrigin(*resolved);
         }
     } catch (const std::exception &e) {
-        ERPL_TRACE_WARN(trace_component, "Could not compare origins: " + std::string(e.what()));
-        same_origin = false;
+        ERPL_TRACE_WARN(trace_component, "Could not resolve server-supplied link '" + url +
+                                             "' against origin '" + origin + "': " + e.what());
+        throw duckdb::IOException("Microsoft Graph returned a link that could not be resolved "
+                                  "against the service origin: " + url);
     }
-    if (!resolved) {
-        // Unparseable even on its own: let the normal request path raise the parse error
-        // rather than inventing one, but never with credentials attached.
-        resolved = duckdb::make_uniq<HttpUrl>(url);
-    }
+
     HttpUrl &http_url = *resolved;
     if (!same_origin) {
         ERPL_TRACE_WARN(trace_component,

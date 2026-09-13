@@ -153,7 +153,10 @@ TEST_CASE("Datasphere credentials follow a metadata URL only on the configured o
                 nullptr);
     }
 
-    SECTION("a URL that will not parse sends nothing") {
+    // These do not throw - HttpUrl parses them to an empty host - so this asserts the
+    // same-origin comparison rejecting a malformed URL, NOT the parse-failure catch. The
+    // catch is defence in depth and is deliberately not claimed as covered here.
+    SECTION("a malformed URL has no origin to match, so it sends nothing") {
         REQUIRE(credentials_for("not a url at all") == nullptr);
         REQUIRE(credentials_for("") == nullptr);
     }
