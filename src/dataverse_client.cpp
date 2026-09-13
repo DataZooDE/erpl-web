@@ -13,6 +13,18 @@ std::string DataverseUrlBuilder::BuildApiUrl(const std::string &environment_url,
     }
     // environment_url is taken verbatim from the secret and carries an OAuth bearer token,
     // so it gets the same rule as the Business Central and Datasphere hatches.
+    //
+    // Absolute http(s) FIRST. RequireSecureOrLoopbackUrl deliberately RETURNS for input
+    // carrying no scheme, because its other callers accept a bare name and resolve it
+    // themselves - so "contoso.crm.dynamics.com" passed the guard and then got a bearer
+    // token appended to whatever it resolved to. This is the third site with that omission
+    // (data-file URLs in #212, the Delta Sharing endpoint in #218); it is the last one.
+    if (!LooksLikeAbsoluteHttpUrl(base)) {
+        throw duckdb::InvalidInputException(
+            "Dataverse 'environment_url' must be an absolute http(s) URL "
+            "(https anywhere, or plain http only for a loopback address); got '%s'.",
+            base.c_str());
+    }
     RequireSecureOrLoopbackUrl(base, "Dataverse 'environment_url'");
     return base + "/api/data/" + api_version;
 }
