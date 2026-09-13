@@ -379,6 +379,42 @@ static bool IsHeaderSafeValue(const std::string &value) {
     });
 }
 
+
+// The terminal state of a long-running operation body, if it has one.
+//
+// Kept separate from ExtractWorkbookSessionId because a status body never carries a
+// session id: on success it carries a resourceLocation the caller must GET.
+struct OperationOutcome {
+    bool is_terminal_success = false;
+    std::string resource_location;
+};
+
+static OperationOutcome ReadOperationOutcome(const std::string &json_body) {
+    OperationOutcome outcome;
+    auto *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
+    if (!doc) {
+        return outcome;
+    }
+    auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+
+    std::string status;
+    if (auto *status_val = duckdb_yyjson::yyjson_obj_get(root, "status")) {
+        if (duckdb_yyjson::yyjson_is_str(status_val)) {
+            status = duckdb_yyjson::yyjson_get_str(status_val);
+        }
+    }
+    if (auto *location_val = duckdb_yyjson::yyjson_obj_get(root, "resourceLocation")) {
+        if (duckdb_yyjson::yyjson_is_str(location_val)) {
+            outcome.resource_location = duckdb_yyjson::yyjson_get_str(location_val);
+        }
+    }
+    duckdb_yyjson::yyjson_doc_free(doc);
+
+    const auto lowered = duckdb::StringUtil::Lower(status);
+    outcome.is_terminal_success = (lowered == "succeeded" || lowered == "completed");
+    return outcome;
+}
+
 // The session id from a body that IS a workbook session, or empty while a long-running
 // operation is still working. Throws when the operation reports failure.
 //
@@ -421,9 +457,15 @@ std::string ExtractWorkbookSessionId(const std::string &json_body) {
     // which is the defect this predicate exists to prevent. Unknown means keep waiting; the
     // budget turns a genuinely unknown vocabulary into a clear timeout rather than a wrong
     // session id.
-    const bool is_session_body = status.empty();  // immediate (201): the body IS the session
-    const bool is_completed = (lowered == "succeeded" || lowered == "completed");
-    if (!is_session_body && !is_completed) {
+    //
+    // A body carrying a STATUS never yields an id here, not even on success. Microsoft's
+    // documented succeeded body is
+    //   {"id": <operationId>, "status": "succeeded", "resourceLocation": ".../sessionInfoResource(...)"}
+    // so its root "id" is the OPERATION's on success exactly as it is while running. The
+    // session id lives behind resourceLocation and has to be fetched; returning root id
+    // here was #217 re-entered one poll later. Only a body with no status at all - the
+    // immediate 201, where the body IS the session - carries a session id directly.
+    if (!status.empty()) {
         return "";
     }
 
@@ -454,28 +496,30 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
 
     // Prefer long-running session creation to avoid 504 timeouts on large workbooks
     std::map<std::string, std::string> prefer_header = {{"Prefer", "respond-async"}};
-    const std::string session_response =
-        graph_client.PostWithHeaders(session_url, session_body, prefer_header);
+    const auto created = graph_client.PostForResult(session_url, session_body, prefer_header);
 
-    std::string monitor_url;
-    if (auto *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0)) {
-        auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-        if (auto *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource")) {
-            if (duckdb_yyjson::yyjson_is_str(monitor_val)) {
-                monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
+    // Graph signals the long-running form with 202 and the status-monitor URL in the
+    // LOCATION HEADER. Reading only the body for a "statusMonitorResource" property - which
+    // is what this did - meant the async path could never be entered at all: every 202
+    // looked like a response with neither a session nor a monitor. The body property is
+    // kept as a fallback because some Graph endpoints do include it.
+    std::string monitor_url = created.location;
+    if (monitor_url.empty()) {
+        if (auto *doc = duckdb_yyjson::yyjson_read(created.body.c_str(), created.body.size(), 0)) {
+            auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+            if (auto *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource")) {
+                if (duckdb_yyjson::yyjson_is_str(monitor_val)) {
+                    monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
+                }
             }
+            duckdb_yyjson::yyjson_doc_free(doc);
         }
-        duckdb_yyjson::yyjson_doc_free(doc);
     }
 
     if (monitor_url.empty()) {
-        // Immediate (201): the body IS the session - but it is read through the SAME
-        // predicate as a polled body, never with a second inline "id" lookup. Reading it
-        // inline here re-entered the exact defect the predicate was written for: a create
-        // response carrying a status but no monitor in the body returned the OPERATION id
-        // as the workbook-session-id, on a path no test could see because the tests drive
-        // the predicate directly (GitHub #217, found again by the crew review).
-        const auto session_id = ExtractWorkbookSessionId(session_response);
+        // Immediate (201): the body IS the session - read through the SAME predicate as a
+        // polled body, never with a second inline "id" lookup (GitHub #217).
+        const auto session_id = ExtractWorkbookSessionId(created.body);
         if (session_id.empty()) {
             throw duckdb::IOException(
                 "Microsoft Graph returned neither a usable session id nor a status monitor when "
@@ -484,31 +528,63 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
         return session_id;
     }
 
-    // The monitor URL comes out of the createSession RESPONSE BODY, so it gets the same
-    // treatment as an @odata.nextLink: the bearer token follows it only when it names the
-    // origin we opened the session against (GitHub #205). That decision is made ONCE here
-    // rather than per request - a foreign monitor can never hand back our session id, so
-    // polling it is pointless, and doing so repeatedly just aims a burst of unauthenticated
-    // requests at a host the service chose (GitHub #208).
+    // The monitor URL is server-supplied, so the bearer token follows it only when it names
+    // the origin we opened the session against (GitHub #205), decided ONCE rather than per
+    // request - a foreign monitor can never hand back our session id (GitHub #208).
     if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, session_url)) {
         throw duckdb::IOException(
             "Microsoft Graph returned a workbook session status monitor on a different origin "
-            "than the session itself (" + monitor_url + "); refusing to poll it.");
+            "than the session itself (" + SummariseForMessage(monitor_url) +
+            "); refusing to poll it.");
     }
 
-    const auto session_id = PollForSessionId(
+    // Poll until the operation reaches a terminal state. The poll yields the RESOURCE
+    // LOCATION, not a session id: the documented succeeded body's root "id" is the
+    // operation's, so the session itself has to be fetched from resourceLocation.
+    std::string resource_location;
+    const auto polled = PollForSessionId(
         [&] { return graph_client.GetServerSuppliedUrl(monitor_url, session_url); },
-        [](const std::string &body) { return ExtractWorkbookSessionId(body); }, policy);
+        [&](const std::string &body) -> std::string {
+            const auto outcome = ReadOperationOutcome(body);
+            if (!outcome.is_terminal_success) {
+                // Not finished - or finished badly, which ExtractWorkbookSessionId throws on.
+                return ExtractWorkbookSessionId(body);
+            }
+            if (outcome.resource_location.empty()) {
+                throw duckdb::IOException(
+                    "Microsoft Graph reported the workbook session operation as succeeded but "
+                    "returned no resourceLocation to read the session from.");
+            }
+            resource_location = outcome.resource_location;
+            return resource_location;  // non-empty: stops the poll
+        },
+        policy);
 
-    if (session_id.empty()) {
-        // Distinct from every other failure here: the operation was still running when we
-        // stopped waiting. That is a timeout the caller may retry with a longer budget, not
-        // a malformed response, a refused monitor, or a failed operation - all of which
-        // used to surface as the same "Failed to create Excel workbook session" line.
+    if (polled.empty()) {
         throw duckdb::IOException(
             "Timed out after " + std::to_string(policy.budget.count()) +
             "ms waiting for Microsoft Graph to open a workbook session for: " + file_path +
             ". The session was still being created; retry, or allow more time.");
+    }
+
+    if (resource_location.empty()) {
+        // The immediate-session shape arrived on the monitor; polled IS the session id.
+        return polled;
+    }
+
+    // Fetch the session itself. Origin-gated like every other server-supplied URL.
+    if (!GraphClient::IsServerSuppliedUrlTrusted(resource_location, session_url)) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned a workbook session resource on a different origin than "
+            "the session itself (" + SummariseForMessage(resource_location) +
+            "); refusing to fetch it.");
+    }
+    const auto session_id =
+        ExtractWorkbookSessionId(graph_client.GetServerSuppliedUrl(resource_location, session_url));
+    if (session_id.empty()) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned no usable session id at the resource it named for: " +
+            file_path);
     }
     return session_id;
 }

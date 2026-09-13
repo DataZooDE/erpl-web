@@ -197,6 +197,34 @@ std::string GraphClient::Post(const std::string &url, const std::string &body) {
     return PostWithHeaders(url, body, {});
 }
 
+GraphClient::PostResult GraphClient::PostForResult(
+    const std::string &url, const std::string &body,
+    const std::map<std::string, std::string> &extra_headers) {
+    ERPL_TRACE_DEBUG(trace_component, "POST (result) request to: " + url);
+
+    HttpUrl http_url(url);
+    HttpRequest request(HttpMethod::POST, http_url, "application/json", body);
+    if (auth_params) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+    request.headers["Accept"] = "application/json";
+    for (const auto &kv : extra_headers) {
+        request.headers[kv.first] = kv.second;
+    }
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "POST");
+
+    PostResult result;
+    result.body = response->Content();
+    result.status_code = response->Code();
+    const auto location = response->headers.find("Location");
+    if (location != response->headers.end()) {
+        result.location = location->second;
+    }
+    return result;
+}
+
 std::string GraphClient::PostWithHeaders(const std::string &url, const std::string &body,
                                          const std::map<std::string, std::string> &extra_headers)
 {

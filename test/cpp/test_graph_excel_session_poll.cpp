@@ -152,9 +152,21 @@ TEST_CASE("the readiness predicate accepts a session body", "[graph_excel][poll]
     // The immediate (201) shape: no status, the body IS the session.
     REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"session-abc","persistChanges":true})") ==
             "session-abc");
-    // And the completed operation.
-    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"session-abc","status":"succeeded"})") ==
-            "session-abc");
+}
+
+// A body carrying a STATUS never yields a session id - not even on success. Microsoft's
+// documented succeeded body is
+//   {"id": <operationId>, "status": "succeeded", "resourceLocation": ".../sessionInfoResource(...)"}
+// so its root "id" belongs to the OPERATION on success exactly as it does while running.
+// An earlier version of this file asserted the opposite, which encoded the bug as the
+// contract: it returned that operation id as the workbook-session-id.
+TEST_CASE("a succeeded operation body yields no session id of its own",
+          "[graph_excel][poll]") {
+    const std::string succeeded_body =
+        std::string(R"({"id":"op-1","status":"succeeded","resourceLocation":)") +
+        R"("https://graph.microsoft.com/v1.0/sessionInfoResource"})";
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(succeeded_body).empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-1","status":"completed"})").empty());
 }
 
 TEST_CASE("the readiness predicate fails fast when the operation failed",
@@ -214,8 +226,12 @@ TEST_CASE("a session that becomes ready after several polls is returned",
     const auto id = erpl_web::PollForSessionId(
         [&] {
             polls++;
+            // The monitor reports the operation while it runs, then hands back a session
+            // body of its own (no status). A "succeeded" body would carry the OPERATION id
+            // and a resourceLocation instead - that path is resolved by
+            // CreateWorkbookSession, not by this predicate.
             return polls < 3 ? std::string(R"({"id":"op-1","status":"running"})")
-                             : std::string(R"({"id":"session-xyz","status":"succeeded"})");
+                             : std::string(R"({"id":"session-xyz"})");
         },
         [](const std::string &body) { return erpl_web::ExtractWorkbookSessionId(body); },
         clock.Policy(1s, 30s));
