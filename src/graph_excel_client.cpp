@@ -344,18 +344,120 @@ std::string PollForSessionId(const std::function<std::string()> &fetch,
     }
 }
 
-static std::string ExtractSessionId(const std::string &json_body) {
+// The session id from a body that IS a workbook session, or empty while a long-running
+// operation is still working. Throws when the operation reports failure.
+//
+// The status matters. Graph answers a status-monitor poll with an OPERATION resource -
+// {"id":"<operationId>","status":"running",...} - whose "id" belongs to the operation, not
+// to the session. Reading "id" unconditionally therefore accepted the very first poll,
+// never engaged the time budget, and then sent an operation id as workbook-session-id on
+// every subsequent write, which Graph rejects. So "has an id" is not the readiness
+// predicate; "is not still running" is.
+std::string ExtractWorkbookSessionId(const std::string &json_body) {
     duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
     if (!doc) { return ""; }
     duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-    duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
+
+    std::string status;
+    if (auto *status_val = duckdb_yyjson::yyjson_obj_get(root, "status")) {
+        if (duckdb_yyjson::yyjson_is_str(status_val)) {
+            status = duckdb_yyjson::yyjson_get_str(status_val);
+        }
+    }
+
     std::string session_id;
-    if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
-        session_id = duckdb_yyjson::yyjson_get_str(id_val);
+    if (auto *id_val = duckdb_yyjson::yyjson_obj_get(root, "id")) {
+        if (duckdb_yyjson::yyjson_is_str(id_val)) {
+            session_id = duckdb_yyjson::yyjson_get_str(id_val);
+        }
     }
     duckdb_yyjson::yyjson_doc_free(doc);
+
+    const auto lowered = duckdb::StringUtil::Lower(status);
+    if (lowered == "failed" || lowered == "cancelled" || lowered == "canceled") {
+        throw duckdb::IOException(
+            "Microsoft Graph reported the workbook session operation as '" + status + "'.");
+    }
+    if (lowered == "notstarted" || lowered == "running" || lowered == "inprogress") {
+        return "";  // keep waiting; the id here belongs to the operation
+    }
+
+    // No status at all is the immediate (201) case: the body is the session itself.
     return session_id;
 }
+
+// Opens a workbook session, waiting out the long-running (202) form.
+//
+// One definition for both write paths. It was a ~20-line verbatim duplicate, and the two
+// copies had already started to diverge - every fix here had to be made twice, and the
+// second copy was the one a review found still calling the unguarded Get().
+static std::string CreateWorkbookSession(GraphClient &graph_client, const std::string &wb_url,
+                                         const std::string &file_path,
+                                         const SessionPollPolicy &policy) {
+    const std::string session_url = GraphExcelUrlBuilder::BuildCreateSessionUrl(wb_url);
+    const std::string session_body = "{\"persistChanges\":true}";
+
+    // Prefer long-running session creation to avoid 504 timeouts on large workbooks
+    std::map<std::string, std::string> prefer_header = {{"Prefer", "respond-async"}};
+    const std::string session_response =
+        graph_client.PostWithHeaders(session_url, session_body, prefer_header);
+
+    std::string monitor_url;
+    std::string immediate_id;
+    if (auto *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0)) {
+        auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        if (auto *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource")) {
+            if (duckdb_yyjson::yyjson_is_str(monitor_val)) {
+                monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
+            }
+        }
+        if (auto *id_val = duckdb_yyjson::yyjson_obj_get(root, "id")) {
+            if (duckdb_yyjson::yyjson_is_str(id_val)) {
+                immediate_id = duckdb_yyjson::yyjson_get_str(id_val);
+            }
+        }
+        duckdb_yyjson::yyjson_doc_free(doc);
+    }
+
+    if (monitor_url.empty()) {
+        // Immediate (201): the session id is in the response.
+        if (immediate_id.empty()) {
+            throw duckdb::IOException(
+                "Microsoft Graph returned neither a session id nor a status monitor when opening "
+                "a workbook session for: " + file_path);
+        }
+        return immediate_id;
+    }
+
+    // The monitor URL comes out of the createSession RESPONSE BODY, so it gets the same
+    // treatment as an @odata.nextLink: the bearer token follows it only when it names the
+    // origin we opened the session against (GitHub #205). That decision is made ONCE here
+    // rather than per request - a foreign monitor can never hand back our session id, so
+    // polling it is pointless, and doing so repeatedly just aims a burst of unauthenticated
+    // requests at a host the service chose (GitHub #208).
+    if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, session_url)) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned a workbook session status monitor on a different origin "
+            "than the session itself (" + monitor_url + "); refusing to poll it.");
+    }
+
+    const auto session_id = PollForSessionId(
+        [&] { return graph_client.GetServerSuppliedUrl(monitor_url, session_url); },
+        [](const std::string &body) { return ExtractWorkbookSessionId(body); }, policy);
+
+    if (session_id.empty()) {
+        // Distinct from every other failure here: the operation was still running when we
+        // stopped waiting. That is a timeout the caller may retry with a longer budget, not
+        // a malformed response, a refused monitor, or a failed operation - all of which
+        // used to surface as the same "Failed to create Excel workbook session" line.
+        throw duckdb::IOException(
+            "Timed out after " + std::to_string(policy.budget.count()) +
+            "ms waiting for Microsoft Graph to open a workbook session for: " + file_path +
+            ". The session was still being created; retry, or allow more time.");
+    }
+    return session_id;
+}
+
 
 idx_t GraphExcelClient::AddTableRows(const std::string &file_path, const std::string &table_name,
                                       const std::string &rows_json, const std::string &drive_id)
@@ -366,55 +468,8 @@ idx_t GraphExcelClient::AddTableRows(const std::string &file_path, const std::st
     const std::string wb_url    = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
 
     // Create a persistent workbook session (required for write operations per Graph best practices)
-    const std::string create_session_url = GraphExcelUrlBuilder::BuildCreateSessionUrl(wb_url);
-    const std::string session_body = "{\"persistChanges\":true}";
-
-    // Prefer long-running session creation to avoid 504 timeouts on large workbooks
-    std::map<std::string, std::string> prefer_header = {{"Prefer", "respond-async"}};
-    std::string session_response = graph_client.PostWithHeaders(create_session_url, session_body, prefer_header);
-
-    // Check if the server returned a status monitor URL (async 202) by inspecting for "statusMonitorResource"
-    std::string session_id;
-    {
-        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0);
-        if (doc) {
-            duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-            duckdb_yyjson::yyjson_val *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource");
-            duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
-            if (monitor_val && duckdb_yyjson::yyjson_is_str(monitor_val)) {
-                // Long-running: poll the status monitor until session is ready
-                const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
-                duckdb_yyjson::yyjson_doc_free(doc);
-                // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
-                // the same treatment as an @odata.nextLink: the bearer token follows it
-                // only when it names the origin we opened the session against (GitHub
-                // #205). That decision is made ONCE here rather than per request: a
-                // foreign monitor can never hand back our session id, so polling it is
-                // pointless, and doing so repeatedly just aims a burst of unauthenticated
-                // requests at a host the service chose (GitHub #208).
-                if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, create_session_url)) {
-                    throw duckdb::IOException(
-                        "Microsoft Graph returned a workbook session status monitor on a "
-                        "different origin than the session itself (" + monitor_url +
-                        "); refusing to poll it.");
-                }
-                session_id = PollForSessionId(
-                    [&] { return graph_client.GetServerSuppliedUrl(monitor_url, create_session_url); },
-                    [](const std::string &body) { return ExtractSessionId(body); },
-                    SessionPollPolicy{});
-            } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
-                // Immediate (201): session id is in the response
-                session_id = duckdb_yyjson::yyjson_get_str(id_val);
-                duckdb_yyjson::yyjson_doc_free(doc);
-            } else {
-                duckdb_yyjson::yyjson_doc_free(doc);
-            }
-        }
-    }
-
-    if (session_id.empty()) {
-        throw duckdb::IOException("Failed to create Excel workbook session for file: " + file_path);
-    }
+    const std::string session_id =
+        CreateWorkbookSession(graph_client, wb_url, file_path, SessionPollPolicy{});
 
     ERPL_TRACE_DEBUG("GRAPH_EXCEL", "Created workbook session: " + session_id);
 
@@ -468,50 +523,8 @@ idx_t GraphExcelClient::DeleteTableRowsMatchingColumn(const std::string &file_pa
     const std::string wb_url   = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
 
     // Create a workbook session (required for write operations)
-    const std::string create_session_url = GraphExcelUrlBuilder::BuildCreateSessionUrl(wb_url);
-    const std::string session_body = "{\"persistChanges\":true}";
-    std::map<std::string, std::string> prefer_header = {{"Prefer", "respond-async"}};
-    const std::string session_response = graph_client.PostWithHeaders(create_session_url, session_body, prefer_header);
-
-    std::string session_id;
-    {
-        duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(session_response.c_str(), session_response.size(), 0);
-        if (doc) {
-            duckdb_yyjson::yyjson_val *root = duckdb_yyjson::yyjson_doc_get_root(doc);
-            duckdb_yyjson::yyjson_val *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource");
-            duckdb_yyjson::yyjson_val *id_val = duckdb_yyjson::yyjson_obj_get(root, "id");
-            if (monitor_val && duckdb_yyjson::yyjson_is_str(monitor_val)) {
-                const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
-                duckdb_yyjson::yyjson_doc_free(doc);
-                // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
-                // the same treatment as an @odata.nextLink: the bearer token follows it
-                // only when it names the origin we opened the session against (GitHub
-                // #205). That decision is made ONCE here rather than per request: a
-                // foreign monitor can never hand back our session id, so polling it is
-                // pointless, and doing so repeatedly just aims a burst of unauthenticated
-                // requests at a host the service chose (GitHub #208).
-                if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, create_session_url)) {
-                    throw duckdb::IOException(
-                        "Microsoft Graph returned a workbook session status monitor on a "
-                        "different origin than the session itself (" + monitor_url +
-                        "); refusing to poll it.");
-                }
-                session_id = PollForSessionId(
-                    [&] { return graph_client.GetServerSuppliedUrl(monitor_url, create_session_url); },
-                    [](const std::string &body) { return ExtractSessionId(body); },
-                    SessionPollPolicy{});
-            } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
-                session_id = duckdb_yyjson::yyjson_get_str(id_val);
-                duckdb_yyjson::yyjson_doc_free(doc);
-            } else {
-                duckdb_yyjson::yyjson_doc_free(doc);
-            }
-        }
-    }
-
-    if (session_id.empty()) {
-        throw duckdb::IOException("Failed to create Excel workbook session for file: " + file_path);
-    }
+    const std::string session_id =
+        CreateWorkbookSession(graph_client, wb_url, file_path, SessionPollPolicy{});
 
     const std::map<std::string, std::string> session_headers = {{"workbook-session-id", session_id}};
     const std::string close_session_url = GraphExcelUrlBuilder::BuildCloseSessionUrl(wb_url);

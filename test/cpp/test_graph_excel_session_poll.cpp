@@ -130,3 +130,65 @@ TEST_CASE("a status monitor on a foreign origin is not trusted", "[graph_excel][
     REQUIRE_FALSE(erpl_web::GraphClient::IsServerSuppliedUrlTrusted(
         "https://graph.microsoft.com/v1.0/operations/abc", ""));
 }
+
+// GitHub #208 follow-up: the poll's readiness predicate, driven by realistic Graph bodies
+// rather than the identity function above - which by construction cannot catch a body
+// whose "id" belongs to the operation instead of the session.
+//
+// Graph answers a status-monitor poll with an OPERATION resource. Reading "id"
+// unconditionally accepted the very first poll, so the time budget never engaged and an
+// operation id was then sent as workbook-session-id on every write.
+TEST_CASE("the readiness predicate waits while the operation is still running",
+          "[graph_excel][poll]") {
+    // These carry an "id" - the operation's - and must NOT be taken as a session.
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(
+                R"({"id":"op-123","status":"running","resourceLocation":"/x"})")
+                .empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-123","status":"notStarted"})").empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-123","status":"inProgress"})").empty());
+}
+
+TEST_CASE("the readiness predicate accepts a session body", "[graph_excel][poll]") {
+    // The immediate (201) shape: no status, the body IS the session.
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"session-abc","persistChanges":true})") ==
+            "session-abc");
+    // And the completed operation.
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":"session-abc","status":"succeeded"})") ==
+            "session-abc");
+}
+
+TEST_CASE("the readiness predicate fails fast when the operation failed",
+          "[graph_excel][poll]") {
+    REQUIRE_THROWS_AS(erpl_web::ExtractWorkbookSessionId(R"({"id":"op-1","status":"failed"})"),
+                      duckdb::IOException);
+    REQUIRE_THROWS_AS(erpl_web::ExtractWorkbookSessionId(R"({"status":"cancelled"})"),
+                      duckdb::IOException);
+}
+
+TEST_CASE("the readiness predicate tolerates a body it cannot use", "[graph_excel][poll]") {
+    REQUIRE(erpl_web::ExtractWorkbookSessionId("not json").empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId("{}").empty());
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(R"({"id":123})").empty());
+}
+
+// The whole point of the predicate plus the budget, together: a session that only becomes
+// ready after several polls is reached, rather than an operation id being taken on the
+// first one.
+TEST_CASE("a session that becomes ready after several polls is returned",
+          "[graph_excel][poll]") {
+    FakeClock clock;
+    int polls = 0;
+
+    const auto id = erpl_web::PollForSessionId(
+        [&] {
+            polls++;
+            return polls < 3 ? std::string(R"({"id":"op-1","status":"running"})")
+                             : std::string(R"({"id":"session-xyz","status":"succeeded"})");
+        },
+        [](const std::string &body) { return erpl_web::ExtractWorkbookSessionId(body); },
+        clock.Policy(1s, 30s));
+
+    REQUIRE(id == "session-xyz");
+    REQUIRE(polls == 3);
+    REQUIRE(clock.slept.size() == 2);
+}
