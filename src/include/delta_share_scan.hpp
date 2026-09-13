@@ -54,6 +54,39 @@ struct DeltaShareGlobalState : public GlobalTableFunctionState {
     // Note: finished unused (implicit when current_file_index >= files.size())
 };
 
+// Reads ONE Delta Sharing data file and hands out its chunks, aligned to the schema the
+// plan was bound to.
+//
+// It is a separate object so it can be driven directly by a test with a local parquet
+// path. That is not a hole in the URL policy: the policy is enforced in InitGlobal, where
+// the share server's file list arrives, and a URL that reaches this reader in production
+// has already passed it. Without this seam the reader can only be exercised through a
+// remote https URL, which needs httpfs - not built here - so the row-draining and
+// chunk-lifetime guarantees had no test at all (GitHub #210).
+class DeltaShareFileReader {
+public:
+    // Opens `file_url` and projects it onto (column_names, column_types), matching the
+    // file's columns BY NAME and filling NULL for any the file does not carry.
+    // Throws IOException if the file cannot be read.
+    void Open(duckdb::ClientContext &context, const std::string &file_url,
+              const vector<string> &column_names, const vector<LogicalType> &column_types);
+
+    bool IsOpen() const { return result != nullptr; }
+
+    // The next chunk, or nullptr once the file is exhausted. The chunk stays owned by this
+    // reader until the following call, so a caller may reference it into its output: that
+    // lifetime is the whole point, since referencing a chunk whose owning result had
+    // already been destroyed was a use-after-free (GitHub #207).
+    duckdb::DataChunk *NextChunk();
+
+    void Close();
+
+private:
+    duckdb::unique_ptr<duckdb::Connection> connection;
+    duckdb::unique_ptr<duckdb::QueryResult> result;
+    duckdb::unique_ptr<duckdb::DataChunk> current_chunk;
+};
+
 // Local state for delta_share_scan (extends LocalTableFunctionState)
 // Follows DuckDB Parquet extension pattern with per-thread resources
 struct DeltaShareLocalState : public LocalTableFunctionState {
@@ -61,14 +94,12 @@ struct DeltaShareLocalState : public LocalTableFunctionState {
     // Each thread gets its own client—no global synchronization needed
     shared_ptr<DeltaShareClient> http_client;
 
-    // The file this thread is currently draining. The reader for one file spans MANY scan
-    // calls - one per output chunk - so the connection and the result it owns have to live
-    // here, not on the stack of a single call. Emitting a chunk that references a result
-    // destroyed at the end of that call is a use-after-free, and advancing to the next
-    // file after a single chunk drops every row past the first 2048 (GitHub #207).
-    duckdb::unique_ptr<duckdb::Connection> connection;
-    duckdb::unique_ptr<duckdb::QueryResult> result;
-    duckdb::unique_ptr<duckdb::DataChunk> current_chunk;
+    // The file this thread is currently draining. Reading one file spans MANY scan calls -
+    // one per output chunk - so the reader has to live here, not on the stack of a single
+    // call. Emitting a chunk that references a result destroyed at the end of that call is
+    // a use-after-free, and advancing to the next file after a single chunk drops every
+    // row past the first 2048 (GitHub #207).
+    DeltaShareFileReader reader;
 
     // Note: which file this is comes from the atomic claim in the global state.
 };
