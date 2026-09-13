@@ -201,22 +201,12 @@ std::string GraphSharePointClient::ResolveSiteId(const std::string &name_or_id) 
     }
 
     // Accept web URLs: https://tenant.sharepoint.com  or  https://tenant.sharepoint.com/sites/name
-    // The scheme test comes from odata_url_helpers so there is one definition of "absolute
-    // http(s) URL"; testing the prefixes here byte-exactly made 'HTTPS://...' fall into the
-    // name-search path and fail with "No SharePoint site found".
-    const std::string https_prefix = "https://";
-    const std::string http_prefix  = "http://";
+    // Predicate and strip both come from odata_url_helpers, so there is one definition of
+    // "absolute http(s) URL" and it cannot drift from the code that removes the scheme.
     if (LooksLikeAbsoluteHttpUrl(name_or_id)) {
         ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving site URL to ID: " + name_or_id);
 
-        // LooksLikeAbsoluteHttpUrl already established one of the two schemes.
-        const auto scheme_length =
-            (name_or_id.size() >= https_prefix.size() &&
-             std::equal(https_prefix.begin(), https_prefix.end(), name_or_id.begin(),
-                        [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); }))
-                ? https_prefix.size()
-                : http_prefix.size();
-        std::string rest = name_or_id.substr(scheme_length);
+        std::string rest = StripHttpScheme(name_or_id);
 
         // Split off trailing slash
         if (!rest.empty() && rest.back() == '/') {
@@ -337,15 +327,15 @@ std::string GraphSharePointClient::ResolveListId(const std::string &site_id, con
 std::string GraphSharePointClient::ResolveDriveIdFromUrl(const std::string &web_url) {
     ERPL_TRACE_DEBUG("GRAPH_SHAREPOINT", "Resolving drive ID from web URL: " + web_url);
 
-    // Extract hostname to resolve the containing site
-    const std::string https_prefix = "https://";
-    const std::string http_prefix  = "http://";
-    std::string rest = web_url.rfind(https_prefix, 0) == 0
-        ? web_url.substr(https_prefix.size())
-        : web_url.substr(http_prefix.size());
-
-    const auto slash_pos = rest.find('/');
-    const std::string hostname = (slash_pos == std::string::npos) ? rest : rest.substr(0, slash_pos);
+    // Extract hostname to resolve the containing site. This used to assume "not https,
+    // therefore http" and chop seven characters off whatever it was handed, so an
+    // uppercase scheme or a bare name became a silently wrong hostname rather than an
+    // error. HostOfAbsoluteHttpUrl rejects input that is not an absolute http(s) URL.
+    if (!LooksLikeAbsoluteHttpUrl(web_url)) {
+        throw duckdb::InvalidInputException(
+            "A drive web URL must be an absolute http(s) URL, got '%s'.", web_url.c_str());
+    }
+    const std::string hostname = HostOfAbsoluteHttpUrl(web_url);
 
     // Resolve the root site for this hostname, then list its drives
     const std::string site_id = ResolveSiteId("https://" + hostname);

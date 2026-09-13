@@ -172,3 +172,33 @@ TEST_CASE("an absolute site URL is recognised whatever the scheme's case",
     REQUIRE_FALSE(erpl_web::LooksLikeAbsoluteHttpUrl("Finance"));
     REQUIRE_FALSE(erpl_web::LooksLikeAbsoluteHttpUrl("tenant.sharepoint.com/sites/Finance"));
 }
+
+// GitHub #206 follow-up: the case-insensitive scheme predicate was applied to ResolveSiteId
+// and left byte-exact in four siblings. ResolveDriveIdFromUrl was the worst of them: it
+// assumed "not https, therefore http" and chopped seven characters off whatever it was
+// handed, so an uppercase scheme or a bare name produced a silently wrong hostname rather
+// than an error. Predicate and strip now share one definition in odata_url_helpers.
+TEST_CASE("StripHttpScheme removes either scheme in any case", "[graph_sharepoint][url_builder]") {
+    REQUIRE(erpl_web::StripHttpScheme("https://tenant.sharepoint.com/sites/X") ==
+            "tenant.sharepoint.com/sites/X");
+    REQUIRE(erpl_web::StripHttpScheme("HTTPS://tenant.sharepoint.com") == "tenant.sharepoint.com");
+    REQUIRE(erpl_web::StripHttpScheme("Http://host") == "host");
+}
+
+TEST_CASE("StripHttpScheme refuses what it cannot strip", "[graph_sharepoint][url_builder]") {
+    // The old inline code returned value.substr(7) here, turning "team-site" into "site".
+    REQUIRE_THROWS(erpl_web::StripHttpScheme("team-site"));
+    REQUIRE_THROWS(erpl_web::StripHttpScheme(""));
+    REQUIRE_THROWS(erpl_web::StripHttpScheme("ftp://host/x"));
+}
+
+TEST_CASE("HostOfAbsoluteHttpUrl takes the host and nothing else",
+          "[graph_sharepoint][url_builder]") {
+    REQUIRE(erpl_web::HostOfAbsoluteHttpUrl("https://tenant.sharepoint.com/sites/Finance") ==
+            "tenant.sharepoint.com");
+    REQUIRE(erpl_web::HostOfAbsoluteHttpUrl("https://tenant.sharepoint.com") ==
+            "tenant.sharepoint.com");
+    REQUIRE(erpl_web::HostOfAbsoluteHttpUrl("HTTPS://Tenant.SharePoint.com/x/y") ==
+            "Tenant.SharePoint.com");
+    REQUIRE_THROWS(erpl_web::HostOfAbsoluteHttpUrl("tenant.sharepoint.com/sites/Finance"));
+}
