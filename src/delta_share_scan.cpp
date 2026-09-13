@@ -261,9 +261,28 @@ static unique_ptr<LocalTableFunctionState> DeltaShareScanInitLocal(ExecutionCont
 //
 // Built as parsed expressions rather than SQL text: the file's column names come from the
 // share server, and nothing share-supplied should ever be parsed as SQL.
+// Partition names are matched the same way file column names are - exact first, then
+// case-insensitively. Having the two lookups disagree beside each other would mean a file
+// whose casing differs lines up while its partition columns silently do not.
+static map<string, string>::const_iterator FindPartitionValue(
+    const map<string, string>& partition_values, const string& wanted) {
+    const auto exact = partition_values.find(wanted);
+    if (exact != partition_values.end()) {
+        return exact;
+    }
+    const auto lowered_wanted = duckdb::StringUtil::Lower(wanted);
+    for (auto it = partition_values.begin(); it != partition_values.end(); ++it) {
+        if (duckdb::StringUtil::Lower(it->first) == lowered_wanted) {
+            return it;
+        }
+    }
+    return partition_values.end();
+}
+
 static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignmentProjection(
     const vector<string>& column_names, const vector<LogicalType>& column_types,
-    const duckdb::vector<duckdb::ColumnDefinition>& file_columns) {
+    const duckdb::vector<duckdb::ColumnDefinition>& file_columns,
+    const map<string, string>& partition_values) {
 
     // Case-sensitive match first, then a case-insensitive fallback, so a file that differs
     // only in capitalisation still lines up rather than silently becoming all NULLs.
@@ -277,6 +296,7 @@ static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignme
     duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> expressions;
     expressions.reserve(column_types.size());
 
+
     for (idx_t i = 0; i < column_types.size(); i++) {
         const auto& wanted = column_names[i];
         const auto& wanted_type = column_types[i];
@@ -289,6 +309,27 @@ static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignme
             source = duckdb::make_uniq<duckdb::ColumnRefExpression>(exact->second);
         } else if (lowered != by_lowered_name.end()) {
             source = duckdb::make_uniq<duckdb::ColumnRefExpression>(lowered->second);
+        } else if (const auto partition = FindPartitionValue(partition_values, wanted);
+                   partition != partition_values.end()) {
+            // A partition column: its value is not in the file, it is carried per file in
+            // the protocol. Emitted as a constant and cast like any other column, so a
+            // partitioned table groups by real values instead of a single NULL group.
+            //
+            // The empty string is NULL, for every type. Delta Sharing PROTOCOL.md, under
+            // Partition Value Serialization: "An empty string for any type translates to a
+            // null partition value." Emitting it literally made '' fail the cast on a DATE
+            // column - taking the whole scan with it - and produced '' instead of NULL on a
+            // VARCHAR one.
+            if (partition->second.empty()) {
+                ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Partition column '" + wanted +
+                                                         "' has an empty value, which is NULL");
+                source = duckdb::make_uniq<duckdb::ConstantExpression>(duckdb::Value(wanted_type));
+            } else {
+                ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Column '" + wanted +
+                                                         "' comes from the file's partition values");
+                source =
+                    duckdb::make_uniq<duckdb::ConstantExpression>(duckdb::Value(partition->second));
+            }
         } else {
             ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN",
                              "Column '" + wanted + "' is absent from this file; filling NULL");
@@ -304,7 +345,8 @@ static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignme
 
 void DeltaShareFileReader::Open(duckdb::ClientContext& context, const std::string& file_url,
                                 const vector<string>& column_names,
-                                const vector<LogicalType>& column_types) {
+                                const vector<LogicalType>& column_types,
+                                const map<string, string>& partition_values) {
     Close();
 
     // The URL is chosen by the SHARE SERVER, so it is passed as a bound VALUE and never
@@ -327,10 +369,14 @@ void DeltaShareFileReader::Open(duckdb::ClientContext& context, const std::strin
         // supplies - is referenced into an output vector of another type and raises an
         // INTERNAL error.
         if (!column_types.empty()) {
-            // Columns() binds the relation, making the file's own schema readable.
+            // The relation is already bound by the TableFunction call above; Columns() just
+            // reads the schema that bind produced. (An earlier comment here credited
+            // Columns() with doing the binding, which is why a missing file raises before
+            // this line, not at it.)
             const auto& file_columns = relation->Columns();
             relation = relation->Project(
-                BuildAlignmentProjection(column_names, column_types, file_columns), column_names);
+                BuildAlignmentProjection(column_names, column_types, file_columns, partition_values),
+            column_names);
         }
 
         result = relation->Execute();
@@ -386,7 +432,7 @@ static bool ClaimNextFile(ClientContext& context, const DeltaShareScanBindData& 
                         file_ref.url.substr(0, 80) + "...");
 
     local_state.reader.Open(context, file_ref.url, bind_data.column_names,
-                            bind_data.column_types);
+                            bind_data.column_types, file_ref.partition_values);
     return true;
 }
 

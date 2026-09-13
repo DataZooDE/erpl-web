@@ -66,10 +66,19 @@ struct DeltaShareGlobalState : public GlobalTableFunctionState {
 class DeltaShareFileReader {
 public:
     // Opens `file_url` and projects it onto (column_names, column_types), matching the
-    // file's columns BY NAME and filling NULL for any the file does not carry.
+    // file's columns BY NAME.
+    //
+    // A bound column the file does not carry is taken from `partition_values` when it
+    // appears there, and NULL otherwise. In Delta, a partition column's value is NOT
+    // stored inside the data file - it is carried per file in the protocol - so treating
+    // its absence as "schema evolution, therefore NULL" returned every partition column as
+    // NULL with no error. NULL is the right answer only for a column that is genuinely
+    // absent from both.
+    //
     // Throws IOException if the file cannot be read.
     void Open(duckdb::ClientContext &context, const std::string &file_url,
-              const vector<string> &column_names, const vector<LogicalType> &column_types);
+              const vector<string> &column_names, const vector<LogicalType> &column_types,
+              const map<string, string> &partition_values = {});
 
     bool IsOpen() const { return result != nullptr; }
 

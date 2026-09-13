@@ -35,6 +35,7 @@
 #include "catch.hpp"
 #include "duckdb.hpp"
 
+#include "delta_share_client.hpp"
 #include "odata_test_server.hpp"
 
 #include <atomic>
@@ -327,4 +328,42 @@ TEST_CASE("a Delta Sharing profile endpoint may be https or loopback http",
     INFO((result->HasError() ? result->GetError() : std::string()));
     REQUIRE_FALSE(result->HasError());
     REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
+}
+
+// The projection now takes partition columns from the file's partition values, but that
+// only fires if the PARSER populated them. It reads "partitionValues" (the protocol's
+// spelling); the earlier "partition_values" never matched, so the map was always empty and
+// every partition column came back NULL.
+//
+// The reader tests pass partition values in directly, which deliberately isolates the
+// projection - and therefore cannot catch a parser that never fills the map. This drives
+// the real client against the real response, which is where the key matters. Flagged by
+// the continuous crew review, whose point was exactly that the tests bypassed the parser.
+TEST_CASE("the share server's partitionValues reach the parsed file reference",
+          "[delta_share][scan]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;
+    const std::string table_path = "/shares/s/schemas/sc/tables/t";
+    server.OnPath(table_path + "/query",
+                  CannedResponse::Json(
+                      std::string(R"({"protocol":{"minReaderVersion":1}})") + "\n" + SCHEMA_LINE +
+                      "\n" +
+                      R"({"file":{"id":"f0","size":1,"url":"https://example.invalid/part.parquet",)"
+                      R"("partitionValues":{"dt":"2024-03-01","region":"eu"}}})"));
+
+    ProfileFile profile(server.BaseUrl());
+    auto share_profile = erpl_web::DeltaShareProfile::FromFile(*con.context, profile.Path());
+    erpl_web::DeltaShareClient client(*con.context, share_profile);
+
+    const auto files = client.QueryTable("s", "sc", "t");
+    REQUIRE(files.size() == 1);
+
+    const auto &partitions = files[0].partition_values;
+    INFO("parsed " << partitions.size() << " partition values");
+    REQUIRE(partitions.size() == 2);
+    REQUIRE(partitions.at("dt") == "2024-03-01");
+    REQUIRE(partitions.at("region") == "eu");
 }

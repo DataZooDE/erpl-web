@@ -217,6 +217,107 @@ TEST_CASE("DeltaShareFileReader matches column names case-insensitively",
     REQUIRE(chunk->GetValue(1, 0).ToString() == "row-0");
 }
 
+// In Delta, a partition column's value is NOT stored in the data file - it is carried per
+// file in the protocol. Treating its absence as schema evolution returned every partition
+// column as NULL, so "SELECT dt, count(*) ... GROUP BY dt" collapsed to one NULL group:
+// wrong data, no error.
+TEST_CASE("DeltaShareFileReader takes partition columns from the file's partition values",
+          "[delta_share][reader]") {
+    TestDatabase database;
+    ScratchParquet parquet;
+    // The file carries only id and name; dt exists solely as a partition value.
+    parquet.Write(database.Con(), "CAST(i AS INTEGER) AS id, 'row-' || i AS name", 3);
+
+    duckdb::vector<duckdb::string> names = {"id", "name", "dt"};
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::DATE)};
+
+    erpl_web::DeltaShareFileReader reader;
+    reader.Open(database.Context(), parquet.Path(), names, types, {{"dt", "2024-03-01"}});
+
+    auto *chunk = reader.NextChunk();
+    REQUIRE(chunk != nullptr);
+    REQUIRE(chunk->size() == 3);
+    // The partition value reaches every row, cast to the bound type rather than left a string.
+    REQUIRE(chunk->data[2].GetType() == duckdb::LogicalType(duckdb::LogicalTypeId::DATE));
+    for (duckdb::idx_t row = 0; row < chunk->size(); row++) {
+        INFO("row " << row);
+        REQUIRE_FALSE(chunk->GetValue(2, row).IsNull());
+        REQUIRE(chunk->GetValue(2, row).ToString() == "2024-03-01");
+    }
+}
+
+TEST_CASE("DeltaShareFileReader still NULLs a column in neither the file nor the partitions",
+          "[delta_share][reader]") {
+    TestDatabase database;
+    ScratchParquet parquet;
+    parquet.Write(database.Con(), "CAST(i AS INTEGER) AS id", 2);
+
+    duckdb::vector<duckdb::string> names = {"id", "name", "dt"};
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
+
+    erpl_web::DeltaShareFileReader reader;
+    reader.Open(database.Context(), parquet.Path(), names, types, {{"dt", "2024-03-01"}});
+
+    auto *chunk = reader.NextChunk();
+    REQUIRE(chunk != nullptr);
+    REQUIRE(chunk->GetValue(2, 0).ToString() == "2024-03-01");  // partition
+    REQUIRE(chunk->GetValue(1, 0).IsNull());                    // genuinely absent
+}
+
+// Delta Sharing PROTOCOL.md, Partition Value Serialization: "An empty string for any type
+// translates to a null partition value." Emitting it literally made '' fail the cast on a
+// DATE column - taking the whole scan with it - and produced '' instead of NULL on VARCHAR.
+TEST_CASE("DeltaShareFileReader reads an empty partition value as NULL",
+          "[delta_share][reader]") {
+    TestDatabase database;
+    ScratchParquet parquet;
+    parquet.Write(database.Con(), "CAST(i AS INTEGER) AS id", 2);
+
+    duckdb::vector<duckdb::string> names = {"id", "dt", "region"};
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
+        duckdb::LogicalType(duckdb::LogicalTypeId::DATE),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
+
+    erpl_web::DeltaShareFileReader reader;
+    // A DATE would throw on CAST('' AS DATE); a VARCHAR would quietly become ''.
+    reader.Open(database.Context(), parquet.Path(), names, types,
+                {{"dt", ""}, {"region", ""}});
+
+    auto *chunk = reader.NextChunk();
+    REQUIRE(chunk != nullptr);
+    REQUIRE(chunk->size() == 2);
+    REQUIRE(chunk->GetValue(1, 0).IsNull());
+    REQUIRE(chunk->GetValue(2, 0).IsNull());
+}
+
+// The file-column lookup beside it is case-insensitive; having the two disagree would mean
+// a file whose casing differs lines up while its partition columns silently do not.
+TEST_CASE("DeltaShareFileReader matches partition names case-insensitively",
+          "[delta_share][reader]") {
+    TestDatabase database;
+    ScratchParquet parquet;
+    parquet.Write(database.Con(), "CAST(i AS INTEGER) AS id", 2);
+
+    duckdb::vector<duckdb::string> names = {"id", "dt"};
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
+        duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
+
+    erpl_web::DeltaShareFileReader reader;
+    reader.Open(database.Context(), parquet.Path(), names, types, {{"DT", "2024-03-01"}});
+
+    auto *chunk = reader.NextChunk();
+    REQUIRE(chunk != nullptr);
+    REQUIRE(chunk->GetValue(1, 0).ToString() == "2024-03-01");
+}
+
 // #207 defect 4: a file that cannot be read must fail loudly. Swallowing it into an empty
 // chunk ended the scan, so one bad file truncated the table and reported success.
 TEST_CASE("DeltaShareFileReader throws on a file it cannot read", "[delta_share][reader]") {
