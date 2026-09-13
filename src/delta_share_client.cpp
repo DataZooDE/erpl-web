@@ -183,7 +183,19 @@ void DeltaShareClient::ValidateProfile() const {
     // endpoint gets at least the scrutiny the data-file URLs get. The profile is not
     // necessarily user-authored - DeltaShareProfile::FromFile accepts a remote path - so
     // an endpoint of "http://attacker.example/v1" would have sent the token in cleartext
-    // to a host of someone else's choosing. Mirrors DataverseClient's check on its base URL.
+    // to a host of someone else's choosing.
+    //
+    // Absolute http(s) FIRST, exactly as the data-file check does and for the same reason:
+    // RequireSecureOrLoopbackUrl deliberately RETURNS for input carrying no scheme, because
+    // its other callers accept a bare name and resolve it themselves. Calling it alone let
+    // "attacker.example/v1" straight through - the same omission this repo had already
+    // fixed for file URLs, repeated here.
+    if (!LooksLikeAbsoluteHttpUrl(profile_.endpoint)) {
+        throw duckdb::InvalidInputException(
+            "The Delta Sharing profile 'endpoint' must be an absolute http(s) URL "
+            "(https anywhere, or plain http only for a loopback address); got '%s'.",
+            profile_.endpoint.c_str());
+    }
     RequireSecureOrLoopbackUrl(profile_.endpoint, "The Delta Sharing profile 'endpoint'");
     if (profile_.IsExpired()) {
         throw std::runtime_error("Delta Sharing profile: bearer token has expired");
@@ -668,13 +680,19 @@ vector<DeltaShareInfo> DeltaShareClient::ParseSharesResponse(const string& json_
         yyjson_arr_foreach(shares_arr, idx, max, share_item) {
             DeltaShareInfo share_info;
 
+            // A share with no usable name is SKIPPED, not emitted with an empty one. The
+            // schema parser in delta_share_scan.cpp already `continue`s past exactly this
+            // case, so that is the house rule; surfacing an empty-named row instead would
+            // let a malformed listing masquerade as a real share.
             auto name_val = yyjson_obj_get(share_item, "name");
-            if (name_val) {
-                share_info.name = yyjson_get_str(name_val);
+            if (!name_val || !yyjson_is_str(name_val)) {
+                ERPL_TRACE_WARN("DELTA_SHARE", "Skipping a share entry with no string 'name'");
+                continue;
             }
+            share_info.name = yyjson_get_str(name_val);
 
             auto id_val = yyjson_obj_get(share_item, "id");
-            if (id_val) {
+            if (id_val && yyjson_is_str(id_val)) {
                 share_info.id = yyjson_get_str(id_val);
             }
 
@@ -712,9 +730,11 @@ vector<DeltaSchemaInfo> DeltaShareClient::ParseSchemasResponse(const string& jso
             schema_info.share = share_name;
 
             auto name_val = yyjson_obj_get(schema_item, "name");
-            if (name_val) {
-                schema_info.name = yyjson_get_str(name_val);
+            if (!name_val || !yyjson_is_str(name_val)) {
+                ERPL_TRACE_WARN("DELTA_SHARE", "Skipping a schema entry with no string 'name'");
+                continue;
             }
+            schema_info.name = yyjson_get_str(name_val);
 
             schemas.push_back(schema_info);
         }
@@ -751,12 +771,14 @@ vector<DeltaTableInfo> DeltaShareClient::ParseTablesResponse(const string& json_
             table_info.schema = schema_name;
 
             auto name_val = yyjson_obj_get(table_item, "name");
-            if (name_val) {
-                table_info.name = yyjson_get_str(name_val);
+            if (!name_val || !yyjson_is_str(name_val)) {
+                ERPL_TRACE_WARN("DELTA_SHARE", "Skipping a table entry with no string 'name'");
+                continue;
             }
+            table_info.name = yyjson_get_str(name_val);
 
             auto id_val = yyjson_obj_get(table_item, "id");
-            if (id_val) {
+            if (id_val && yyjson_is_str(id_val)) {
                 table_info.id = yyjson_get_str(id_val);
             }
 

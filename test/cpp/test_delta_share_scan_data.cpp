@@ -308,8 +308,110 @@ TEST_CASE("a Delta Sharing profile endpoint must not be plain http off loopback"
     ProfileFile insecure("http://share.example.com/delta-sharing");
     auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_shares('" + insecure.Path() + "')");
     REQUIRE(result->HasError());
-    INFO("error was: " << result->GetError());
-    REQUIRE(result->GetError().find("endpoint") != std::string::npos);
+
+    // Assert on wording only the URL POLICY produces. "endpoint" alone was not enough:
+    // DeltaShareProfile::FromJson throws "missing 'endpoint' field", so the test went green
+    // whenever the profile failed to load and the policy was never reached - it could not
+    // tell "refused" from "never got there".
+    const auto error = result->GetError();
+    INFO("error was: " << error);
+    REQUIRE(error.find("share.example.com") != std::string::npos);
+    REQUIRE(error.find("https://") != std::string::npos);
+}
+
+// RequireSecureOrLoopbackUrl deliberately returns for input with no scheme, so calling it
+// alone let a bare name through - the same omission already fixed once for data-file URLs.
+//
+// This test asserts the PRECONDITION'S OWN wording. A first version asserted only that the
+// error mentioned the endpoint, and every one of its inputs went green on the pre-fix code:
+// "ftp://" already threw from RequireSecureOrLoopbackUrl's unsupported-scheme branch, and
+// the schemeless ones failed later at connect - so it could not fail if the guard under
+// test were deleted. That is the very defect the case above it fixes, reproduced one test
+// down, and the crew caught it.
+TEST_CASE("a Delta Sharing profile endpoint must be an absolute URL",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    // Schemeless input: RequireSecureOrLoopbackUrl returns for these, so only the new
+    // precondition can reject them.
+    for (const auto &endpoint : {"share.example.com/delta-sharing", "/var/run/share",
+                                 "delta-sharing"}) {
+        INFO("endpoint: " << endpoint);
+        ProfileFile profile(endpoint);
+        auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_shares('" + profile.Path() + "')");
+        REQUIRE(result->HasError());
+
+        const auto error = result->GetError();
+        INFO("error was: " << error);
+        // Wording only the absolute-URL precondition produces. A connect failure, a profile
+        // parse error and the unsupported-scheme branch all say something else.
+        REQUIRE(error.find("must be an absolute http(s) URL") != std::string::npos);
+        REQUIRE(error.find(endpoint) != std::string::npos);
+    }
+}
+
+// The same unguarded yyjson_get_str shape as the file 'url' lived in the share, schema and
+// table parsers - the same trust boundary, the same crash.
+TEST_CASE("a share listing with non-string fields does not crash the parser",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;
+    server.OnPath("/shares",
+                  CannedResponse::Json(
+                      R"({"shares":[{"name":null,"id":123},{"name":"ok","id":"1"}]})"));
+    ProfileFile profile(server.BaseUrl());
+
+    // The point is that this returns at all rather than taking the process down.
+    auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_shares('" + profile.Path() + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    // ONE row, not two: an entry with no usable name is skipped rather than surfaced with
+    // an empty one, matching what the schema parser in delta_share_scan.cpp already does.
+    // Asserting 2 here would have frozen the opposite rule into place.
+    REQUIRE(ScalarOf(result) == 1);
+}
+
+// The diff guarded three parsers; the test covered one. These drive the other two.
+TEST_CASE("a schema listing with non-string fields does not crash the parser",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;
+    server.OnPath("/shares/alpha/schemas",
+                  CannedResponse::Json(R"({"schemas":[{"name":null},{"name":"sales"}]})"));
+    ProfileFile profile(server.BaseUrl());
+
+    auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_schemas('" + profile.Path() +
+                            "', 'alpha')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(ScalarOf(result) == 1);
+}
+
+TEST_CASE("a table listing with non-string fields does not crash the parser",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;
+    server.OnPath("/shares/alpha/schemas/sales/tables",
+                  CannedResponse::Json(
+                      R"({"tables":[{"name":42,"id":null},{"name":"orders","id":"t1"}]})"));
+    ProfileFile profile(server.BaseUrl());
+
+    auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_tables('" + profile.Path() +
+                            "', 'alpha', 'sales')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(ScalarOf(result) == 1);
 }
 
 // https is fine, and so is loopback http - which is what every other test here relies on.
