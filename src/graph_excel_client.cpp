@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <map>
 #include <stdexcept>
+#include <thread>
 #include "odata_url_helpers.hpp"
 
 namespace erpl_web {

@@ -1,4 +1,5 @@
 #include "delta_share_client.hpp"
+#include "odata_url_helpers.hpp"
 #include <set>
 #include "tracing.hpp"
 #include "yyjson.hpp"
@@ -178,6 +179,12 @@ void DeltaShareClient::ValidateProfile() const {
     if (profile_.bearer_token.empty()) {
         throw std::runtime_error("Delta Sharing profile: bearer token cannot be empty");
     }
+    // The bearer token is attached to every request built from this endpoint, so the
+    // endpoint gets at least the scrutiny the data-file URLs get. The profile is not
+    // necessarily user-authored - DeltaShareProfile::FromFile accepts a remote path - so
+    // an endpoint of "http://attacker.example/v1" would have sent the token in cleartext
+    // to a host of someone else's choosing. Mirrors DataverseClient's check on its base URL.
+    RequireSecureOrLoopbackUrl(profile_.endpoint, "The Delta Sharing profile 'endpoint'");
     if (profile_.IsExpired()) {
         throw std::runtime_error("Delta Sharing profile: bearer token has expired");
     }
@@ -411,26 +418,34 @@ std::vector<DeltaFileReference> DeltaShareClient::GetTableChanges(const std::str
 DeltaFileReference DeltaShareClient::ParseFileReference(yyjson_val* file_obj) const {
     DeltaFileReference file_ref;
 
-    // Extract URL
+    // This is the FIRST code that touches the share server's output, so it must assume
+    // nothing about it. yyjson_get_str returns NULL for any value that is not a string,
+    // and assigning NULL to a std::string is undefined behaviour - a crash inside strlen.
+    // A server answering /query with {"url":null} or {"url":123} therefore took the
+    // extension down before any of the URL policing further along could run.
     auto url_val = yyjson_obj_get(file_obj, "url");
-    if (url_val) {
-        file_ref.url = yyjson_get_str(url_val);
+    if (!url_val || !yyjson_is_str(url_val)) {
+        throw duckdb::InvalidInputException(
+            "The Delta Sharing server returned a file entry whose 'url' is missing or not a "
+            "string.");
     }
+    file_ref.url = yyjson_get_str(url_val);
 
-    // Extract size
+    // Safe as-is: yyjson_get_uint returns 0 for anything that is not a number.
     auto size_val = yyjson_obj_get(file_obj, "size");
     if (size_val) {
         file_ref.size = yyjson_get_uint(size_val);
     }
 
-    // Extract id
     auto id_val = yyjson_obj_get(file_obj, "id");
-    if (id_val) {
+    if (id_val && yyjson_is_str(id_val)) {
         file_ref.id = yyjson_get_str(id_val);
     }
 
-    // Extract partition values if present
-    auto partition_vals = yyjson_obj_get(file_obj, "partition_values");
+    // Extract partition values if present. The Delta Sharing protocol spells this
+    // "partitionValues"; "partition_values" never matched, which is one half of why
+    // partition columns came back empty (GitHub, see the scan's partition check).
+    auto partition_vals = yyjson_obj_get(file_obj, "partitionValues");
     if (partition_vals && yyjson_is_obj(partition_vals)) {
         yyjson_obj_iter iter = yyjson_obj_iter_with(partition_vals);
         yyjson_val* key;
