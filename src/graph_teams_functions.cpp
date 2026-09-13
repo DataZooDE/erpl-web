@@ -6,6 +6,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 #include "erpl_web_banner.hpp"
+#include "graph_json_scan.hpp"
 
 using namespace duckdb;
 using namespace duckdb_yyjson;
@@ -26,38 +27,6 @@ struct TeamsBindData : public TableFunctionData {
     std::shared_ptr<HttpAuthParams> auth_params;
 
     std::string first_url;
-    std::string next_url;
-
-    yyjson_doc *current_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool initialized = false;
-    bool done = false;
-
-    ~TeamsBindData() override {
-        if (current_doc) {
-            yyjson_doc_free(current_doc);
-        }
-    }
-
-    bool LoadPage(const std::string &body) {
-        if (current_doc) {
-            yyjson_doc_free(current_doc);
-            current_doc = nullptr;
-        }
-        current_doc = yyjson_read(body.c_str(), body.size(), 0);
-        if (!current_doc) {
-            return false;
-        }
-        yyjson_val *root = yyjson_doc_get_root(current_doc);
-        yyjson_val *nl = yyjson_obj_get(root, "@odata.nextLink");
-        next_url = (nl && yyjson_is_str(nl)) ? yyjson_get_str(nl) : "";
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) {
-            return false;
-        }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
 struct TeamChannelsBindData : public TeamsBindData {
@@ -77,36 +46,37 @@ struct ChannelMessagesBindData : public TeamsBindData {
 // Pagination helpers
 // =============================================================================
 
-static bool FetchTeamsPage(TeamsBindData &bd, const std::string &url) {
+static bool FetchTeamsPage(GraphPagedScanState &state, const TeamsBindData &bd,
+                           const std::string &url) {
     const auto body = GraphClient(bd.auth_params, "GRAPH_TEAMS").Get(url);
-    return bd.LoadPage(body);
+    return state.LoadPage(body);
 }
 
-static bool InitTeamsScan(TeamsBindData &bd, DataChunk &output) {
-    if (bd.done) {
+static bool InitTeamsScan(GraphPagedScanState &state, const TeamsBindData &bd, DataChunk &output) {
+    if (state.done) {
         output.SetCardinality(0);
         return false;
     }
-    if (!bd.initialized) {
-        if (!FetchTeamsPage(bd, bd.first_url)) {
-            bd.done = true;
+    if (!state.initialized) {
+        if (!FetchTeamsPage(state, bd, bd.first_url)) {
+            state.done = true;
             output.SetCardinality(0);
             return false;
         }
-        bd.initialized = true;
+        state.initialized = true;
     }
     return true;
 }
 
-static yyjson_val *NextTeamsItem(TeamsBindData &bd) {
-    yyjson_val *item = yyjson_arr_iter_next(&bd.item_iter);
+static yyjson_val *NextTeamsItem(GraphPagedScanState &state, const TeamsBindData &bd) {
+    yyjson_val *item = yyjson_arr_iter_next(&state.item_iter);
     if (item) {
         return item;
     }
-    if (bd.next_url.empty() || !FetchTeamsPage(bd, bd.next_url)) {
+    if (state.next_url.empty() || !FetchTeamsPage(state, bd, state.next_url)) {
         return nullptr;
     }
-    return yyjson_arr_iter_next(&bd.item_iter);
+    return yyjson_arr_iter_next(&state.item_iter);
 }
 
 static std::string GetNamedStr(TableFunctionBindInput &input, const char *name) {
@@ -151,16 +121,17 @@ void GraphTeamsFunctions::MyTeamsScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bd = data.bind_data->CastNoConst<TeamsBindData>();
-    if (!InitTeamsScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<TeamsBindData>();
+    if (!InitTeamsScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextTeamsItem(bd);
+        auto *item = NextTeamsItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -216,16 +187,17 @@ void GraphTeamsFunctions::TeamChannelsScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bd = data.bind_data->CastNoConst<TeamChannelsBindData>();
-    if (!InitTeamsScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<TeamChannelsBindData>();
+    if (!InitTeamsScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextTeamsItem(bd);
+        auto *item = NextTeamsItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -280,16 +252,17 @@ void GraphTeamsFunctions::TeamMembersScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bd = data.bind_data->CastNoConst<TeamMembersBindData>();
-    if (!InitTeamsScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<TeamMembersBindData>();
+    if (!InitTeamsScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextTeamsItem(bd);
+        auto *item = NextTeamsItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -356,16 +329,17 @@ void GraphTeamsFunctions::ChannelMessagesScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bd = data.bind_data->CastNoConst<ChannelMessagesBindData>();
-    if (!InitTeamsScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<ChannelMessagesBindData>();
+    if (!InitTeamsScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextTeamsItem(bd);
+        auto *item = NextTeamsItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -394,6 +368,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         TableFunction my_teams_func("graph_my_teams", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, MyTeamsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, MyTeamsBind));
         my_teams_func.named_parameters["user"]   = LogicalType::VARCHAR;
         my_teams_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        my_teams_func.init_global = GraphPagedScanState::Init;
         CreateTableFunctionInfo info(my_teams_func);
         FunctionDescription desc;
         desc.description = "List Microsoft Teams for a user. Omit user to query the authenticated "
@@ -412,6 +387,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         TableFunction team_channels_func("graph_teams_channels", {LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, TeamChannelsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, TeamChannelsBind));
         team_channels_func.named_parameters["secret"] = LogicalType::VARCHAR;
         team_channels_func.named_parameters["user"]   = LogicalType::VARCHAR;
+        team_channels_func.init_global = GraphPagedScanState::Init;
         CreateTableFunctionInfo info(team_channels_func);
         FunctionDescription desc;
         desc.description = "List all channels in a Microsoft Teams team. "
@@ -430,6 +406,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
         TableFunction team_members_func("graph_teams_members", {LogicalType::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, TeamMembersScan), DATAZOO_GUARD(ERPL_WEB_BANNER, TeamMembersBind));
         team_members_func.named_parameters["secret"] = LogicalType::VARCHAR;
         team_members_func.named_parameters["user"]   = LogicalType::VARCHAR;
+        team_members_func.init_global = GraphPagedScanState::Init;
         CreateTableFunctionInfo info(team_members_func);
         FunctionDescription desc;
         desc.description = "List all members of a Microsoft Teams team. "
@@ -450,6 +427,7 @@ void GraphTeamsFunctions::Register(ExtensionLoader &loader) {
             DATAZOO_GUARD(ERPL_WEB_BANNER, ChannelMessagesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ChannelMessagesBind));
         channel_messages_func.named_parameters["secret"] = LogicalType::VARCHAR;
         channel_messages_func.named_parameters["user"]   = LogicalType::VARCHAR;
+        channel_messages_func.init_global = GraphPagedScanState::Init;
         CreateTableFunctionInfo info(channel_messages_func);
         FunctionDescription desc;
         desc.description = "List messages in a Microsoft Teams channel. Pages lazily through "

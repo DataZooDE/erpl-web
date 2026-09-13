@@ -24,28 +24,28 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-struct ShowSitesBindData : public GraphJsonArrayScanBindData {
+struct ShowSitesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string search_query;
 };
 
-struct ShowListsBindData : public GraphJsonArrayScanBindData {
+struct ShowListsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
 };
 
-struct ShowDrivesBindData : public GraphJsonArrayScanBindData {
+struct ShowDrivesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
 };
 
-struct DescribeListBindData : public GraphJsonArrayScanBindData {
+struct DescribeListBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
 };
 
-struct ListItemsBindData : public GraphJsonArrayScanBindData {
+struct ListItemsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
@@ -242,6 +242,17 @@ unique_ptr<FunctionData> GraphSharePointFunctions::DescribeListBind(
     }
     bind_data->secret_name = secret_name;
 
+    // Resolve site name/URL and list name to GUIDs here rather than in the scan: bind data
+    // is shared across executions, so a scan that wrote resolved ids back into it would
+    // re-issue both round trips on every execution and mutate shared state (ListItemsBind
+    // already resolves at bind for the same reason).
+    {
+        auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+        GraphSharePointClient client(auth_info.auth_params);
+        bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+        bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
+    }
+
     // Return schema: name, displayName, columnType, description, required
     names = {"name", "display_name", "column_type", "description", "required"};
     return_types = {
@@ -260,7 +271,7 @@ void GraphSharePointFunctions::DescribeListScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<DescribeListBindData>();
+    auto &bind_data = data.bind_data->Cast<DescribeListBindData>();
     auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
     if (state.done) {
@@ -271,8 +282,6 @@ void GraphSharePointFunctions::DescribeListScan(
     if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.site_id = client.ResolveSiteId(bind_data.site_id);
-        bind_data.list_id = client.ResolveListId(bind_data.site_id, bind_data.list_id);
         state.json_response = client.GetListColumns(bind_data.site_id, bind_data.list_id);
     }
 
@@ -574,7 +583,6 @@ struct CreateItemBindData : public TableFunctionData {
     std::string list_id;
     std::string fields_json;
     std::string new_item_id;
-    bool done = false;
 };
 
 unique_ptr<FunctionData> GraphSharePointFunctions::CreateItemBind(
@@ -613,12 +621,16 @@ void GraphSharePointFunctions::CreateItemScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<CreateItemBindData>();
-    if (bind_data.done) {
+    // The item is created in CreateItemBind, so this scan only emits the resulting id.
+    // The one-shot flag is therefore a per-execution emit cursor: a second EXECUTE of the
+    // bound plan re-emits the same id and creates nothing further.
+    auto &bind_data = data.bind_data->Cast<CreateItemBindData>();
+    auto &state = data.global_state->Cast<GraphRowCursorState>();
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
-    bind_data.done = true;
+    state.done = true;
     output.SetValue(0, 0, Value(bind_data.new_item_id));
     output.SetCardinality(1);
 }
@@ -855,6 +867,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
                                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
                                   DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemBind));
         create_item.named_parameters["secret"] = LogicalType::VARCHAR;
+        create_item.init_global = GraphRowCursorState::Init;
         CreateTableFunctionInfo info(create_item);
         FunctionDescription desc;
         desc.description = "Create a new item in a SharePoint list. "

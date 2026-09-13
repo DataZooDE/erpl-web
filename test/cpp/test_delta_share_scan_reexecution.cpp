@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 
 using erpl_web::test_support::CannedResponse;
 using erpl_web::test_support::ODataTestServer;
@@ -48,11 +49,12 @@ private:
 };
 
 // Writes a Delta Sharing profile next to the test binary and removes it again, so the
-// fixture leaves nothing behind whichever way the test exits.
+// fixture leaves nothing behind whichever way the test exits. The name carries the pid and
+// a caller-supplied tag so two cases - or two shards of the same binary - never collide.
 class ProfileFile {
 public:
-    explicit ProfileFile(const std::string &endpoint)
-        : path("erpl_delta_share_reexec_profile.json")
+    ProfileFile(const std::string &endpoint, const std::string &tag)
+        : path("erpl_delta_share_" + tag + "_" + std::to_string(getpid()) + ".json")
     {
         std::ofstream out(path);
         out << R"({"shareCredentialsVersion":1,"endpoint":")" << endpoint
@@ -112,7 +114,7 @@ TEST_CASE("bound delta_share catalog plans return every row on each execution",
           "[delta_share][reexec]") {
     ODataTestServer server;
     ServeCatalog(server);
-    ProfileFile profile(server.BaseUrl());
+    ProfileFile profile(server.BaseUrl(), "catalog");
 
     TestDatabase database;
     duckdb::Connection &con = database.Con();
@@ -145,7 +147,7 @@ TEST_CASE("two delta_share_show_shares scans in one query each see every row",
           "[delta_share][reexec]") {
     ODataTestServer server;
     ServeCatalog(server);
-    ProfileFile profile(server.BaseUrl());
+    ProfileFile profile(server.BaseUrl(), "twoscans");
 
     TestDatabase database;
     duckdb::Connection &con = database.Con();
@@ -157,4 +159,49 @@ TEST_CASE("two delta_share_show_shares scans in one query each see every row",
     INFO((result->HasError() ? result->GetError() : std::string()));
     REQUIRE_FALSE(result->HasError());
     REQUIRE(ScalarOf(result) == 6);
+}
+
+// A payload larger than one output chunk. `finished` is only set once the cursor passes
+// the end of the vector, so this is the shape that distinguishes a cursor that resets per
+// execution from one that merely happens to fit in a single Scan call.
+TEST_CASE("a bound delta_share_show_shares plan re-reads a multi-chunk payload",
+          "[delta_share][reexec]") {
+    const int SHARE_COUNT = 5000;  // > STANDARD_VECTOR_SIZE (2048), so at least three chunks
+
+    std::string shares;
+    for (int i = 0; i < SHARE_COUNT; i++) {
+        if (i > 0) {
+            shares += ",";
+        }
+        shares += R"({"name":"s)" + std::to_string(i) + R"(","id":")" + std::to_string(i) + R"("})";
+    }
+
+    ODataTestServer server;
+    server.OnPath("/shares", CannedResponse::Json(R"({"shares":[)" + shares + "]}"));
+    ProfileFile profile(server.BaseUrl(), "multichunk");
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    RequireStableAcrossExecutions(
+        con, "SELECT COUNT(*) FROM delta_share_show_shares('" + profile.Path() + "')",
+        SHARE_COUNT);
+}
+
+// The bind used to pre-set `finished` when the payload was empty; the cursor now handles
+// it. An empty share list must stay empty - and stay an empty RESULT, not an error - on
+// every execution.
+TEST_CASE("a bound delta_share_show_shares plan over an empty payload stays empty",
+          "[delta_share][reexec]") {
+    ODataTestServer server;
+    server.OnPath("/shares", CannedResponse::Json(R"({"shares":[]})"));
+    ProfileFile profile(server.BaseUrl(), "empty");
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    RequireStableAcrossExecutions(
+        con, "SELECT COUNT(*) FROM delta_share_show_shares('" + profile.Path() + "')", 0);
 }

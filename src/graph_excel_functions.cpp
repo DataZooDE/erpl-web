@@ -23,25 +23,25 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-struct ListFilesBindData : public GraphJsonArrayScanBindData {
+struct ListFilesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string folder_path;
     std::string drive_id;
 };
 
-struct ExcelTablesBindData : public GraphJsonArrayScanBindData {
+struct ExcelTablesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelWorksheetsBindData : public GraphJsonArrayScanBindData {
+struct ExcelWorksheetsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelTableDataBindData : public GraphJsonArrayScanBindData {
+struct ExcelTableDataBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string table_name;
@@ -608,8 +608,10 @@ void GraphExcelFunctions::ExcelRangeScan(
         return;
     }
 
-    // Parse the JSON response exactly once and cache all rows as DuckDB Values.
-    // This avoids reparsing the same (potentially large) JSON string on every scan call.
+    // Parse the JSON response once per EXECUTION and cache all rows as DuckDB Values, so
+    // repeated scan calls within one execution do not reparse it. The raw payload stays on
+    // the bind data on purpose - a second execution must be able to parse it again - which
+    // is why it is no longer cleared here.
     if (!state.rows_cached) {
         yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
         if (!doc) {
@@ -689,6 +691,10 @@ void GraphExcelFunctions::ExcelRangeScan(
     state.current_row += data_rows;
     if (state.current_row >= state.cached_rows.size()) {
         state.done = true;
+        // The materialised Values are no longer reachable; a self-join holds one of these
+        // per scan, so release them rather than keeping them until the query ends.
+        state.cached_rows.clear();
+        state.cached_rows.shrink_to_fit();
     }
 }
 
@@ -863,8 +869,11 @@ void GraphExcelFunctions::AddRowsScan(
     TableFunctionInput &data_p,
     DataChunk &output) {
 
+    // One-shot by design: the write happens here, so the flag lives on the bind data
+    // deliberately and a second EXECUTE of a bound plan adds nothing further rather than
+    // duplicating rows in the workbook. This is NOT the #202 read defect.
     auto &bind = data_p.bind_data->CastNoConst<AddRowsBindData>();
-    if (bind.done) { return; }
+    if (bind.done) { output.SetCardinality(0); return; }
     bind.done = true;
 
     if (bind.rows_json.empty()) {
@@ -982,8 +991,10 @@ void GraphExcelFunctions::DeleteRowsScan(
     TableFunctionInput &data_p,
     DataChunk &output) {
 
+    // One-shot by design - see the note in AddRowsScan. A second EXECUTE deletes nothing
+    // further rather than deleting another row.
     auto &bind = data_p.bind_data->CastNoConst<DeleteRowsBindData>();
-    if (bind.done) { return; }
+    if (bind.done) { output.SetCardinality(0); return; }
     bind.done = true;
 
     auto auth_info = ResolveGraphAuth(context, bind.secret_name);
@@ -1097,7 +1108,10 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
                            "Returns dynamic columns named by the first header row. "
                            "sheet_name must match exactly (use graph_excel_worksheets() to discover names). "
                            "Optionally pass a range address as a third positional argument (e.g. 'A1:D100'); "
-                           "omit it to read the sheet's used range.";
+                           "omit it to read the sheet's used range. "
+                           "The range is fetched once while the statement is bound, in order to infer the "
+                           "column types; re-executing a prepared statement replays that snapshot rather "
+                           "than re-reading the workbook.";
         desc.parameter_names = {"file_path", "sheet_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -1123,7 +1137,10 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         desc.description = "Read all rows from a named table in a Microsoft Excel workbook. "
                            "Returns dynamic columns matching the table's header row. "
                            "table_name must match a name returned by graph_excel_tables(). "
-                           "Use graph_excel_tables() to discover available table names first.";
+                           "Use graph_excel_tables() to discover available table names first. "
+                           "The rows are fetched once while the statement is bound, in order to infer the "
+                           "column types; re-executing a prepared statement replays that snapshot rather "
+                           "than re-reading the workbook.";
         desc.parameter_names = {"file_path", "table_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};

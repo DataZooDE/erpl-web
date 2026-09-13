@@ -8,6 +8,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 #include "erpl_web_banner.hpp"
+#include "graph_json_scan.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -28,83 +29,49 @@ struct OutlookBindData : public TableFunctionData {
     std::string user;
     std::shared_ptr<HttpAuthParams> auth_params;
 
-    // first_url: set in Bind, fetched on first Scan call.
-    // next_url: updated from @odata.nextLink after each page; "" = no more pages.
+    // first_url: set in Bind, fetched on the first Scan call of each execution.
     std::string first_url;
-    std::string next_url;
-
-    yyjson_doc *current_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool initialized = false;
-    bool done = false;
-
-    ~OutlookBindData() override {
-        if (current_doc) {
-            yyjson_doc_free(current_doc);
-        }
-    }
-
-    // Parse one page body, extract @odata.nextLink into next_url, init item_iter.
-    bool LoadPage(const std::string &body, const char *array_key = "value") {
-        if (current_doc) {
-            yyjson_doc_free(current_doc);
-            current_doc = nullptr;
-        }
-        current_doc = yyjson_read(body.c_str(), body.size(), 0);
-        if (!current_doc) {
-            return false;
-        }
-        yyjson_val *root = yyjson_doc_get_root(current_doc);
-        yyjson_val *nl   = yyjson_obj_get(root, "@odata.nextLink");
-        next_url = (nl && yyjson_is_str(nl)) ? yyjson_get_str(nl) : "";
-        yyjson_val *arr  = yyjson_obj_get(root, array_key);
-        if (!arr || !yyjson_is_arr(arr)) {
-            return false;
-        }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
-// Fetch a single page (no pagination loop) and load it into bd.
-static bool FetchPage(OutlookBindData &bd, const std::string &url,
-                      const char *array_key = "value") {
+// Fetch a single page (no pagination loop) and load it into the scan state.
+static bool FetchPage(GraphPagedScanState &state, const OutlookBindData &bd,
+                      const std::string &url, const char *array_key = "value") {
     const auto body = GraphClient(bd.auth_params, "GRAPH_OUTLOOK").Get(url);
-    return bd.LoadPage(body, array_key);
+    return state.LoadPage(body, array_key);
 }
 
 // On the first Scan call, fetch first_url and init the iterator.
 // Returns false (and emits an empty chunk) if there is nothing to scan.
-static bool InitScan(OutlookBindData &bd, DataChunk &output,
+static bool InitScan(GraphPagedScanState &state, const OutlookBindData &bd, DataChunk &output,
                      const char *array_key = "value") {
-    if (bd.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return false;
     }
-    if (!bd.initialized) {
-        if (!FetchPage(bd, bd.first_url, array_key)) {
-            bd.done = true;
+    if (!state.initialized) {
+        if (!FetchPage(state, bd, bd.first_url, array_key)) {
+            state.done = true;
             output.SetCardinality(0);
             return false;
         }
-        bd.initialized = true;
+        state.initialized = true;
     }
     return true;
 }
 
 // Return the next item, transparently crossing page boundaries.
 // Returns nullptr when all pages are exhausted.
-static yyjson_val *NextItem(OutlookBindData &bd,
+static yyjson_val *NextItem(GraphPagedScanState &state, const OutlookBindData &bd,
                              const char *array_key = "value") {
-    yyjson_val *item = yyjson_arr_iter_next(&bd.item_iter);
+    yyjson_val *item = yyjson_arr_iter_next(&state.item_iter);
     if (item) {
         return item;
     }
     // Current page exhausted — try the next page.
-    if (bd.next_url.empty() || !FetchPage(bd, bd.next_url, array_key)) {
+    if (state.next_url.empty() || !FetchPage(state, bd, state.next_url, array_key)) {
         return nullptr;
     }
-    return yyjson_arr_iter_next(&bd.item_iter);
+    return yyjson_arr_iter_next(&state.item_iter);
 }
 
 // Named-parameter helper
@@ -158,16 +125,17 @@ void GraphOutlookFunctions::CalendarsScan(
     TableFunctionInput &data,
     DataChunk &output)
 {
-    auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (!InitScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<OutlookBindData>();
+    if (!InitScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextItem(bd);
+        auto *item = NextItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -249,16 +217,17 @@ void GraphOutlookFunctions::CalendarEventsScan(
     TableFunctionInput &data,
     DataChunk &output)
 {
-    auto &bd = data.bind_data->CastNoConst<CalendarEventsBindData>();
-    if (!InitScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<CalendarEventsBindData>();
+    if (!InitScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextItem(bd);
+        auto *item = NextItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -323,16 +292,17 @@ void GraphOutlookFunctions::ContactsScan(
     TableFunctionInput &data,
     DataChunk &output)
 {
-    auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (!InitScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<OutlookBindData>();
+    if (!InitScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextItem(bd);
+        auto *item = NextItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -390,16 +360,17 @@ void GraphOutlookFunctions::MailFoldersScan(
     TableFunctionInput &data,
     DataChunk &output)
 {
-    auto &bd = data.bind_data->CastNoConst<OutlookBindData>();
-    if (!InitScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<OutlookBindData>();
+    if (!InitScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextItem(bd);
+        auto *item = NextItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -543,16 +514,17 @@ void GraphOutlookFunctions::MessagesScan(
     TableFunctionInput &data,
     DataChunk &output)
 {
-    auto &bd = data.bind_data->CastNoConst<MessagesBindData>();
-    if (!InitScan(bd, output)) {
+    auto &state = data.global_state->Cast<GraphPagedScanState>();
+    auto &bd = data.bind_data->Cast<MessagesBindData>();
+    if (!InitScan(state, bd, output)) {
         return;
     }
 
     idx_t row = 0;
     while (row < STANDARD_VECTOR_SIZE) {
-        auto *item = NextItem(bd);
+        auto *item = NextItem(state, bd);
         if (!item) {
-            bd.done = true;
+            state.done = true;
             break;
         }
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
@@ -597,6 +569,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
 
     {
         TableFunction fn("graph_calendars", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, CalendarsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CalendarsBind));
+        fn.init_global = GraphPagedScanState::Init;
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
@@ -617,6 +590,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_calendar_events", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, CalendarEventsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CalendarEventsBind));
+        fn.init_global = GraphPagedScanState::Init;
         fn.named_parameters["user"]        = LogicalType::VARCHAR;
         fn.named_parameters["calendar_id"] = LogicalType::VARCHAR;
         fn.named_parameters["start_date"]  = LogicalType::VARCHAR;
@@ -643,6 +617,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_contacts", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, ContactsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ContactsBind));
+        fn.init_global = GraphPagedScanState::Init;
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
@@ -663,6 +638,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_outlook_mail_folders", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, MailFoldersScan), DATAZOO_GUARD(ERPL_WEB_BANNER, MailFoldersBind));
+        fn.init_global = GraphPagedScanState::Init;
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
         CreateTableFunctionInfo info(fn);
@@ -683,6 +659,7 @@ void GraphOutlookFunctions::Register(ExtensionLoader &loader) {
     }
     {
         TableFunction fn("graph_outlook_emails", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, MessagesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, MessagesBind));
+        fn.init_global = GraphPagedScanState::Init;
         fn.named_parameters["user"]    = LogicalType::VARCHAR;
         fn.named_parameters["folder"]  = LogicalType::VARCHAR;
         fn.named_parameters["secret"]  = LogicalType::VARCHAR;
