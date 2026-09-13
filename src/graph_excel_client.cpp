@@ -380,16 +380,7 @@ static bool IsHeaderSafeValue(const std::string &value) {
 }
 
 
-// The terminal state of a long-running operation body, if it has one.
-//
-// Kept separate from ExtractWorkbookSessionId because a status body never carries a
-// session id: on success it carries a resourceLocation the caller must GET.
-struct OperationOutcome {
-    bool is_terminal_success = false;
-    std::string resource_location;
-};
-
-static OperationOutcome ReadOperationOutcome(const std::string &json_body) {
+OperationOutcome ReadOperationOutcome(const std::string &json_body) {
     OperationOutcome outcome;
     auto *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
     if (!doc) {
@@ -503,8 +494,15 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
     // is what this did - meant the async path could never be entered at all: every 202
     // looked like a response with neither a session nor a monitor. The body property is
     // kept as a fallback because some Graph endpoints do include it.
-    std::string monitor_url = created.location;
-    if (monitor_url.empty()) {
+    //
+    // The STATUS CODE selects the branch, not the presence of a Location header. 202 is
+    // what "this is long-running" means; a Location on a 201 is not that, and branching on
+    // the header would follow one. This is how the same 202-plus-Location shape is handled
+    // in src/odp_request_orchestrator.cpp:503, and keeping the two aligned matters more
+    // than either one's local convenience.
+    const bool is_async = (created.status_code == 202);
+    std::string monitor_url = is_async ? created.location : std::string();
+    if (is_async && monitor_url.empty()) {
         if (auto *doc = duckdb_yyjson::yyjson_read(created.body.c_str(), created.body.size(), 0)) {
             auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
             if (auto *monitor_val = duckdb_yyjson::yyjson_obj_get(root, "statusMonitorResource")) {
@@ -531,6 +529,14 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
     // The monitor URL is server-supplied, so the bearer token follows it only when it names
     // the origin we opened the session against (GitHub #205), decided ONCE rather than per
     // request - a foreign monitor can never hand back our session id (GitHub #208).
+    // A URL from the service goes on the wire, so it gets the same scrutiny the session id
+    // gets before it goes in a header: control characters cannot be allowed to reach the
+    // request line or a header at all.
+    if (!IsHeaderSafeValue(monitor_url)) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned a status monitor URL containing control characters: '" +
+            SummariseForMessage(monitor_url) + "'.");
+    }
     if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, session_url)) {
         throw duckdb::IOException(
             "Microsoft Graph returned a workbook session status monitor on a different origin "
@@ -573,6 +579,11 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
     }
 
     // Fetch the session itself. Origin-gated like every other server-supplied URL.
+    if (!IsHeaderSafeValue(resource_location)) {
+        throw duckdb::IOException(
+            "Microsoft Graph returned a session resource URL containing control characters: '" +
+            SummariseForMessage(resource_location) + "'.");
+    }
     if (!GraphClient::IsServerSuppliedUrlTrusted(resource_location, session_url)) {
         throw duckdb::IOException(
             "Microsoft Graph returned a workbook session resource on a different origin than "

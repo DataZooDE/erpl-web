@@ -36,6 +36,17 @@ struct SessionPollPolicy {
 // function cannot catch a body whose "id" belongs to the operation rather than the session.
 std::string ExtractWorkbookSessionId(const std::string &json_body);
 
+// The terminal state of a long-running operation body, if it has one.
+//
+// Separate from ExtractWorkbookSessionId because a status body never carries a session id:
+// on success it carries a resourceLocation the caller must GET. Exposed so that branch -
+// which decides where a credentialed request is sent - can be tested.
+struct OperationOutcome {
+    bool is_terminal_success = false;
+    std::string resource_location;
+};
+OperationOutcome ReadOperationOutcome(const std::string &json_body);
+
 // Calls `fetch` until `extract` yields a non-empty session id or the budget is spent.
 // The first attempt happens immediately; the interval is only paid between attempts.
 // Returns an empty string when the budget runs out.

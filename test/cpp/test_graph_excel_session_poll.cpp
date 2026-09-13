@@ -240,3 +240,39 @@ TEST_CASE("a session that becomes ready after several polls is returned",
     REQUIRE(polls == 3);
     REQUIRE(clock.slept.size() == 2);
 }
+
+// GitHub #222 follow-up: the branch that decides WHERE a credentialed request goes was the
+// one part of the async fix with no test. ReadOperationOutcome is what selects it.
+TEST_CASE("a succeeded operation surfaces the resource to fetch", "[graph_excel][poll]") {
+    const std::string body =
+        std::string(R"({"id":"op-1","status":"succeeded","resourceLocation":)") +
+        R"("https://graph.microsoft.com/v1.0/sessionInfoResource"})";
+
+    const auto outcome = erpl_web::ReadOperationOutcome(body);
+    REQUIRE(outcome.is_terminal_success);
+    REQUIRE(outcome.resource_location == "https://graph.microsoft.com/v1.0/sessionInfoResource");
+}
+
+TEST_CASE("a running operation surfaces nothing to fetch", "[graph_excel][poll]") {
+    const auto outcome = erpl_web::ReadOperationOutcome(R"({"id":"op-1","status":"running"})");
+    REQUIRE_FALSE(outcome.is_terminal_success);
+    REQUIRE(outcome.resource_location.empty());
+}
+
+TEST_CASE("both documented spellings of completion are recognised", "[graph_excel][poll]") {
+    REQUIRE(erpl_web::ReadOperationOutcome(R"({"status":"succeeded"})").is_terminal_success);
+    REQUIRE(erpl_web::ReadOperationOutcome(R"({"status":"Completed"})").is_terminal_success);
+    REQUIRE_FALSE(erpl_web::ReadOperationOutcome(R"({"status":"failed"})").is_terminal_success);
+    REQUIRE_FALSE(erpl_web::ReadOperationOutcome("{}").is_terminal_success);
+    REQUIRE_FALSE(erpl_web::ReadOperationOutcome("not json").is_terminal_success);
+}
+
+// A non-string resourceLocation must not be dereferenced - the same yyjson_get_str trap
+// fixed across the Delta Sharing parsers.
+TEST_CASE("a non-string resourceLocation is ignored rather than dereferenced",
+          "[graph_excel][poll][security]") {
+    REQUIRE(erpl_web::ReadOperationOutcome(
+                R"({"status":"succeeded","resourceLocation":null})").resource_location.empty());
+    REQUIRE(erpl_web::ReadOperationOutcome(
+                R"({"status":"succeeded","resourceLocation":42})").resource_location.empty());
+}
