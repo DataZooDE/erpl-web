@@ -204,6 +204,15 @@ TEST_CASE("delta_share_scan refuses file:// and bare paths from the share server
 
         auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
         REQUIRE(result->HasError());
+
+        // Assert WHY it failed. An earlier version of this test checked only that the
+        // query errored, which it did for the local paths - but because parquet_scan could
+        // not read them, not because the guard refused them. That passed while
+        // "/etc/passwd" and "*.parquet" were still reaching the filesystem, and would have
+        // gone on passing if the share had named a real parquet file on disk.
+        const auto error = result->GetError();
+        INFO("error was: " << error);
+        REQUIRE(error.find("Delta Sharing data file URL") != std::string::npos);
     }
 }
 
