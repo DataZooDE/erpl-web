@@ -34,6 +34,20 @@ public:
     std::string Post(const std::string &url, const std::string &body);
     std::string PostWithHeaders(const std::string &url, const std::string &body,
                                 const std::map<std::string, std::string> &extra_headers);
+
+    // A POST whose RESPONSE HEADERS the caller can read.
+    //
+    // Graph signals a long-running operation with 202 and the status-monitor URL in the
+    // Location HEADER - not in the body. PostWithHeaders returns only the body, so a caller
+    // using it can never see that a 202 happened, let alone where to poll. Anything that
+    // has to follow a Location needs this instead.
+    struct PostResult {
+        std::string body;
+        int status_code = 0;
+        std::string location;  // the Location response header, empty when absent
+    };
+    PostResult PostForResult(const std::string &url, const std::string &body,
+                             const std::map<std::string, std::string> &extra_headers);
     void Patch(const std::string &url, const std::string &body);
     void PatchWithHeaders(const std::string &url, const std::string &body,
                           const std::map<std::string, std::string> &extra_headers);
