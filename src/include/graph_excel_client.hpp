@@ -30,6 +30,12 @@ struct SessionPollPolicy {
     SessionPollPolicy();
 };
 
+// The session id from a workbook-session body, or empty while a long-running operation is
+// still working; throws when the operation reports failure. Exposed for testing: the
+// readiness predicate is service-shape-dependent, and a test that feeds it the identity
+// function cannot catch a body whose "id" belongs to the operation rather than the session.
+std::string ExtractWorkbookSessionId(const std::string &json_body);
+
 // Calls `fetch` until `extract` yields a non-empty session id or the budget is spent.
 // The first attempt happens immediately; the interval is only paid between attempts.
 // Returns an empty string when the budget runs out.
