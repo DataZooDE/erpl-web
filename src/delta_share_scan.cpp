@@ -183,6 +183,17 @@ static unique_ptr<GlobalTableFunctionState> DeltaShareScanInitGlobal(ClientConte
         // filesystem operation and does not apply to a remote URL. Note that '?' cannot be
         // rejected - every pre-signed URL carries a query string.
         for (const auto& file_ref : global_state->files) {
+            // Absolute http(s) FIRST. RequireSecureOrLoopbackUrl alone is not enough here:
+            // it deliberately returns for input carrying no scheme at all, because its other
+            // callers accept a bare name and resolve it themselves. For this caller a bare
+            // name IS the attack - "/etc/passwd", "../../secrets.parquet", "*.parquet" would
+            // sail through and be resolved against the local filesystem by parquet_scan.
+            if (!LooksLikeAbsoluteHttpUrl(file_ref.url)) {
+                throw duckdb::InvalidInputException(
+                    "A Delta Sharing data file URL must be an absolute http(s) URL; the share "
+                    "server returned '%s', which would be resolved against the local "
+                    "filesystem.", file_ref.url.c_str());
+            }
             RequireSecureOrLoopbackUrl(file_ref.url, "A Delta Sharing data file URL");
         }
 
