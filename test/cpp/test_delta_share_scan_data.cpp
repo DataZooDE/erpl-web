@@ -259,3 +259,72 @@ TEST_CASE("delta_share_scan refuses a column type it cannot map", "[delta_share]
     INFO(result->GetError());
     REQUIRE(result->GetError().find("decimal(10,2)") != std::string::npos);
 }
+
+// The share server's response is the first untrusted thing this code touches.
+// yyjson_get_str returns NULL for any value that is not a string, and assigning NULL to a
+// std::string is undefined behaviour - a crash inside strlen - so a server answering with
+// {"url":null} took the extension down before any URL policing could run.
+TEST_CASE("a file entry with a non-string url is refused, not dereferenced",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    const std::vector<std::string> malformed = {
+        R"({"file":{"id":"f0","size":1,"url":null}})",
+        R"({"file":{"id":"f0","size":1,"url":123}})",
+        R"({"file":{"id":"f0","size":1,"url":{"nested":"object"}}})",
+        R"({"file":{"id":"f0","size":1}})",  // absent entirely
+    };
+
+    for (const auto &entry : malformed) {
+        INFO("file entry: " << entry);
+        ODataTestServer server;
+        const std::string table_path = "/shares/s/schemas/sc/tables/t";
+        server.OnPath(table_path + "/metadata",
+                      CannedResponse::Json(std::string(R"({"protocol":{"minReaderVersion":1}})") +
+                                           "\n" + SCHEMA_LINE));
+        server.OnPath(table_path + "/query",
+                      CannedResponse::Json(std::string(R"({"protocol":{"minReaderVersion":1}})") +
+                                           "\n" + SCHEMA_LINE + "\n" + entry));
+        ProfileFile profile(server.BaseUrl());
+
+        // The point is that this returns at all rather than crashing the process.
+        auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
+        REQUIRE(result->HasError());
+        INFO("error was: " << result->GetError());
+        REQUIRE(result->GetError().find("'url'") != std::string::npos);
+    }
+}
+
+// The bearer token is attached to every request built from the profile endpoint, and the
+// profile is not necessarily user-authored - it may be loaded from a remote path.
+TEST_CASE("a Delta Sharing profile endpoint must not be plain http off loopback",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ProfileFile insecure("http://share.example.com/delta-sharing");
+    auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_shares('" + insecure.Path() + "')");
+    REQUIRE(result->HasError());
+    INFO("error was: " << result->GetError());
+    REQUIRE(result->GetError().find("endpoint") != std::string::npos);
+}
+
+// https is fine, and so is loopback http - which is what every other test here relies on.
+TEST_CASE("a Delta Sharing profile endpoint may be https or loopback http",
+          "[delta_share][scan][security]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;  // binds 127.0.0.1
+    server.OnPath("/shares", CannedResponse::Json(R"({"shares":[{"name":"alpha","id":"1"}]})"));
+    ProfileFile loopback(server.BaseUrl());
+
+    auto result = con.Query("SELECT COUNT(*) FROM delta_share_show_shares('" + loopback.Path() + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
+}
