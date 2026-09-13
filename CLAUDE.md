@@ -603,7 +603,16 @@ The build matrix is defined in `extension-ci-tools/config/distribution_matrix.js
   cannot help. v1.5.5 still builds and ships `windows_amd64`. Restore it by bumping the
   v1.4.5 `vcpkg_commit`. See GitHub #174.
 - `wasm_mvp`, `wasm_eh`, `wasm_threads` - WebAssembly variants excluded
-- `linux_arm64`, `linux_amd64_musl` - Excluded to reduce build time
+- `linux_arm64`, `linux_amd64_musl` - **NOT excluded.** They are built on every leg. The
+  `exclude_archs` lists in `MainDistributionPipeline.yml` name only the rtools/mingw/wasm
+  variants, plus `windows_amd64` on v1.4.5. This bullet used to claim they were excluded
+  "to reduce build time", which sent at least one session diagnosing an arm64 CI failure
+  from a false premise. Read `exclude_archs` rather than this table when it matters.
+  Known flake: the v1.4.5 `linux_arm64` leg intermittently fails in its container's first
+  `yum install` when the AlmaLinux mirrors 404 on stale repodata, and fail-fast then
+  cancels its two sibling Linux jobs - so one infrastructure failure shows as three red
+  checks that have nothing to do with the change. Confirm from the log before touching
+  code; re-running the failed jobs has cleared it. See GitHub #219.
 
 ### Platform-Specific Build Challenges
 
