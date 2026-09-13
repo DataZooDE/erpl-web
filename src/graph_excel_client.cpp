@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <map>
 #include <stdexcept>
+#include "odata_url_helpers.hpp"
 
 namespace erpl_web {
 
@@ -167,19 +168,9 @@ std::string GraphExcelClient::ResolveWorkbookItemUrl(const std::string &file_pat
             std::string web_guid  = duckdb_yyjson::yyjson_get_str(web_guid_val);
 
             // Extract hostname from siteUrl (e.g. "https://tenant.sharepoint.com/sites/team" → "tenant.sharepoint.com")
-            std::string hostname = site_url;
-            const std::string https_prefix = "https://";
-            const std::string http_prefix  = "http://";
-            if (hostname.rfind(https_prefix, 0) == 0) {
-                hostname = hostname.substr(https_prefix.size());
-            } else if (hostname.rfind(http_prefix, 0) == 0) {
-                hostname = hostname.substr(http_prefix.size());
-            }
-            // Trim any path component — site_id uses only the hostname
-            const auto slash_pos = hostname.find('/');
-            if (slash_pos != std::string::npos) {
-                hostname = hostname.substr(0, slash_pos);
-            }
+            // Shared predicate and strip, so an uppercase scheme is handled like any other.
+            const std::string hostname =
+                LooksLikeAbsoluteHttpUrl(site_url) ? HostOfAbsoluteHttpUrl(site_url) : site_url;
 
             site_id = hostname + "," + site_guid + "," + web_guid;
         }

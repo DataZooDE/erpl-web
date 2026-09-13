@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "odata_url_helpers.hpp"
 
 namespace erpl_web {
 
@@ -94,7 +95,7 @@ static std::string ResolveDriveIdFromCopyOptions(
 
     if (!drive_raw.empty()) {
         if (GraphSharePointClient::LooksLikeDriveId(drive_raw)) { return drive_raw; }
-        if (drive_raw.rfind("https://", 0) == 0 || drive_raw.rfind("http://", 0) == 0) {
+        if (LooksLikeAbsoluteHttpUrl(drive_raw)) {
             return sp_client.ResolveDriveIdFromUrl(drive_raw);
         }
     }

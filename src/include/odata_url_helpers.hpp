@@ -49,6 +49,17 @@ void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
 // even guarding while a comment claimed they shared one rule (GitHub #193).
 bool LooksLikeAbsoluteHttpUrl(const std::string &value);
 
+// Returns `value` with its leading http:// or https:// removed, so the caller can take the
+// hostname off the front. Throws when `value` is not an absolute http(s) URL: callers used
+// to assume "not https, therefore http" and chop seven characters off whatever they were
+// given, which silently mangles an uppercase scheme or a bare name into a wrong host.
+// Shares its scheme test with LooksLikeAbsoluteHttpUrl so predicate and strip cannot drift.
+std::string StripHttpScheme(const std::string &value);
+
+// The host of an absolute http(s) URL, without scheme, port-path or trailing path. Throws
+// on input that is not an absolute http(s) URL.
+std::string HostOfAbsoluteHttpUrl(const std::string &value);
+
 
 
 // The HTTP client every OData consumer needs.

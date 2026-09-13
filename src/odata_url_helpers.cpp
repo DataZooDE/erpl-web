@@ -71,6 +71,26 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value)
     return lowered.rfind("https://", 0) == 0 || lowered.rfind("http://", 0) == 0;
 }
 
+std::string StripHttpScheme(const std::string &value)
+{
+    const auto lowered = LowercaseAscii(value);
+    if (lowered.rfind("https://", 0) == 0) {
+        return value.substr(8);
+    }
+    if (lowered.rfind("http://", 0) == 0) {
+        return value.substr(7);
+    }
+    throw duckdb::InvalidInputException(
+        "'%s' is not an absolute http(s) URL, so its scheme cannot be removed.", value.c_str());
+}
+
+std::string HostOfAbsoluteHttpUrl(const std::string &value)
+{
+    auto rest = StripHttpScheme(value);
+    const auto slash = rest.find('/');
+    return (slash == std::string::npos) ? rest : rest.substr(0, slash);
+}
+
 void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what)
 {
     if (!LooksLikeAbsoluteHttpUrl(url)) {

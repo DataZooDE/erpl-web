@@ -12,6 +12,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 #include "erpl_web_banner.hpp"
+#include "odata_url_helpers.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -178,7 +179,7 @@ static std::string ResolveGraphDriveId(ClientContext &context,
         }
 
         // Web URL — resolve by matching webUrl field across the site's drives
-        if (drive_param.rfind("https://", 0) == 0 || drive_param.rfind("http://", 0) == 0) {
+        if (LooksLikeAbsoluteHttpUrl(drive_param)) {
             auto auth_info = ResolveGraphAuth(context, secret_name);
             GraphSharePointClient sp_client(auth_info.auth_params);
             return sp_client.ResolveDriveIdFromUrl(drive_param);
