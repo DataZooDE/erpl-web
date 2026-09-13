@@ -262,7 +262,7 @@ static unique_ptr<LocalTableFunctionState> DeltaShareScanInitLocal(ExecutionCont
 // Built as parsed expressions rather than SQL text: the file's column names come from the
 // share server, and nothing share-supplied should ever be parsed as SQL.
 static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignmentProjection(
-    const DeltaShareScanBindData& bind_data,
+    const vector<string>& column_names, const vector<LogicalType>& column_types,
     const duckdb::vector<duckdb::ColumnDefinition>& file_columns) {
 
     // Case-sensitive match first, then a case-insensitive fallback, so a file that differs
@@ -275,11 +275,11 @@ static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignme
     }
 
     duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> expressions;
-    expressions.reserve(bind_data.column_types.size());
+    expressions.reserve(column_types.size());
 
-    for (idx_t i = 0; i < bind_data.column_types.size(); i++) {
-        const auto& wanted = bind_data.column_names[i];
-        const auto& wanted_type = bind_data.column_types[i];
+    for (idx_t i = 0; i < column_types.size(); i++) {
+        const auto& wanted = column_names[i];
+        const auto& wanted_type = column_types[i];
 
         const auto exact = by_exact_name.find(wanted);
         const auto lowered = by_lowered_name.find(duckdb::StringUtil::Lower(wanted));
@@ -302,6 +302,75 @@ static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignme
     return expressions;
 }
 
+void DeltaShareFileReader::Open(duckdb::ClientContext& context, const std::string& file_url,
+                                const vector<string>& column_names,
+                                const vector<LogicalType>& column_types) {
+    Close();
+
+    // The URL is chosen by the SHARE SERVER, so it is passed as a bound VALUE and never
+    // concatenated into SQL text. Building "SELECT * FROM parquet_scan('" + url + "')" let
+    // a URL containing a quote close the literal, and Connection::Query accepts several
+    // statements - so a hostile share server could run arbitrary SQL in the caller's
+    // session, with whatever attachments and secrets it holds (GitHub #207).
+    connection = duckdb::make_uniq<duckdb::Connection>(*context.db);
+
+    // Binding the relation is itself a read - a missing or unreadable file raises here,
+    // before any row is fetched - so the whole open is wrapped and reported as one thing.
+    // Otherwise the caller gets a bare parquet error that never mentions Delta Sharing or
+    // which file of the table failed.
+    std::string failure;
+    try {
+        auto relation = connection->TableFunction("parquet_scan", {duckdb::Value(file_url)});
+
+        // Align the file to the schema the plan was bound to. Without this a file whose
+        // types merely differ from the declared schema - which the share server also
+        // supplies - is referenced into an output vector of another type and raises an
+        // INTERNAL error.
+        if (!column_types.empty()) {
+            // Columns() binds the relation, making the file's own schema readable.
+            const auto& file_columns = relation->Columns();
+            relation = relation->Project(
+                BuildAlignmentProjection(column_names, column_types, file_columns), column_names);
+        }
+
+        result = relation->Execute();
+
+        // A file that cannot be read fails the QUERY. Swallowing it into an empty chunk
+        // ended the scan silently, so one bad file truncated the whole table and reported
+        // success (GitHub #207).
+        if (result->HasError()) {
+            failure = result->GetError();
+        }
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+
+    if (!failure.empty()) {
+        Close();
+        throw duckdb::IOException("Failed to read Delta Sharing file (" +
+                                  file_url.substr(0, 80) + "): " + failure);
+    }
+}
+
+duckdb::DataChunk *DeltaShareFileReader::NextChunk() {
+    if (!result) {
+        return nullptr;
+    }
+    current_chunk = result->Fetch();
+    if (current_chunk && current_chunk->size() > 0) {
+        return current_chunk.get();
+    }
+    current_chunk.reset();
+    return nullptr;
+}
+
+void DeltaShareFileReader::Close() {
+    current_chunk.reset();
+    result.reset();
+    connection.reset();
+}
+
+// Opens the next file this thread claims, or returns false when the table is exhausted.
 static bool ClaimNextFile(ClientContext& context, const DeltaShareScanBindData& bind_data,
                           DeltaShareGlobalState& global_state,
                           DeltaShareLocalState& local_state) {
@@ -316,39 +385,8 @@ static bool ClaimNextFile(ClientContext& context, const DeltaShareScanBindData& 
                         std::to_string(global_state.files.size()) + ": " +
                         file_ref.url.substr(0, 80) + "...");
 
-    // The URL is chosen by the SHARE SERVER, so it is passed as a bound VALUE and never
-    // concatenated into SQL text. Building "SELECT * FROM parquet_scan('" + url + "')" let
-    // a URL containing a quote close the literal, and Connection::Query accepts several
-    // statements - so a hostile share server could run arbitrary SQL in the caller's
-    // session, with whatever attachments and secrets it holds (GitHub #207).
-    local_state.connection = duckdb::make_uniq<duckdb::Connection>(*context.db);
-    auto relation = local_state.connection->TableFunction("parquet_scan",
-                                                          {duckdb::Value(file_ref.url)});
-
-    // Align the file to the schema the plan was bound to. Without this a file whose types
-    // merely differ from the declared schema - which the share server also supplies - is
-    // referenced into an output vector of another type and raises an INTERNAL error.
-    if (!bind_data.column_types.empty()) {
-        // Columns() binds the relation, which is what makes the file's own schema readable.
-        const auto& file_columns = relation->Columns();
-        relation = relation->Project(BuildAlignmentProjection(bind_data, file_columns),
-                                     bind_data.column_names);
-    }
-
-    local_state.result = relation->Execute();
-
-    if (local_state.result->HasError()) {
-        // A file that cannot be read fails the QUERY. Swallowing it into an empty chunk
-        // ended the scan silently, so one bad file truncated the whole table and reported
-        // success (GitHub #207).
-        const auto error = local_state.result->GetError();
-        local_state.result.reset();
-        local_state.connection.reset();
-        throw duckdb::IOException("Failed to read Delta Sharing file " +
-                                  std::to_string(file_idx) + " (" +
-                                  file_ref.url.substr(0, 80) + "): " + error);
-    }
-
+    local_state.reader.Open(context, file_ref.url, bind_data.column_names,
+                            bind_data.column_types);
     return true;
 }
 
@@ -360,17 +398,13 @@ static void DeltaShareScan(ClientContext& context, TableFunctionInput& input, Da
     // Drain the current file completely before claiming the next one. Each iteration either
     // emits one chunk and returns, or exhausts a file and moves on.
     while (true) {
-        if (local_state.result) {
-            local_state.current_chunk = local_state.result->Fetch();
-            if (local_state.current_chunk && local_state.current_chunk->size() > 0) {
-                // current_chunk is owned by the local state, so it outlives this call.
-                output.Reference(*local_state.current_chunk);
+        if (local_state.reader.IsOpen()) {
+            if (auto *chunk = local_state.reader.NextChunk()) {
+                // The chunk is owned by the reader, which outlives this call.
+                output.Reference(*chunk);
                 return;
             }
-            // File exhausted - release the reader before claiming the next.
-            local_state.current_chunk.reset();
-            local_state.result.reset();
-            local_state.connection.reset();
+            local_state.reader.Close();  // file exhausted
         }
 
         if (!ClaimNextFile(context, bind_data, global_state, local_state)) {
