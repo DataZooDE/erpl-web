@@ -163,7 +163,13 @@ std::string GraphExcelClient::ResolveWorkbookItemUrl(const std::string &file_pat
         duckdb_yyjson::yyjson_val *site_guid_val = duckdb_yyjson::yyjson_obj_get(sp_ids, "siteId");
         duckdb_yyjson::yyjson_val *web_guid_val  = duckdb_yyjson::yyjson_obj_get(sp_ids, "webId");
 
-        if (site_url_val && site_guid_val && web_guid_val) {
+        // All three come out of a Graph RESPONSE BODY. yyjson_get_str returns NULL for any
+        // value that is not a string, and assigning NULL to a std::string is strlen(nullptr)
+        // - the same shape guarded in the Delta Sharing parsers. A sharePointIds object
+        // carrying a null or numeric member took the process down here.
+        if (site_url_val && duckdb_yyjson::yyjson_is_str(site_url_val) &&
+            site_guid_val && duckdb_yyjson::yyjson_is_str(site_guid_val) &&
+            web_guid_val && duckdb_yyjson::yyjson_is_str(web_guid_val)) {
             std::string site_url  = duckdb_yyjson::yyjson_get_str(site_url_val);
             std::string site_guid = duckdb_yyjson::yyjson_get_str(site_guid_val);
             std::string web_guid  = duckdb_yyjson::yyjson_get_str(web_guid_val);
