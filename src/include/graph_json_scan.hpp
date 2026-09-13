@@ -6,14 +6,39 @@
 
 namespace erpl_web {
 
+// Bind data for a Graph function that scans a JSON array out of a single
+// response. It carries only the immutable request configuration: everything
+// that advances while scanning lives in GraphJsonArrayScanState, so a bound
+// plan that is EXECUTEd twice starts from the beginning both times (GitHub #75).
 struct GraphJsonArrayScanBindData : public duckdb::TableFunctionData {
+};
+
+// Per-execution scan cursor: the fetched response, the parsed document and the
+// array iterator over it. A fresh instance is created for every execution of
+// the bound plan.
+struct GraphJsonArrayScanState : public duckdb::GlobalTableFunctionState {
     std::string json_response;
     duckdb_yyjson::yyjson_doc *parsed_doc = nullptr;
     duckdb_yyjson::yyjson_arr_iter item_iter = {};
     bool done = false;
 
-    ~GraphJsonArrayScanBindData() override {
+    ~GraphJsonArrayScanState() override {
         ResetDoc();
+    }
+
+    static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
+                                                                    duckdb::TableFunctionInitInput &) {
+        return duckdb::make_uniq<GraphJsonArrayScanState>();
+    }
+
+    // Seed the state from a response the bind phase already fetched (kept on the
+    // bind data as an immutable payload, so every execution can re-seed from it).
+    void SeedFrom(const std::string &payload) {
+        json_response = payload;
+    }
+
+    bool NeedsFetch() const {
+        return parsed_doc == nullptr && json_response.empty();
     }
 
     bool InitIterator(const char *array_key = "value") {
