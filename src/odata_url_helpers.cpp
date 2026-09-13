@@ -71,6 +71,13 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value)
     return lowered.rfind("https://", 0) == 0 || lowered.rfind("http://", 0) == 0;
 }
 
+bool IsWireSafeUrl(const std::string &url)
+{
+    return std::none_of(url.begin(), url.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f || c == ' ';
+    });
+}
+
 std::string StripHttpScheme(const std::string &value)
 {
     const auto lowered = LowercaseAscii(value);
