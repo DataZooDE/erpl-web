@@ -121,6 +121,9 @@ static unique_ptr<FunctionData> DeltaShareScanBind(ClientContext& context,
         }
     }
 
+    bind_data->column_types = return_types;
+    bind_data->column_names = names;
+
     ERPL_TRACE_INFO("DELTA_SHARE_SCAN", "Bind phase complete");
 
     return bind_data;
@@ -200,67 +203,94 @@ static unique_ptr<LocalTableFunctionState> DeltaShareScanInitLocal(ExecutionCont
 // Scan Phase (with atomic lock-free work distribution)
 // =====================================================================
 
-static void DeltaShareScan(ClientContext& context, TableFunctionInput& input, DataChunk& output) {
-    ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Scan phase starting");
+// Opens the next file this thread claims, or returns false when the table is exhausted.
+// The reader is left on the local state so the caller can drain it across scan calls.
+// Builds the projection that aligns one parquet file to the bound schema: cast column i to
+// the bound type and name it after the bound column. The expression list is built entirely
+// from the BOUND schema - no share-supplied text enters it.
+static vector<string> BuildAlignmentProjection(const DeltaShareScanBindData& bind_data) {
+    vector<string> expressions;
+    expressions.reserve(bind_data.column_types.size());
+    for (idx_t i = 0; i < bind_data.column_types.size(); i++) {
+        expressions.push_back("CAST(#" + std::to_string(i + 1) + " AS " +
+                              bind_data.column_types[i].ToString() + ")");
+    }
+    return expressions;
+}
 
-    auto& global_state = input.global_state->Cast<DeltaShareGlobalState>();
-
-    // Lock-free work distribution: each thread atomically claims next file index
-    // fetch_add returns old value, so each thread gets unique file
-    idx_t file_idx = global_state.current_file_index.fetch_add(1);
-
-    // Check if all files have been assigned (this thread got index >= file count)
+static bool ClaimNextFile(ClientContext& context, const DeltaShareScanBindData& bind_data,
+                          DeltaShareGlobalState& global_state,
+                          DeltaShareLocalState& local_state) {
+    const idx_t file_idx = global_state.current_file_index.fetch_add(1);
     if (file_idx >= global_state.files.size()) {
-        ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "All files processed, thread returning empty result");
-        output.SetCardinality(0);
-        return;
+        return false;
     }
 
-    // Get the file this thread claimed
-    auto& file_ref = global_state.files[file_idx];
+    const auto& file_ref = global_state.files[file_idx];
+    ERPL_TRACE_INFO("DELTA_SHARE_SCAN",
+                    "Reading Parquet file " + std::to_string(file_idx) + "/" +
+                        std::to_string(global_state.files.size()) + ": " +
+                        file_ref.url.substr(0, 80) + "...");
 
-    ERPL_TRACE_INFO("DELTA_SHARE_SCAN", "Thread reading Parquet file " + std::to_string(file_idx) + "/" +
-                   std::to_string(global_state.files.size()) + ": " + file_ref.url.substr(0, 80) + "...");
+    // The URL is chosen by the SHARE SERVER, so it is passed as a bound VALUE and never
+    // concatenated into SQL text. Building "SELECT * FROM parquet_scan('" + url + "')" let
+    // a URL containing a quote close the literal, and Connection::Query accepts several
+    // statements - so a hostile share server could run arbitrary SQL in the caller's
+    // session, with whatever attachments and secrets it holds (GitHub #207).
+    local_state.connection = duckdb::make_uniq<duckdb::Connection>(*context.db);
+    auto relation = local_state.connection->TableFunction("parquet_scan",
+                                                          {duckdb::Value(file_ref.url)});
 
-    try {
-        // Use per-thread HTTP client for connection reuse
-        // The pre-signed URL is valid for a limited time and has built-in credentials
-        string parquet_query = "SELECT * FROM parquet_scan('" + file_ref.url + "')";
+    // Align the file to the schema the plan was bound to. Without this a file whose types
+    // merely differ from the declared schema - which the share server also supplies - is
+    // referenced into an output vector of another type and raises an INTERNAL error.
+    if (!bind_data.column_types.empty()) {
+        relation = relation->Project(BuildAlignmentProjection(bind_data), bind_data.column_names);
+    }
 
-        ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Executing Parquet query from thread with per-thread HTTP client");
+    local_state.result = relation->Execute();
 
-        Connection con(*context.db);
-        auto result = con.Query(parquet_query);
+    if (local_state.result->HasError()) {
+        // A file that cannot be read fails the QUERY. Swallowing it into an empty chunk
+        // ended the scan silently, so one bad file truncated the whole table and reported
+        // success (GitHub #207).
+        const auto error = local_state.result->GetError();
+        local_state.result.reset();
+        local_state.connection.reset();
+        throw duckdb::IOException("Failed to read Delta Sharing file " +
+                                  std::to_string(file_idx) + " (" +
+                                  file_ref.url.substr(0, 80) + "): " + error);
+    }
 
-        // Check if we got any data
-        if (result->HasError()) {
-            ERPL_TRACE_ERROR("DELTA_SHARE_SCAN", "Query error: " + result->GetError());
-            throw InvalidInputException("Failed to read Parquet file: " + result->GetError());
-        }
+    return true;
+}
 
-        // Fetch result chunk
-        auto chunk = result->Fetch();
-        if (chunk && chunk->size() > 0) {
-            // Reference the chunk data into output
-            output.Reference(*chunk);
-            ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "Read " + std::to_string(chunk->size()) + " rows from file " + std::to_string(file_idx));
-        } else {
-            // Empty file - set cardinality to 0 and initialize vectors
-            for (idx_t i = 0; i < output.ColumnCount(); ++i) {
-                output.data[i].SetVectorType(VectorType::FLAT_VECTOR);
+static void DeltaShareScan(ClientContext& context, TableFunctionInput& input, DataChunk& output) {
+    auto& bind_data = input.bind_data->Cast<DeltaShareScanBindData>();
+    auto& global_state = input.global_state->Cast<DeltaShareGlobalState>();
+    auto& local_state = input.local_state->Cast<DeltaShareLocalState>();
+
+    // Drain the current file completely before claiming the next one. Each iteration either
+    // emits one chunk and returns, or exhausts a file and moves on.
+    while (true) {
+        if (local_state.result) {
+            local_state.current_chunk = local_state.result->Fetch();
+            if (local_state.current_chunk && local_state.current_chunk->size() > 0) {
+                // current_chunk is owned by the local state, so it outlives this call.
+                output.Reference(*local_state.current_chunk);
+                return;
             }
+            // File exhausted - release the reader before claiming the next.
+            local_state.current_chunk.reset();
+            local_state.result.reset();
+            local_state.connection.reset();
+        }
+
+        if (!ClaimNextFile(context, bind_data, global_state, local_state)) {
+            ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "All files processed, thread returning empty result");
             output.SetCardinality(0);
-            ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN", "File " + std::to_string(file_idx) + " is empty, returned 0 rows");
+            return;
         }
-
-    } catch (const std::exception& e) {
-        ERPL_TRACE_ERROR("DELTA_SHARE_SCAN", "Failed to read Parquet file " + std::to_string(file_idx) + ": " + string(e.what()));
-
-        // Return empty result on error (caller will retry or continue)
-        for (idx_t i = 0; i < output.ColumnCount(); ++i) {
-            output.data[i].SetVectorType(VectorType::FLAT_VECTOR);
-        }
-        output.SetCardinality(0);
     }
 }
 
