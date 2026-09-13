@@ -1,4 +1,5 @@
 #include "delta_share_client.hpp"
+#include <set>
 #include "tracing.hpp"
 #include "yyjson.hpp"
 #include <fstream>
@@ -846,6 +847,19 @@ LogicalType ConvertDeltaTypeToLogicalType(const string& delta_type) {
 		// Unknown type - default to VARCHAR
 		return LogicalType::VARCHAR;
 	}
+}
+
+bool IsKnownDeltaType(const string& delta_type) {
+	// The set ConvertDeltaTypeToLogicalType maps deliberately. Everything else - decimal,
+	// binary, and the nested types (struct/array/map, which arrive as JSON objects rather
+	// than as a type name at all) - falls through to VARCHAR there. That default used to be
+	// harmless because the value was never cast; now that delta_share_scan casts each file
+	// onto the bound schema, it would quietly stringify a column instead of failing, so the
+	// scan asks this first (GitHub #207).
+	static const std::set<string> known = {
+		"string", "String", "integer", "int", "long", "short", "byte",
+		"double", "float", "boolean", "date", "timestamp"};
+	return known.count(delta_type) > 0;
 }
 
 } // namespace erpl_web

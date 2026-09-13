@@ -97,4 +97,8 @@ struct DeltaShareResponse {
 // Maps Delta Lake EDM types (string, integer, long, etc.) to DuckDB LogicalTypes
 LogicalType ConvertDeltaTypeToLogicalType(const string& delta_type);
 
+// True when ConvertDeltaTypeToLogicalType maps `delta_type` deliberately rather than
+// falling through to its VARCHAR default. See the definition for why the scan needs it.
+bool IsKnownDeltaType(const string& delta_type);
+
 } // namespace erpl_web

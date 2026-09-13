@@ -13,9 +13,24 @@
 //   4. A file that failed to read was swallowed into an empty chunk, which ends the scan,
 //      so one bad file truncated the table and reported success.
 //
-// The fixture needs no httpfs: a Delta Sharing file reference is just a URL, and a local
-// path is one parquet_scan accepts. So the share server is ODataTestServer serving the
-// Delta Sharing NDJSON, and the "presigned URLs" are local parquet files this test writes.
+// WHAT THESE TESTS COVER, AND WHAT THEY CANNOT
+//
+// The scan now refuses any file URL that is not https (or http on loopback), because the
+// URL is chosen by the share server and parquet_scan resolves whatever it is handed -
+// file://, a bare path, a glob - which would let a hostile share read local files and
+// return them through the query. Real Delta Sharing issues pre-signed https URLs, so the
+// policy costs nothing in production.
+//
+// It does cost test coverage. Reading parquet over http needs httpfs, which is not built
+// in this configuration, and a local path is now rejected - so the data-path cases that
+// originally proved the row-truncation and use-after-free fixes cannot run here at all.
+// They were written, run red against the pre-fix code (a 5000-row file returned 2048 rows;
+// an unreadable file reported success with zero rows) and then removed with the policy
+// decision, deliberately, rather than kept alive by relaxing the policy for tests.
+//
+// What remains is everything reachable without reading a remote parquet file: the URL
+// policy itself, which is what now stops the injection, and the schema handling in bind.
+// Restoring the data-path tests needs httpfs in the test build - see the follow-up issue.
 
 #include "catch.hpp"
 #include "duckdb.hpp"
@@ -137,65 +152,16 @@ std::string ScanSql(const ProfileFile &profile)
 
 }  // namespace
 
-// Defect 2 and 3: one file larger than a single output chunk. Before the fix this returned
-// 2048 of 5000 rows, out of freed memory.
-TEST_CASE("delta_share_scan returns every row of a multi-chunk file", "[delta_share][scan]") {
+// The URL is chosen by the share server. Before the policy it was concatenated into SQL;
+// now it is both a bound value and required to be an https URL, so a payload like this is
+// refused before anything is opened.
+TEST_CASE("delta_share_scan refuses a file URL that is not https", "[delta_share][scan][security]") {
     TestDatabase database;
     duckdb::Connection &con = database.Con();
     REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
 
-    ScratchFile parquet(".parquet");
-    WriteParquet(con, parquet.Path(), 0, 5000);  // > STANDARD_VECTOR_SIZE
-
-    ODataTestServer server;
-    ServeShare(server, {parquet.Path()});
-    ProfileFile profile(server.BaseUrl());
-
-    auto result = con.Query("SELECT COUNT(*), SUM(id) FROM " + ScanSql(profile));
-    INFO((result->HasError() ? result->GetError() : std::string()));
-    REQUIRE_FALSE(result->HasError());
-    REQUIRE(ScalarOf(result) == 5000);
-    // Sum guards against a cursor that returns the right COUNT from the wrong rows, and
-    // reads every value rather than only the chunk headers.
-    REQUIRE(result->GetValue(1, 0).GetValue<int64_t>() == (4999LL * 5000LL) / 2);
-}
-
-TEST_CASE("delta_share_scan spans several files", "[delta_share][scan]") {
-    TestDatabase database;
-    duckdb::Connection &con = database.Con();
-    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
-
-    ScratchFile first(".parquet");
-    ScratchFile second(".parquet");
-    WriteParquet(con, first.Path(), 0, 3000);
-    WriteParquet(con, second.Path(), 3000, 2500);
-
-    ODataTestServer server;
-    ServeShare(server, {first.Path(), second.Path()});
-    ProfileFile profile(server.BaseUrl());
-
-    auto result = con.Query("SELECT COUNT(*), COUNT(DISTINCT id) FROM " + ScanSql(profile));
-    INFO((result->HasError() ? result->GetError() : std::string()));
-    REQUIRE_FALSE(result->HasError());
-    REQUIRE(ScalarOf(result) == 5500);
-    REQUIRE(result->GetValue(1, 0).GetValue<int64_t>() == 5500);
-}
-
-// Defect 1: the URL is chosen by the share server. It must be data, never SQL.
-TEST_CASE("delta_share_scan does not execute SQL smuggled in a file URL",
-          "[delta_share][scan][security]") {
-    TestDatabase database;
-    duckdb::Connection &con = database.Con();
-    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
-
-    // The payload's FIRST statement has to succeed, or the injected one is never reached
-    // and the test proves nothing: it reads a real file, then creates a table, then leaves
-    // a well-formed third statement so the concatenated SQL parses.
-    ScratchFile good(".parquet");
-    WriteParquet(con, good.Path(), 0, 3);
-
-    const std::string malicious = good.Path() + "'); CREATE TABLE pwned AS SELECT 1; " +
-                                  "SELECT * FROM parquet_scan('" + good.Path();
+    const std::string malicious =
+        "/tmp/x.parquet'); CREATE TABLE pwned AS SELECT 1; SELECT * FROM parquet_scan('/tmp/x.parquet";
 
     ODataTestServer server;
     ServeShare(server, {malicious});
@@ -203,36 +169,84 @@ TEST_CASE("delta_share_scan does not execute SQL smuggled in a file URL",
 
     auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
 
-    // The security assertion comes FIRST. REQUIRE aborts the test case, so checking the
-    // read error before this would hide the very thing under test: pre-fix the injected
-    // statements ran and the query then SUCCEEDED, so an error-first check aborted here
-    // and never looked for the table.
+    // The security assertion comes FIRST: REQUIRE aborts the case, and checking the error
+    // before this would hide the very thing under test.
     auto pwned = con.Query("SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'pwned'");
     REQUIRE_FALSE(pwned->HasError());
     INFO("a table named 'pwned' exists => the share-supplied URL was executed as SQL");
     REQUIRE(ScalarOf(pwned) == 0);
 
-    // And the read itself fails, because there is no such file.
     INFO((result->HasError() ? result->GetError() : std::string("query unexpectedly succeeded")));
     REQUIRE(result->HasError());
 }
 
-// Defect 4: a file that cannot be read must fail the query, not silently end the scan.
-TEST_CASE("delta_share_scan fails loudly on an unreadable file", "[delta_share][scan]") {
+TEST_CASE("delta_share_scan refuses file:// and bare paths from the share server",
+          "[delta_share][scan][security]") {
     TestDatabase database;
     duckdb::Connection &con = database.Con();
     REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
 
-    ScratchFile good(".parquet");
-    WriteParquet(con, good.Path(), 0, 10);
+    // Each would otherwise be resolved by parquet_scan against the local filesystem.
+    const std::vector<std::string> rejected = {
+        "file:///etc/passwd",
+        "/etc/passwd",
+        "../../etc/passwd",
+        "*.parquet",
+        "s3://bucket/key.parquet",
+        "http://example.com/data.parquet",  // plain http off loopback
+    };
+
+    for (const auto &url : rejected) {
+        INFO("share-supplied URL: " << url);
+        ODataTestServer server;
+        ServeShare(server, {url});
+        ProfileFile profile(server.BaseUrl());
+
+        auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
+        REQUIRE(result->HasError());
+    }
+}
+
+// An https URL passes the policy; the read then fails for want of httpfs in this build,
+// which is what distinguishes "refused by policy" from "accepted and attempted".
+TEST_CASE("delta_share_scan accepts an https file URL", "[delta_share][scan]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
 
     ODataTestServer server;
-    // The unreadable file is claimed FIRST, so a swallowed error would end the scan before
-    // the good file was ever read - returning 0 rows and reporting success.
-    ServeShare(server, {"no_such_file_" + UniqueSuffix() + ".parquet", good.Path()});
+    ServeShare(server, {"https://example.invalid/data.parquet"});
     ProfileFile profile(server.BaseUrl());
 
     auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
-    INFO("a successful query here means the failure was swallowed");
     REQUIRE(result->HasError());
+    const auto error = result->GetError();
+    INFO("error was: " << error);
+    // Rejected by the URL policy would name the URL requirement; this must get past it.
+    REQUIRE(error.find("must be") == std::string::npos);
+}
+
+// A column type the reader does not map must fail in bind, not be cast to VARCHAR behind
+// the caller's back once the file is aligned to the bound schema.
+TEST_CASE("delta_share_scan refuses a column type it cannot map", "[delta_share][scan]") {
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    ODataTestServer server;
+    const std::string table_path = "/shares/s/schemas/sc/tables/t";
+    const char *const decimal_schema =
+        R"({"metaData":{"schemaString":"{\"type\":\"struct\",\"fields\":[)"
+        R"({\"name\":\"amount\",\"type\":\"decimal(10,2)\",\"nullable\":true,\"metadata\":{}}]}"}})";
+    server.OnPath(table_path + "/metadata",
+                  CannedResponse::Json(std::string(R"({"protocol":{"minReaderVersion":1}})") + "\n" +
+                                       decimal_schema));
+    server.OnPath(table_path + "/query",
+                  CannedResponse::Json(std::string(R"({"protocol":{"minReaderVersion":1}})")));
+
+    ProfileFile profile(server.BaseUrl());
+    auto result = con.Query("SELECT COUNT(*) FROM " + ScanSql(profile));
+    REQUIRE(result->HasError());
+    INFO(result->GetError());
+    REQUIRE(result->GetError().find("decimal(10,2)") != std::string::npos);
 }

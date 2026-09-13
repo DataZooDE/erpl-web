@@ -1,4 +1,11 @@
 #include "delta_share_scan.hpp"
+#include "odata_url_helpers.hpp"
+
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+
+#include <map>
 #include "tracing.hpp"
 #include "yyjson.hpp"
 #include "telemetry.hpp"
@@ -100,6 +107,13 @@ static unique_ptr<FunctionData> DeltaShareScanBind(ClientContext& context,
                 }
 
                 string delta_type = string(yyjson_get_str(type_val));
+                if (!IsKnownDeltaType(delta_type)) {
+                    // Refuse rather than cast it to VARCHAR behind the caller's back: the
+                    // file's real values would be stringified silently (GitHub #207).
+                    throw duckdb::NotImplementedException(
+                        "Delta Sharing column '" + field_name + "' has type '" + delta_type +
+                        "', which this reader does not support yet.");
+                }
                 LogicalType duckdb_type = ConvertDeltaTypeToLogicalType(delta_type);
                 return_types.push_back(duckdb_type);
                 names.push_back(field_name);
@@ -112,6 +126,12 @@ static unique_ptr<FunctionData> DeltaShareScanBind(ClientContext& context,
             ERPL_TRACE_INFO("DELTA_SHARE_SCAN", "Using " + std::to_string(names.size()) + " columns from metadata: " +
                            names[0] + (names.size() > 1 ? ", " + names[1] : "") + (names.size() > 2 ? ", ..." : ""));
 
+        } catch (const duckdb::NotImplementedException&) {
+            // An unsupported column type is a deliberate refusal, not a parse failure. The
+            // fallback below would turn it into a single VARCHAR "data" column and report
+            // success, which is exactly the silent stringification the check exists to
+            // prevent, so it is rethrown rather than swallowed.
+            throw;
         } catch (const std::exception& e) {
             ERPL_TRACE_ERROR("DELTA_SHARE_SCAN", "Error parsing schema: " + string(e.what()));
             // Fallback to simple schema
@@ -151,6 +171,20 @@ static unique_ptr<GlobalTableFunctionState> DeltaShareScanInitGlobal(ClientConte
     try {
         global_state->files = global_state->client->QueryTable(bind_data.share, bind_data.schema, bind_data.table);
         ERPL_TRACE_INFO("DELTA_SHARE_SCAN", "Fetched " + std::to_string(global_state->files.size()) + " files from Delta Sharing");
+
+        // Every one of these URLs was chosen by the SHARE SERVER and is about to be handed
+        // to parquet_scan, which resolves whatever it is given - including file:// and bare
+        // filesystem paths, and globs them. A hostile or compromised share could therefore
+        // read arbitrary local files and return their contents through the query. The Delta
+        // Sharing protocol issues pre-signed https URLs, so anything else is refused here,
+        // at the point the list arrives, rather than at the first read (GitHub #207).
+        //
+        // Requiring an http(s) scheme also disposes of the glob concern: globbing is a
+        // filesystem operation and does not apply to a remote URL. Note that '?' cannot be
+        // rejected - every pre-signed URL carries a query string.
+        for (const auto& file_ref : global_state->files) {
+            RequireSecureOrLoopbackUrl(file_ref.url, "A Delta Sharing data file URL");
+        }
 
         if (global_state->files.empty()) {
             ERPL_TRACE_WARN("DELTA_SHARE_SCAN", "No files found for table");
@@ -205,16 +239,55 @@ static unique_ptr<LocalTableFunctionState> DeltaShareScanInitLocal(ExecutionCont
 
 // Opens the next file this thread claims, or returns false when the table is exhausted.
 // The reader is left on the local state so the caller can drain it across scan calls.
-// Builds the projection that aligns one parquet file to the bound schema: cast column i to
-// the bound type and name it after the bound column. The expression list is built entirely
-// from the BOUND schema - no share-supplied text enters it.
-static vector<string> BuildAlignmentProjection(const DeltaShareScanBindData& bind_data) {
-    vector<string> expressions;
-    expressions.reserve(bind_data.column_types.size());
-    for (idx_t i = 0; i < bind_data.column_types.size(); i++) {
-        expressions.push_back("CAST(#" + std::to_string(i + 1) + " AS " +
-                              bind_data.column_types[i].ToString() + ")");
+// Builds the projection that aligns one parquet file to the bound schema.
+//
+// BY NAME, not by position. The share server supplies both the declared schema and the
+// files, and Delta tables legitimately evolve, so the file's column order need not match
+// the schema's. A positional mapping silently returns one column's values under another
+// column's name - wrong data with no error, which is worse than the INTERNAL crash this
+// projection was added to prevent. A bound column the file does not carry is filled with
+// NULL, which is what schema evolution means for a column added after a file was written.
+//
+// Built as parsed expressions rather than SQL text: the file's column names come from the
+// share server, and nothing share-supplied should ever be parsed as SQL.
+static duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> BuildAlignmentProjection(
+    const DeltaShareScanBindData& bind_data,
+    const duckdb::vector<duckdb::ColumnDefinition>& file_columns) {
+
+    // Case-sensitive match first, then a case-insensitive fallback, so a file that differs
+    // only in capitalisation still lines up rather than silently becoming all NULLs.
+    std::map<string, string> by_exact_name;
+    std::map<string, string> by_lowered_name;
+    for (const auto& column : file_columns) {
+        by_exact_name.emplace(column.Name(), column.Name());
+        by_lowered_name.emplace(duckdb::StringUtil::Lower(column.Name()), column.Name());
     }
+
+    duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> expressions;
+    expressions.reserve(bind_data.column_types.size());
+
+    for (idx_t i = 0; i < bind_data.column_types.size(); i++) {
+        const auto& wanted = bind_data.column_names[i];
+        const auto& wanted_type = bind_data.column_types[i];
+
+        const auto exact = by_exact_name.find(wanted);
+        const auto lowered = by_lowered_name.find(duckdb::StringUtil::Lower(wanted));
+
+        duckdb::unique_ptr<duckdb::ParsedExpression> source;
+        if (exact != by_exact_name.end()) {
+            source = duckdb::make_uniq<duckdb::ColumnRefExpression>(exact->second);
+        } else if (lowered != by_lowered_name.end()) {
+            source = duckdb::make_uniq<duckdb::ColumnRefExpression>(lowered->second);
+        } else {
+            ERPL_TRACE_DEBUG("DELTA_SHARE_SCAN",
+                             "Column '" + wanted + "' is absent from this file; filling NULL");
+            source = duckdb::make_uniq<duckdb::ConstantExpression>(duckdb::Value(wanted_type));
+        }
+
+        expressions.push_back(
+            duckdb::make_uniq<duckdb::CastExpression>(wanted_type, std::move(source)));
+    }
+
     return expressions;
 }
 
@@ -245,7 +318,10 @@ static bool ClaimNextFile(ClientContext& context, const DeltaShareScanBindData& 
     // merely differ from the declared schema - which the share server also supplies - is
     // referenced into an output vector of another type and raises an INTERNAL error.
     if (!bind_data.column_types.empty()) {
-        relation = relation->Project(BuildAlignmentProjection(bind_data), bind_data.column_names);
+        // Columns() binds the relation, which is what makes the file's own schema readable.
+        const auto& file_columns = relation->Columns();
+        relation = relation->Project(BuildAlignmentProjection(bind_data, file_columns),
+                                     bind_data.column_names);
     }
 
     local_state.result = relation->Execute();
