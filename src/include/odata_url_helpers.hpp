@@ -16,6 +16,31 @@ namespace erpl_web {
 // configured URL IS the origin. https is allowed anywhere; plain http only for loopback.
 //
 // `what` names the setting in the error, so the caller is told which of theirs is wrong.
+// Whether a reader may point at a non-loopback https host it was not built for.
+//
+// This gates Business Central and Datasphere, and deliberately NOT Dataverse. The
+// distinction is where the OAuth token audience comes from:
+//
+//   Dataverse   scope = environment_url + "/.default"  -> minted FOR the configured host,
+//                                                          so a custom host is the normal
+//                                                          product, not an exposure
+//   Business    GetResourceUrl() hardcodes
+//   Central     https://api.businesscentral.dynamics.com -> a token minted for one host
+//                                                          would be sent to another
+//   Datasphere  scope is a fixed 'default'/'apiaccess'  -> same concern, gated to match
+//
+// Gating Dataverse would make every real deployment set an unsafe flag for ordinary use,
+// which devalues the flag (GitHub #199).
+class ServiceUrlPolicy {
+public:
+    static void SetCustomServiceUrlsAllowed(bool allowed);
+    static bool CustomServiceUrlsAllowed();
+};
+
+// Loopback http is always permitted; https to a non-loopback host requires the opt-in
+// above. Use for readers whose token audience is fixed.
+void RequireGatedServiceUrl(const std::string &url, const std::string &what);
+
 void RequireSecureOrLoopbackUrl(const std::string &url, const std::string &what);
 
 // Shared trigger for those same hatches: does this value already look like an absolute

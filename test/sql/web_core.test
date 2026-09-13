@@ -32,12 +32,16 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE function_name LIKE '%datasphere%' 
 # ============================================================================
 
 # Test that extension-specific settings exist.
-# 10 = 7 tracing/telemetry settings + erpl_ca_cert_file and
-# erpl_unsafe_disable_server_cert_verification, added with TLS verification (#63).
+# 11 = 7 tracing/telemetry settings + erpl_ca_cert_file and
+# erpl_unsafe_disable_server_cert_verification, added with TLS verification (#63),
+# + erpl_unsafe_allow_custom_service_urls, added with the service-URL gate (#199).
+#
+# This count is deliberately exact: adding a setting - especially an unsafe one - should
+# not pass unnoticed, and updating this line is the prompt to document it.
 query I
 SELECT COUNT(*) FROM duckdb_settings() WHERE name LIKE 'erpl_%';
 ----
-10
+11
 
 # Verify core settings exist
 query I

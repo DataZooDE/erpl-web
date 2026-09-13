@@ -32,7 +32,7 @@ std::string BusinessCentralUrlBuilder::BuildApiUrl(const std::string &tenant_id,
         }
         // Shared with Datasphere's space_id and Dataverse's environment_url hatches, so the
         // loopback rule - and the IPv6 and prefix subtleties in it - has one implementation.
-        RequireSecureOrLoopbackUrl(base, "Business Central 'environment'");
+        RequireGatedServiceUrl(base, "Business Central 'environment'");
         return base;
     }
     return "https://api.businesscentral.dynamics.com/v2.0/" + tenant_id + "/" + environment + "/api/v2.0";

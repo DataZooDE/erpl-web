@@ -13,6 +13,7 @@
 #include "secret_functions.hpp"
 #include "odata_attach_functions.hpp"
 #include "odata_read_functions.hpp"
+#include "odata_url_helpers.hpp"
 #include "odata_storage.hpp"
 #include "datasphere_catalog.hpp"
 #include "datasphere_read.hpp"
@@ -140,6 +141,35 @@ static void OnUnsafeDisableServerCertVerification(ClientContext &context, SetSco
     }
 
     erpl_web::HttpTlsPolicy::SetServerCertVerificationEnabled(false);
+}
+
+// Gates the verbatim-URL hatches for the services whose OAuth token audience is fixed
+// (Business Central, Datasphere). Named for what it does and, like the TLS opt-out,
+// refuses anything but the exact token - a flag that is easy to set by accident is not a
+// gate. See GitHub #199.
+static void OnUnsafeAllowCustomServiceUrls(ClientContext &context, SetScope scope, Value &parameter)
+{
+    auto value = parameter.IsNull() ? std::string() : parameter.GetValue<std::string>();
+    StringUtil::Trim(value);
+    auto value_upper = StringUtil::Upper(value);
+
+    if (value_upper.empty() || value_upper == "FALSE" || value_upper == "OFF") {
+        erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(false);
+        return;
+    }
+
+    if (value_upper != "I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE") {
+        throw InvalidInputException(
+            "erpl_unsafe_allow_custom_service_urls only accepts the literal string "
+            "'I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE' (or an empty string to re-enable the "
+            "restriction). Business Central and Datasphere mint their OAuth token for a FIXED "
+            "audience, so pointing a reader at another https host sends that host a credential "
+            "minted for a different one. Loopback addresses are always permitted without this "
+            "setting; Dataverse is unaffected, because its token is minted for whichever "
+            "environment_url you configure.");
+    }
+
+    erpl_web::ServiceUrlPolicy::SetCustomServiceUrlsAllowed(true);
 }
 
 // Tracing configuration callbacks
@@ -293,6 +323,14 @@ static void RegisterConfiguration(DatabaseInstance &instance)
                                   "made by this extension. Only accepts the literal string "
                                   "'I_UNDERSTAND_THIS_IS_INSECURE'. Prefer erpl_ca_cert_file.",
                                   LogicalTypeId::VARCHAR, Value(""), OnUnsafeDisableServerCertVerification);
+
+    config.AddExtensionOption("erpl_unsafe_allow_custom_service_urls",
+                                  "DANGEROUS: lets Business Central and Datasphere readers point at an https host "
+                                  "they were not built for. Those services mint their OAuth token for a fixed "
+                                  "audience, so the token would be sent to a host it was not issued for. Only "
+                                  "accepts the literal string 'I_UNDERSTAND_THIS_SENDS_TOKENS_ELSEWHERE'. Loopback "
+                                  "addresses never need this.",
+                                  LogicalTypeId::VARCHAR, Value(""), OnUnsafeAllowCustomServiceUrls);
 
     // Tracing configuration options
     config.AddExtensionOption("erpl_trace_enabled", "Enable ERPL Web extension tracing functionality", 
