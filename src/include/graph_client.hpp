@@ -22,6 +22,13 @@ public:
     // cannot collect a tenant access token. Mirrors the OData client (#183) and the ODP
     // orchestrator (#101, #187). Fails CLOSED: an empty origin sends no credentials.
     std::string GetServerSuppliedUrl(const std::string &url, const std::string &origin);
+
+    // Whether a URL the SERVICE supplied may carry this client's credentials: true only
+    // when it resolves, against `origin`, to that same origin. Fails closed on an empty
+    // origin or a link that cannot be resolved. GetServerSuppliedUrl decides with this, and
+    // it is public so a caller that would otherwise repeat a pointless unauthenticated
+    // request - polling a foreign status monitor, say - can decide once up front.
+    static bool IsServerSuppliedUrlTrusted(const std::string &url, const std::string &origin);
     std::string GetAllPagesMerged(const std::string &url);
 
     std::string Post(const std::string &url, const std::string &body);

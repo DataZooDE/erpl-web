@@ -1,11 +1,41 @@
 #pragma once
 
 #include "datazoo/oauth2/http_client.hpp"
+#include <chrono>
+#include <functional>
 #include <string>
 #include <memory>
 #include <vector>
 
 namespace erpl_web {
+
+// How long to wait for an async workbook session, and how to wait.
+//
+// The wait is bounded by TIME, not by a poll count: how long a session takes to open is a
+// wall-clock property of the workbook, and a fixed number of iterations only bounds it if
+// each iteration actually sleeps. The loops this replaces did not sleep at all despite a
+// comment claiming 1-second intervals, so they fired 30 requests in a few milliseconds,
+// gave up long before any long-running session could be ready, and looked like a burst to
+// Graph's throttling (GitHub #208).
+//
+// `sleep_for` and `now` are injectable so a test can drive delayed readiness and budget
+// expiry without wall-clock flakiness.
+struct SessionPollPolicy {
+    std::chrono::milliseconds interval{std::chrono::seconds(1)};
+    std::chrono::milliseconds budget{std::chrono::seconds(30)};
+
+    std::function<void(std::chrono::milliseconds)> sleep_for;
+    std::function<std::chrono::steady_clock::time_point()> now;
+
+    SessionPollPolicy();
+};
+
+// Calls `fetch` until `extract` yields a non-empty session id or the budget is spent.
+// The first attempt happens immediately; the interval is only paid between attempts.
+// Returns an empty string when the budget runs out.
+std::string PollForSessionId(const std::function<std::string()> &fetch,
+                             const std::function<std::string(const std::string &)> &extract,
+                             const SessionPollPolicy &policy);
 
 // URL builder for Microsoft Graph Excel API endpoints
 class GraphExcelUrlBuilder {
