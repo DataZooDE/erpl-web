@@ -310,6 +310,15 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
     std::vector<duckdb::Value> extended_data;
     
     try {
+        // The origin every service-supplied metadata URL is measured against. It comes from
+        // the CONFIGURED tenant, not from the response: tenant_name / data_center are also
+        // parsed out of the returned URLs further down, and an origin derived from the URL
+        // under test would make the credential gate vacuous (GitHub #205).
+        const std::string catalog_service_origin =
+            (!config.tenant_name.empty() && !config.data_center.empty())
+                ? DatasphereUrlBuilder::BuildCatalogUrl(config.tenant_name, config.data_center)
+                : std::string();
+
         // Get the basic asset data to extract URLs
         if (resource_data.empty() || resource_data[0].size() < 8) {
             ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Cannot fetch extended metadata without basic asset data");
@@ -348,7 +357,8 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         std::string relational_schema = "Not available";
         if (relational_metadata_url != "NULL" && !relational_metadata_url.empty()) {
             try {
-                relational_schema = FetchMetadataSummary(relational_metadata_url, auth_params, "relational");
+                relational_schema = FetchMetadataSummary(relational_metadata_url, auth_params, "relational",
+                                                        catalog_service_origin);
         } catch (...) {
                 relational_schema = "Fetch failed";
             }
@@ -359,7 +369,8 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         duckdb::Value analytical_schema = duckdb::Value("Not available");
         if (analytical_metadata_url != "NULL" && !analytical_metadata_url.empty()) {
             try {
-                analytical_schema = FetchDetailedAnalyticalSchema(analytical_metadata_url, auth_params);
+                analytical_schema = FetchDetailedAnalyticalSchema(analytical_metadata_url, auth_params,
+                                                                 catalog_service_origin);
             } catch (...) {
                 analytical_schema = duckdb::Value("Fetch failed");
             }
@@ -403,18 +414,48 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
     return extended_data;
 }
 
+
+// A URL that arrives in a response body is attacker-controlled the moment the service is
+// compromised or impersonated, so the caller's bearer token may only follow it when it
+// names the origin this client was opened against. Returns the credentials to use: the
+// caller's for a same-origin URL, none otherwise.
+//
+// Fails CLOSED. Written as `origin.empty() || IsSameOrigin(...)` this would attach
+// credentials to whatever host the service named whenever the origin had not been
+// recorded - the wrong polarity for a credential decision (GitHub #187, #205).
+static std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
+    const std::string &url, const std::string &service_origin,
+    const std::shared_ptr<HttpAuthParams> &auth_params, const char *what)
+{
+    if (!auth_params) {
+        return nullptr;
+    }
+    if (!service_origin.empty() && HttpUrl(url).IsSameOrigin(HttpUrl(service_origin))) {
+        return auth_params;
+    }
+    ERPL_TRACE_WARN("DATASPHERE_CATALOG",
+                    std::string(what) + " URL from the catalog response points at a different "
+                    "origin than the service (" + service_origin + " -> " + url +
+                    "); requesting it without credentials");
+    return nullptr;
+}
+
 std::string DatasphereDescribeBindData::FetchMetadataSummary(const std::string &metadata_url, 
                                                            const std::shared_ptr<HttpAuthParams> &auth_params,
-                                                           const std::string &metadata_type) {
+                                                           const std::string &metadata_type,
+                                                           const std::string &service_origin) {
     try {
         // Create HTTP client for metadata fetch
         auto http_client = std::make_shared<HttpClient>();
-        
+
+        const auto credentials = CredentialsForServiceSuppliedUrl(metadata_url, service_origin,
+                                                                  auth_params, "Relational metadata");
+
         // Fetch metadata (we'll just get a summary for now to avoid parsing complex XML/JSON)
         auto metadata_client = std::make_shared<ODataServiceClient>(
             http_client,
             HttpUrl(metadata_url),
-            auth_params
+            credentials
         );
         
         auto metadata_response = metadata_client->Get();
@@ -438,18 +479,22 @@ std::string DatasphereDescribeBindData::FetchMetadataSummary(const std::string &
 }
 
 duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const std::string &metadata_url, 
-                                                                       const std::shared_ptr<HttpAuthParams> &auth_params) {
+                                                                       const std::shared_ptr<HttpAuthParams> &auth_params,
+                                                                       const std::string &service_origin) {
     try {
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Fetching detailed analytical schema from: " + metadata_url);
         
         // Create HTTP client for metadata fetch
         auto http_client = std::make_shared<HttpClient>();
-        
+
+        const auto credentials = CredentialsForServiceSuppliedUrl(metadata_url, service_origin,
+                                                                  auth_params, "Analytical metadata");
+
         // Fetch the actual metadata document
         auto metadata_client = std::make_shared<ODataServiceClient>(
             http_client, 
             HttpUrl(metadata_url),
-            auth_params
+            credentials
         );
         
         auto metadata_response = metadata_client->Get();
@@ -480,9 +525,13 @@ duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const st
         auto metadata_http_client = CreateODataHttpClient();
         
         // Create a direct HTTP request to the metadata URL
+        // The $metadata URL is derived from the same service-supplied URL, so it is gated
+        // against the same origin rather than trusted because it was rewritten here.
+        const auto endpoint_credentials = CredentialsForServiceSuppliedUrl(
+            metadata_endpoint_url, service_origin, auth_params, "Analytical $metadata");
         HttpRequest metadata_request(HttpMethod::GET, HttpUrl(metadata_endpoint_url));
-        if (auth_params) {
-            metadata_request.AuthHeadersFromParams(*auth_params);
+        if (endpoint_credentials) {
+            metadata_request.AuthHeadersFromParams(*endpoint_credentials);
         }
         
         // Execute the request

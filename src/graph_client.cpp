@@ -114,8 +114,23 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
 std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std::string &origin) {
     ERPL_TRACE_DEBUG(trace_component, "GET (server-supplied) request to: " + url);
 
+    // Resolve the link against the trusted origin first: a RELATIVE next link is same-origin
+    // by construction, and comparing it unresolved would drop credentials on a legitimate
+    // page. An unparseable link is not a link we send credentials to, so a parse failure
+    // falls through to no-credentials rather than escaping as an exception. Mirrors
+    // OdpRequestOrchestrator::IsSameOrigin.
     HttpUrl http_url(url);
-    const bool same_origin = !origin.empty() && http_url.IsSameOrigin(HttpUrl(origin));
+    bool same_origin = false;
+    if (!origin.empty()) {
+        try {
+            const HttpUrl trusted(origin);
+            http_url = HttpUrl::MergeWithBaseUrlIfRelative(trusted, url);
+            same_origin = trusted.IsSameOrigin(http_url);
+        } catch (const std::exception &e) {
+            ERPL_TRACE_WARN(trace_component, "Could not compare origins: " + std::string(e.what()));
+            same_origin = false;
+        }
+    }
     if (!same_origin) {
         ERPL_TRACE_WARN(trace_component,
                         "Server-supplied next link points at a different origin than the service (" +
@@ -234,12 +249,21 @@ std::string GraphClient::GetAllPagesMerged(const std::string &url) {
     std::vector<std::string> pages;
     pages.reserve(1);
 
+    // `url` is built by this extension from the hardcoded Graph base, so it is the trusted
+    // origin for this scan. Every LATER page comes from an @odata.nextLink in a response
+    // body and is fetched through the guarded entry point, which attaches the bearer token
+    // only for that origin (GitHub #205, same class as #183 / #101 / #187). This is the
+    // eager paging path behind most Graph readers; the lazy path in GraphPagedScanState
+    // makes the same decision.
+    const std::string trusted_origin = url;
+
     std::string next_url = url;
     for (size_t page_count = 0; !next_url.empty(); page_count++) {
         if (page_count >= MAX_GRAPH_PAGES) {
             throw duckdb::IOException("Microsoft Graph pagination exceeded safety limit");
         }
-        auto body = Get(next_url);
+        auto body = (page_count == 0) ? Get(next_url)
+                                      : GetServerSuppliedUrl(next_url, trusted_origin);
         auto next_link = ExtractNextLink(body);
         pages.push_back(std::move(body));
         next_url = next_link.value_or("");

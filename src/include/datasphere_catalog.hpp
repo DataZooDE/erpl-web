@@ -81,11 +81,17 @@ public:
     std::vector<duckdb::Value> FetchAssetExtendedMetadata(duckdb::ClientContext &context, 
                                                          const OAuth2Config &config,
                                                          const std::shared_ptr<HttpAuthParams> &auth_params);
+    // `metadata_url` comes out of the catalog RESPONSE BODY, not from the caller, so the
+    // credential decision is made against `service_origin` - the origin this client was
+    // opened against - and not against the URL itself (GitHub #205, same class as #183
+    // and #187). Both fetchers take the origin for that reason.
     std::string FetchMetadataSummary(const std::string &metadata_url, 
                                    const std::shared_ptr<HttpAuthParams> &auth_params,
-                                   const std::string &metadata_type);
+                                   const std::string &metadata_type,
+                                   const std::string &service_origin);
     duckdb::Value FetchDetailedAnalyticalSchema(const std::string &metadata_url, 
-                                               const std::shared_ptr<HttpAuthParams> &auth_params);
+                                               const std::shared_ptr<HttpAuthParams> &auth_params,
+                                               const std::string &service_origin);
     duckdb::Value ParseAnalyticalMetadata(const std::string &xml_content);
     
     // Parse DWAAS core API response to extract analytical schema
