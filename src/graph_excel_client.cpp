@@ -320,6 +320,29 @@ std::vector<std::string> GraphExcelClient::GetTableColumnsByPath(const std::stri
 }
 
 // Extract the workbook-session-id from a createSession response JSON
+
+SessionPollPolicy::SessionPollPolicy()
+    : sleep_for([](std::chrono::milliseconds duration) { std::this_thread::sleep_for(duration); }),
+      now([] { return std::chrono::steady_clock::now(); }) {
+}
+
+std::string PollForSessionId(const std::function<std::string()> &fetch,
+                             const std::function<std::string(const std::string &)> &extract,
+                             const SessionPollPolicy &policy) {
+    const auto deadline = policy.now() + policy.budget;
+
+    while (true) {
+        const auto id = extract(fetch());
+        if (!id.empty()) {
+            return id;
+        }
+        if (policy.now() >= deadline) {
+            return std::string();
+        }
+        policy.sleep_for(policy.interval);
+    }
+}
+
 static std::string ExtractSessionId(const std::string &json_body) {
     duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
     if (!doc) { return ""; }
@@ -361,17 +384,23 @@ idx_t GraphExcelClient::AddTableRows(const std::string &file_path, const std::st
                 // Long-running: poll the status monitor until session is ready
                 const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
                 duckdb_yyjson::yyjson_doc_free(doc);
-                // Poll up to 30 times with 1-second intervals
                 // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
                 // the same treatment as an @odata.nextLink: the bearer token follows it
-                // only when it names the origin we opened the session against. Without
-                // this a service answering createSession with a foreign
-                // statusMonitorResource collects the tenant token 30 times (GitHub #205).
-                for (int poll = 0; poll < 30 && session_id.empty(); poll++) {
-                    const std::string poll_response =
-                        graph_client.GetServerSuppliedUrl(monitor_url, create_session_url);
-                    session_id = ExtractSessionId(poll_response);
+                // only when it names the origin we opened the session against (GitHub
+                // #205). That decision is made ONCE here rather than per request: a
+                // foreign monitor can never hand back our session id, so polling it is
+                // pointless, and doing so repeatedly just aims a burst of unauthenticated
+                // requests at a host the service chose (GitHub #208).
+                if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, create_session_url)) {
+                    throw duckdb::IOException(
+                        "Microsoft Graph returned a workbook session status monitor on a "
+                        "different origin than the session itself (" + monitor_url +
+                        "); refusing to poll it.");
                 }
+                session_id = PollForSessionId(
+                    [&] { return graph_client.GetServerSuppliedUrl(monitor_url, create_session_url); },
+                    [](const std::string &body) { return ExtractSessionId(body); },
+                    SessionPollPolicy{});
             } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
                 // Immediate (201): session id is in the response
                 session_id = duckdb_yyjson::yyjson_get_str(id_val);
@@ -455,13 +484,21 @@ idx_t GraphExcelClient::DeleteTableRowsMatchingColumn(const std::string &file_pa
                 duckdb_yyjson::yyjson_doc_free(doc);
                 // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
                 // the same treatment as an @odata.nextLink: the bearer token follows it
-                // only when it names the origin we opened the session against. Without
-                // this a service answering createSession with a foreign
-                // statusMonitorResource collects the tenant token 30 times (GitHub #205).
-                for (int poll = 0; poll < 30 && session_id.empty(); poll++) {
-                    session_id = ExtractSessionId(
-                        graph_client.GetServerSuppliedUrl(monitor_url, create_session_url));
+                // only when it names the origin we opened the session against (GitHub
+                // #205). That decision is made ONCE here rather than per request: a
+                // foreign monitor can never hand back our session id, so polling it is
+                // pointless, and doing so repeatedly just aims a burst of unauthenticated
+                // requests at a host the service chose (GitHub #208).
+                if (!GraphClient::IsServerSuppliedUrlTrusted(monitor_url, create_session_url)) {
+                    throw duckdb::IOException(
+                        "Microsoft Graph returned a workbook session status monitor on a "
+                        "different origin than the session itself (" + monitor_url +
+                        "); refusing to poll it.");
                 }
+                session_id = PollForSessionId(
+                    [&] { return graph_client.GetServerSuppliedUrl(monitor_url, create_session_url); },
+                    [](const std::string &body) { return ExtractSessionId(body); },
+                    SessionPollPolicy{});
             } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
                 session_id = duckdb_yyjson::yyjson_get_str(id_val);
                 duckdb_yyjson::yyjson_doc_free(doc);

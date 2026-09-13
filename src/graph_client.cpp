@@ -111,6 +111,18 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
     }
 }
 
+bool GraphClient::IsServerSuppliedUrlTrusted(const std::string &url, const std::string &origin) {
+    if (origin.empty()) {
+        return false;
+    }
+    try {
+        const HttpUrl trusted(origin);
+        return trusted.IsSameOrigin(HttpUrl::MergeWithBaseUrlIfRelative(trusted, url));
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
 std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std::string &origin) {
     ERPL_TRACE_DEBUG(trace_component, "GET (server-supplied) request to: " + url);
 
