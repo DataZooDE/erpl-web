@@ -19,10 +19,11 @@
 
 #include "odata_test_server.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 using erpl_web::test_support::CannedResponse;
 using erpl_web::test_support::ODataTestServer;
@@ -49,12 +50,14 @@ private:
 };
 
 // Writes a Delta Sharing profile next to the test binary and removes it again, so the
-// fixture leaves nothing behind whichever way the test exits. The name carries the pid and
-// a caller-supplied tag so two cases - or two shards of the same binary - never collide.
+// fixture leaves nothing behind whichever way the test exits. The name carries a
+// caller-supplied tag plus a run-unique suffix so two cases - or two shards of the same
+// binary - never collide. The suffix is built from the clock and a counter rather than the
+// pid: getpid()/<unistd.h> do not exist on MSVC, and this file is compiled on Windows CI.
 class ProfileFile {
 public:
     ProfileFile(const std::string &endpoint, const std::string &tag)
-        : path("erpl_delta_share_" + tag + "_" + std::to_string(getpid()) + ".json")
+        : path("erpl_delta_share_" + tag + "_" + UniqueSuffix() + ".json")
     {
         std::ofstream out(path);
         out << R"({"shareCredentialsVersion":1,"endpoint":")" << endpoint
@@ -66,6 +69,14 @@ public:
     const std::string &Path() const { return path; }
 
 private:
+    static std::string UniqueSuffix()
+    {
+        static std::atomic<unsigned> counter{0};
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::to_string(static_cast<long long>(ticks)) + "_" +
+               std::to_string(counter.fetch_add(1));
+    }
+
     std::string path;
 };
 

@@ -14,6 +14,7 @@
 #include "catch.hpp"
 #include "duckdb.hpp"
 
+#include "datasphere_catalog.hpp"
 #include "datasphere_client.hpp"
 #include "graph_client.hpp"
 #include "odata_test_server.hpp"
@@ -115,28 +116,45 @@ TEST_CASE("a Graph next link on another port is treated as cross-origin",
 // analytical_metadata_url out of the CATALOG RESPONSE BODY and sent the Datasphere OAuth
 // bearer to them with no origin check - the same class as the Graph next link above.
 //
-// The gate is exercised through the predicate it is built on, because reaching
-// FetchAssetExtendedMetadata needs a live Datasphere tenant. What the fix turns on is that
-// the origin comes from the CONFIGURED tenant rather than from the returned URL: the
-// tenant and data centre are also parsed out of those same URLs further down, so an origin
-// derived from the URL under test would make the comparison vacuous.
-TEST_CASE("a Datasphere metadata URL is compared against the configured tenant origin",
+// This drives the real gate, not the predicate underneath it: a first version of this test
+// asserted HttpUrl::IsSameOrigin comparisons and would have stayed green with the gate
+// deleted, which an agent-crew review called out. CredentialsForServiceSuppliedUrl returns
+// the credentials that will actually be attached, so asserting on it is the decision.
+//
+// What the fix turns on is that the origin comes from the CONFIGURED tenant rather than
+// from the returned URL: the tenant and data centre are also parsed out of those same URLs
+// further down, so an origin derived from the URL under test would be a self-comparison.
+TEST_CASE("Datasphere credentials follow a metadata URL only on the configured origin",
           "[graph_origin][security][datasphere]") {
     const std::string configured =
         erpl_web::DatasphereUrlBuilder::BuildCatalogUrl("acme", "eu10");
+    const auto token = BearerToken("datasphere-access-token");
 
-    // Same tenant: credentials may follow.
-    REQUIRE(erpl_web::HttpUrl("https://acme.eu10.hcs.cloud.sap/api/v1/dwc/consumption/relational/SPACE/ASSET")
-                .IsSameOrigin(erpl_web::HttpUrl(configured)));
+    const auto credentials_for = [&](const std::string &url) {
+        return erpl_web::CredentialsForServiceSuppliedUrl(url, configured, token, "test");
+    };
 
-    // A different tenant, a different data centre, a plain-http downgrade and an unrelated
-    // host are all different origins, so none of them receives the bearer token.
-    REQUIRE_FALSE(erpl_web::HttpUrl("https://evil.eu10.hcs.cloud.sap/api/v1/dwc/catalog")
-                      .IsSameOrigin(erpl_web::HttpUrl(configured)));
-    REQUIRE_FALSE(erpl_web::HttpUrl("https://acme.us10.hcs.cloud.sap/api/v1/dwc/catalog")
-                      .IsSameOrigin(erpl_web::HttpUrl(configured)));
-    REQUIRE_FALSE(erpl_web::HttpUrl("http://acme.eu10.hcs.cloud.sap/api/v1/dwc/catalog")
-                      .IsSameOrigin(erpl_web::HttpUrl(configured)));
-    REQUIRE_FALSE(erpl_web::HttpUrl("https://attacker.example/collect")
-                      .IsSameOrigin(erpl_web::HttpUrl(configured)));
+    SECTION("a URL on the configured tenant keeps the credentials") {
+        REQUIRE(credentials_for(
+                    "https://acme.eu10.hcs.cloud.sap/api/v1/dwc/consumption/relational/SPACE/ASSET") ==
+                token);
+    }
+
+    SECTION("a different tenant, data centre, scheme or host gets none") {
+        REQUIRE(credentials_for("https://evil.eu10.hcs.cloud.sap/api/v1/dwc/catalog") == nullptr);
+        REQUIRE(credentials_for("https://acme.us10.hcs.cloud.sap/api/v1/dwc/catalog") == nullptr);
+        REQUIRE(credentials_for("http://acme.eu10.hcs.cloud.sap/api/v1/dwc/catalog") == nullptr);
+        REQUIRE(credentials_for("https://attacker.example/collect") == nullptr);
+    }
+
+    SECTION("an unknown origin sends nothing rather than everything") {
+        REQUIRE(erpl_web::CredentialsForServiceSuppliedUrl(
+                    "https://acme.eu10.hcs.cloud.sap/api/v1/dwc/catalog", "", token, "test") ==
+                nullptr);
+    }
+
+    SECTION("a URL that will not parse sends nothing") {
+        REQUIRE(credentials_for("not a url at all") == nullptr);
+        REQUIRE(credentials_for("") == nullptr);
+    }
 }

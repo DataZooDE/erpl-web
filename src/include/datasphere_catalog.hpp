@@ -49,6 +49,15 @@ public:
 };
 
 // Bind data for describe functions (detailed resource information)
+// Decides whether the caller's credentials may follow a URL that arrived in a SERVICE
+// RESPONSE BODY (a Datasphere metadata link). Returns the caller's credentials for a URL
+// on `service_origin`, and none for anything else - including an empty origin or a URL
+// that will not parse, because "we don't know" must mean "send nothing" (GitHub #205,
+// #187). Declared here rather than kept file-static so the decision itself can be tested.
+std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
+    const std::string &url, const std::string &service_origin,
+    const std::shared_ptr<HttpAuthParams> &auth_params, const char *what);
+
 class DatasphereDescribeBindData : public duckdb::TableFunctionData {
 public:
     DatasphereDescribeBindData(std::shared_ptr<ODataServiceClient> catalog_client, 

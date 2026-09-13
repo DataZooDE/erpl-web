@@ -304,6 +304,17 @@ DatasphereDescribeBindData::DatasphereDescribeBindData(std::shared_ptr<ODataServ
 {
 }
 
+// NOTE ON REACHABILITY: this function is currently DEAD CODE. Its only caller gates on
+// `resource_data[0].size() < 15`, and both paths that build an asset row produce exactly
+// 15 columns (the DWAAS path pushes 15; the catalog fallback resize(15)s). Rows shorter
+// than that are 2-element error rows, which hit the `size() < 8` return below.
+//
+// The credential gate in here is therefore defence in depth, not a live fix: the #205
+// exposure on this path is LATENT. It is written rather than skipped because the guard
+// must already be in place if reachability is ever restored - at which point the wrong
+// column index below would also start mattering. Restoring reachability is a behavioural
+// change (it would start issuing metadata requests that never happen today) and is
+// deliberately not part of the #205 fix.
 std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadata(duckdb::ClientContext &context, 
                                                                                    const OAuth2Config &config,
                                                                                    const std::shared_ptr<HttpAuthParams> &auth_params) {
@@ -327,7 +338,11 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         
         auto &asset_row = resource_data[0];
         std::string relational_metadata_url = asset_row[3].ToString(); // assetRelationalMetadataUrl
-        std::string analytical_metadata_url = asset_row[6].ToString(); // assetAnalyticalMetadataUrl
+        // Column 5, not 6: 5 is assetAnalyticalMetadataUrl and 6 is assetAnalyticalDataUrl
+        // (see the row construction below and the projection in the describe scan). This
+        // read has always named the wrong column; it is latent only because this whole
+        // function is currently unreachable - see the note at the top.
+        std::string analytical_metadata_url = asset_row[5].ToString(); // assetAnalyticalMetadataUrl
         std::string supports_analytical = asset_row[7].ToString(); // supports_analytical_queries
         
         // Extract tenant and data center from the analytical metadata URL if available
@@ -423,15 +438,20 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
 // Fails CLOSED. Written as `origin.empty() || IsSameOrigin(...)` this would attach
 // credentials to whatever host the service named whenever the origin had not been
 // recorded - the wrong polarity for a credential decision (GitHub #187, #205).
-static std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
+std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
     const std::string &url, const std::string &service_origin,
     const std::shared_ptr<HttpAuthParams> &auth_params, const char *what)
 {
     if (!auth_params) {
         return nullptr;
     }
-    if (!service_origin.empty() && HttpUrl(url).IsSameOrigin(HttpUrl(service_origin))) {
-        return auth_params;
+    try {
+        if (!service_origin.empty() && HttpUrl(url).IsSameOrigin(HttpUrl(service_origin))) {
+            return auth_params;
+        }
+    } catch (const std::exception &e) {
+        // A URL we cannot parse is not a URL we send credentials to.
+        ERPL_TRACE_WARN("DATASPHERE_CATALOG", "Could not compare origins: " + std::string(e.what()));
     }
     ERPL_TRACE_WARN("DATASPHERE_CATALOG",
                     std::string(what) + " URL from the catalog response points at a different "

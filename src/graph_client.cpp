@@ -119,18 +119,28 @@ std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std:
     // page. An unparseable link is not a link we send credentials to, so a parse failure
     // falls through to no-credentials rather than escaping as an exception. Mirrors
     // OdpRequestOrchestrator::IsSameOrigin.
-    HttpUrl http_url(url);
+    // Everything that can throw lives inside the try, including the construction of the
+    // URL itself: a link this client cannot even parse must degrade to "no credentials",
+    // not escape as an exception from the middle of a scan.
+    duckdb::unique_ptr<HttpUrl> resolved;
     bool same_origin = false;
-    if (!origin.empty()) {
-        try {
+    try {
+        resolved = duckdb::make_uniq<HttpUrl>(url);
+        if (!origin.empty()) {
             const HttpUrl trusted(origin);
-            http_url = HttpUrl::MergeWithBaseUrlIfRelative(trusted, url);
-            same_origin = trusted.IsSameOrigin(http_url);
-        } catch (const std::exception &e) {
-            ERPL_TRACE_WARN(trace_component, "Could not compare origins: " + std::string(e.what()));
-            same_origin = false;
+            resolved = duckdb::make_uniq<HttpUrl>(HttpUrl::MergeWithBaseUrlIfRelative(trusted, url));
+            same_origin = trusted.IsSameOrigin(*resolved);
         }
+    } catch (const std::exception &e) {
+        ERPL_TRACE_WARN(trace_component, "Could not compare origins: " + std::string(e.what()));
+        same_origin = false;
     }
+    if (!resolved) {
+        // Unparseable even on its own: let the normal request path raise the parse error
+        // rather than inventing one, but never with credentials attached.
+        resolved = duckdb::make_uniq<HttpUrl>(url);
+    }
+    HttpUrl &http_url = *resolved;
     if (!same_origin) {
         ERPL_TRACE_WARN(trace_component,
                         "Server-supplied next link points at a different origin than the service (" +
@@ -148,6 +158,13 @@ std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std:
     return response->Content();
 }
 
+// Attaches the caller's credentials unconditionally, so the URL must be one THIS extension
+// built - never one parsed out of a response body. Anything that arrives in a response
+// (an @odata.nextLink, a statusMonitorResource, any other service-supplied link) goes
+// through GetServerSuppliedUrl instead, which decides on origin. Three review rounds
+// missed src/graph_excel_client.cpp's status-monitor poll because only @odata.nextLink was
+// thought of as "server-supplied"; the rule is about where the URL came from, not what it
+// is called. To audit: grep for yyjson_get_str results reaching any entry point here.
 std::string GraphClient::Get(const std::string &url) {
     ERPL_TRACE_DEBUG(trace_component, "GET request to: " + url);
 
