@@ -103,17 +103,19 @@ private:
     duckdb::unique_ptr<OdpODataReadBindData> scan_state;
 };
 
-// Returns the object that owns the scan state for this execution, falling back to the
-// bind data for any caller that still supplies a bare GlobalTableFunctionState. That
-// fallback is not a safe default - it is the historical behaviour that made the second
-// EXECUTE of a bound plan return nothing.
+// Returns the object that owns the scan state for this execution. A caller with no such
+// state used to fall back to the shared bind data - the historical behaviour that made the
+// second EXECUTE of a bound plan return nothing, silently. Failing loudly instead turns
+// the next mis-wired reader into a diagnosable error rather than a wrong answer.
 OdpODataReadBindData &ResolveOdpScanState(const duckdb::FunctionData *bind_data,
                                           const duckdb::GlobalTableFunctionState *global_state) {
     auto *odp_global = dynamic_cast<const OdpODataReadGlobalState *>(global_state);
-    if (odp_global != nullptr) {
-        return const_cast<OdpODataReadGlobalState *>(odp_global)->Scan();
+    if (odp_global == nullptr) {
+        throw duckdb::NotImplementedException(
+            "ODP scan has no per-execution state: the table function must register "
+            "OdpODataReadGlobalState as its init_global");
     }
-    return bind_data->CastNoConst<OdpODataReadBindData>();
+    return const_cast<OdpODataReadGlobalState *>(odp_global)->Scan();
 }
 
 } // namespace

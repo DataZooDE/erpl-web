@@ -371,8 +371,14 @@ idx_t GraphExcelClient::AddTableRows(const std::string &file_path, const std::st
                 const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
                 duckdb_yyjson::yyjson_doc_free(doc);
                 // Poll up to 30 times with 1-second intervals
+                // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
+                // the same treatment as an @odata.nextLink: the bearer token follows it
+                // only when it names the origin we opened the session against. Without
+                // this a service answering createSession with a foreign
+                // statusMonitorResource collects the tenant token 30 times (GitHub #205).
                 for (int poll = 0; poll < 30 && session_id.empty(); poll++) {
-                    const std::string poll_response = graph_client.Get(monitor_url);
+                    const std::string poll_response =
+                        graph_client.GetServerSuppliedUrl(monitor_url, create_session_url);
                     session_id = ExtractSessionId(poll_response);
                 }
             } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
@@ -456,8 +462,14 @@ idx_t GraphExcelClient::DeleteTableRowsMatchingColumn(const std::string &file_pa
             if (monitor_val && duckdb_yyjson::yyjson_is_str(monitor_val)) {
                 const std::string monitor_url = duckdb_yyjson::yyjson_get_str(monitor_val);
                 duckdb_yyjson::yyjson_doc_free(doc);
+                // The monitor URL comes out of the createSession RESPONSE BODY, so it gets
+                // the same treatment as an @odata.nextLink: the bearer token follows it
+                // only when it names the origin we opened the session against. Without
+                // this a service answering createSession with a foreign
+                // statusMonitorResource collects the tenant token 30 times (GitHub #205).
                 for (int poll = 0; poll < 30 && session_id.empty(); poll++) {
-                    session_id = ExtractSessionId(graph_client.Get(monitor_url));
+                    session_id = ExtractSessionId(
+                        graph_client.GetServerSuppliedUrl(monitor_url, create_session_url));
                 }
             } else if (id_val && duckdb_yyjson::yyjson_is_str(id_val)) {
                 session_id = duckdb_yyjson::yyjson_get_str(id_val);

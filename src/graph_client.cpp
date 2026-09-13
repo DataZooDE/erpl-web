@@ -111,6 +111,59 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
     }
 }
 
+std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std::string &origin) {
+    ERPL_TRACE_DEBUG(trace_component, "GET (server-supplied) request to: " + url);
+
+    // Resolve the link against the trusted origin first: a RELATIVE next link is
+    // same-origin by construction, and comparing it unresolved would drop credentials on a
+    // legitimate page. Mirrors OdpRequestOrchestrator::IsSameOrigin.
+    //
+    // A link that cannot be resolved at all is refused outright rather than requested
+    // without credentials: sending an unparseable or unresolvable link to the network is
+    // not a safer fallback, it is just a different unknown. The one guarantee is that no
+    // path out of here attaches credentials to a URL whose origin was not established.
+    duckdb::unique_ptr<HttpUrl> resolved;
+    bool same_origin = false;
+    try {
+        if (origin.empty()) {
+            resolved = duckdb::make_uniq<HttpUrl>(url);
+        } else {
+            const HttpUrl trusted(origin);
+            resolved = duckdb::make_uniq<HttpUrl>(HttpUrl::MergeWithBaseUrlIfRelative(trusted, url));
+            same_origin = trusted.IsSameOrigin(*resolved);
+        }
+    } catch (const std::exception &e) {
+        ERPL_TRACE_WARN(trace_component, "Could not resolve server-supplied link '" + url +
+                                             "' against origin '" + origin + "': " + e.what());
+        throw duckdb::IOException("Microsoft Graph returned a link that could not be resolved "
+                                  "against the service origin: " + url);
+    }
+
+    HttpUrl &http_url = *resolved;
+    if (!same_origin) {
+        ERPL_TRACE_WARN(trace_component,
+                        "Server-supplied next link points at a different origin than the service (" +
+                            origin + " -> " + url + "); requesting it without credentials");
+    }
+
+    HttpRequest request(HttpMethod::GET, http_url);
+    if (auth_params && same_origin) {
+        request.AuthHeadersFromParams(*auth_params);
+    }
+    request.headers["Accept"] = "application/json";
+
+    auto response = http_client->SendRequest(request);
+    GraphCheckResponse(response, trace_component, "GET");
+    return response->Content();
+}
+
+// Attaches the caller's credentials unconditionally, so the URL must be one THIS extension
+// built - never one parsed out of a response body. Anything that arrives in a response
+// (an @odata.nextLink, a statusMonitorResource, any other service-supplied link) goes
+// through GetServerSuppliedUrl instead, which decides on origin. Three review rounds
+// missed src/graph_excel_client.cpp's status-monitor poll because only @odata.nextLink was
+// thought of as "server-supplied"; the rule is about where the URL came from, not what it
+// is called. To audit: grep for yyjson_get_str results reaching any entry point here.
 std::string GraphClient::Get(const std::string &url) {
     ERPL_TRACE_DEBUG(trace_component, "GET request to: " + url);
 
@@ -212,12 +265,21 @@ std::string GraphClient::GetAllPagesMerged(const std::string &url) {
     std::vector<std::string> pages;
     pages.reserve(1);
 
+    // `url` is built by this extension from the hardcoded Graph base, so it is the trusted
+    // origin for this scan. Every LATER page comes from an @odata.nextLink in a response
+    // body and is fetched through the guarded entry point, which attaches the bearer token
+    // only for that origin (GitHub #205, same class as #183 / #101 / #187). This is the
+    // eager paging path behind most Graph readers; the lazy path in GraphPagedScanState
+    // makes the same decision.
+    const std::string trusted_origin = url;
+
     std::string next_url = url;
     for (size_t page_count = 0; !next_url.empty(); page_count++) {
         if (page_count >= MAX_GRAPH_PAGES) {
             throw duckdb::IOException("Microsoft Graph pagination exceeded safety limit");
         }
-        auto body = Get(next_url);
+        auto body = (page_count == 0) ? Get(next_url)
+                                      : GetServerSuppliedUrl(next_url, trusted_origin);
         auto next_link = ExtractNextLink(body);
         pages.push_back(std::move(body));
         next_url = next_link.value_or("");

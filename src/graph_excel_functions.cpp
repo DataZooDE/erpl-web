@@ -23,29 +23,32 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-struct ListFilesBindData : public GraphJsonArrayScanBindData {
+struct ListFilesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string folder_path;
     std::string drive_id;
 };
 
-struct ExcelTablesBindData : public GraphJsonArrayScanBindData {
+struct ExcelTablesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelWorksheetsBindData : public GraphJsonArrayScanBindData {
+struct ExcelWorksheetsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string drive_id;
 };
 
-struct ExcelTableDataBindData : public GraphJsonArrayScanBindData {
+struct ExcelTableDataBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string file_path;
     std::string table_name;
     std::string drive_id;
+    // Fetched once during bind to infer the schema, then kept so every execution
+    // of the bound plan can re-seed its own scan state from it (GitHub #202).
+    std::string prefetched_json;
 };
 
 struct ExcelRangeBindData : public TableFunctionData {
@@ -56,11 +59,21 @@ struct ExcelRangeBindData : public TableFunctionData {
     std::string drive_id;
     std::string json_response;
     vector<LogicalType> column_types;  // per-column types inferred from valueTypes
-    // JSON is parsed once on first scan call, then freed. cached_rows[row][col].
-    std::vector<std::vector<duckdb::Value>> cached_rows;
+};
+
+// Per-execution cursor for graph_excel_read_range. The parsed rows and the
+// position in them must not live on the bind data: a bound plan that is
+// EXECUTEd twice would otherwise return zero rows the second time (GitHub #202).
+struct ExcelRangeScanState : public duckdb::GlobalTableFunctionState {
+    std::vector<std::vector<duckdb::Value>> cached_rows;  // cached_rows[row][col]
     size_t current_row = 0;  // index into cached_rows
     bool rows_cached = false;
     bool done = false;
+
+    static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
+                                                                     duckdb::TableFunctionInitInput &) {
+        return duckdb::make_uniq<ExcelRangeScanState>();
+    }
 };
 
 
@@ -234,16 +247,17 @@ void GraphExcelFunctions::ListFilesScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ListFilesBindData>();
-    if (bind_data.done) { output.SetCardinality(0); return; }
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    if (state.done) { output.SetCardinality(0); return; }
 
-    if (!bind_data.parsed_doc) {
-        if (bind_data.json_response.empty()) {
+    if (!state.parsed_doc) {
+        if (state.json_response.empty()) {
             auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
             GraphExcelClient client(auth_info.auth_params);
-            bind_data.json_response = client.ListDriveFiles(bind_data.folder_path, bind_data.drive_id);
+            state.json_response = client.ListDriveFiles(bind_data.folder_path, bind_data.drive_id);
         }
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -251,7 +265,7 @@ void GraphExcelFunctions::ListFilesScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "webUrl"));
@@ -264,7 +278,7 @@ void GraphExcelFunctions::ListFilesScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -309,16 +323,17 @@ void GraphExcelFunctions::ExcelTablesScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ExcelTablesBindData>();
-    if (bind_data.done) { output.SetCardinality(0); return; }
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    if (state.done) { output.SetCardinality(0); return; }
 
-    if (!bind_data.parsed_doc) {
-        if (bind_data.json_response.empty()) {
+    if (!state.parsed_doc) {
+        if (state.json_response.empty()) {
             auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
             GraphExcelClient client(auth_info.auth_params);
-            bind_data.json_response = client.ListTablesByPath(bind_data.file_path, bind_data.drive_id);
+            state.json_response = client.ListTablesByPath(bind_data.file_path, bind_data.drive_id);
         }
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -326,7 +341,7 @@ void GraphExcelFunctions::ExcelTablesScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "id"));
         SetBoolCell(output.data[2], row, yyjson_obj_get(item, "showHeaders"));
@@ -334,7 +349,7 @@ void GraphExcelFunctions::ExcelTablesScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -379,16 +394,17 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ExcelWorksheetsBindData>();
-    if (bind_data.done) { output.SetCardinality(0); return; }
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    if (state.done) { output.SetCardinality(0); return; }
 
-    if (!bind_data.parsed_doc) {
-        if (bind_data.json_response.empty()) {
+    if (!state.parsed_doc) {
+        if (state.json_response.empty()) {
             auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
             GraphExcelClient client(auth_info.auth_params);
-            bind_data.json_response = client.ListWorksheetsByPath(bind_data.file_path, bind_data.drive_id);
+            state.json_response = client.ListWorksheetsByPath(bind_data.file_path, bind_data.drive_id);
         }
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -396,7 +412,7 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "id"));
         SetInt32Cell(output.data[2], row, yyjson_obj_get(item, "position"));
@@ -404,7 +420,7 @@ void GraphExcelFunctions::ExcelWorksheetsScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -584,16 +600,19 @@ void GraphExcelFunctions::ExcelRangeScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<ExcelRangeBindData>();
+    auto &bind_data = data.bind_data->Cast<ExcelRangeBindData>();
+    auto &state = data.global_state->Cast<ExcelRangeScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    // Parse the JSON response exactly once and cache all rows as DuckDB Values.
-    // This avoids reparsing the same (potentially large) JSON string on every scan call.
-    if (!bind_data.rows_cached) {
+    // Parse the JSON response once per EXECUTION and cache all rows as DuckDB Values, so
+    // repeated scan calls within one execution do not reparse it. The raw payload stays on
+    // the bind data on purpose - a second execution must be able to parse it again - which
+    // is why it is no longer cleared here.
+    if (!state.rows_cached) {
         yyjson_doc *doc = yyjson_read(bind_data.json_response.c_str(), bind_data.json_response.length(), 0);
         if (!doc) {
             throw InvalidInputException("Failed to parse Graph API response");
@@ -604,7 +623,7 @@ void GraphExcelFunctions::ExcelRangeScan(
 
         if (!values_arr || !yyjson_is_arr(values_arr)) {
             yyjson_doc_free(doc);
-            bind_data.done = true;
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -616,7 +635,7 @@ void GraphExcelFunctions::ExcelRangeScan(
         // Skip header row (index 0), extract data rows into cache.
         // Use O(N) iterators — yyjson_arr_get(outer_arr, r) on non-flat arrays is O(r),
         // making indexed access O(N²) for large ranges.
-        bind_data.cached_rows.reserve(total_rows > 1 ? total_rows - 1 : 0);
+        state.cached_rows.reserve(total_rows > 1 ? total_rows - 1 : 0);
 
         yyjson_arr_iter row_iter;
         yyjson_arr_iter_init(values_arr, &row_iter);
@@ -647,34 +666,35 @@ void GraphExcelFunctions::ExcelRangeScan(
                 yyjson_val *cell_type = type_ok ? yyjson_arr_iter_next(&cell_type_iter) : nullptr;
                 row_vals.push_back(ExtractCellValue(cell_val, cell_type, bind_data.column_types[c]));
             }
-            bind_data.cached_rows.push_back(std::move(row_vals));
+            state.cached_rows.push_back(std::move(row_vals));
         }
 
         yyjson_doc_free(doc);
-        // Free the raw JSON — no longer needed
-        bind_data.json_response.clear();
-        bind_data.json_response.shrink_to_fit();
-        bind_data.rows_cached = true;
+        state.rows_cached = true;
     }
 
     // Serve rows from cache in STANDARD_VECTOR_SIZE chunks
-    const size_t start     = bind_data.current_row;
-    const size_t remaining = (start < bind_data.cached_rows.size())
-        ? bind_data.cached_rows.size() - start : 0;
+    const size_t start     = state.current_row;
+    const size_t remaining = (start < state.cached_rows.size())
+        ? state.cached_rows.size() - start : 0;
     const size_t data_rows = std::min(remaining, static_cast<size_t>(STANDARD_VECTOR_SIZE));
     const size_t col_count = output.ColumnCount();
 
     output.SetCardinality(data_rows);
     for (size_t row_idx = 0; row_idx < data_rows; row_idx++) {
-        const auto &row = bind_data.cached_rows[start + row_idx];
+        const auto &row = state.cached_rows[start + row_idx];
         for (size_t col = 0; col < col_count; col++) {
             output.SetValue(col, row_idx, col < row.size() ? row[col] : Value());
         }
     }
 
-    bind_data.current_row += data_rows;
-    if (bind_data.current_row >= bind_data.cached_rows.size()) {
-        bind_data.done = true;
+    state.current_row += data_rows;
+    if (state.current_row >= state.cached_rows.size()) {
+        state.done = true;
+        // The materialised Values are no longer reachable; a self-join holds one of these
+        // per scan, so release them rather than keeping them until the query ends.
+        state.cached_rows.clear();
+        state.cached_rows.shrink_to_fit();
     }
 }
 
@@ -705,10 +725,10 @@ unique_ptr<FunctionData> GraphExcelFunctions::ExcelTableDataBind(
     // Fetch the table data to determine schema
     auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
     GraphExcelClient client(auth_info.auth_params);
-    bind_data->json_response = client.GetTableRowsByPath(bind_data->file_path, bind_data->table_name, bind_data->drive_id);
+    bind_data->prefetched_json = client.GetTableRowsByPath(bind_data->file_path, bind_data->table_name, bind_data->drive_id);
 
     // Parse to determine schema from first row
-    yyjson_doc *doc = yyjson_read(bind_data->json_response.c_str(), bind_data->json_response.length(), 0);
+    yyjson_doc *doc = yyjson_read(bind_data->prefetched_json.c_str(), bind_data->prefetched_json.length(), 0);
     if (!doc) {
         throw InvalidInputException("Failed to parse Graph API response");
     }
@@ -759,11 +779,16 @@ void GraphExcelFunctions::ExcelTableDataScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ExcelTableDataBindData>();
-    if (bind_data.done) { output.SetCardinality(0); return; }
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    if (state.done) { output.SetCardinality(0); return; }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (state.NeedsFetch()) {
+        state.SeedFrom(bind_data.prefetched_json);
+    }
+
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -773,7 +798,7 @@ void GraphExcelFunctions::ExcelTableDataScan(
     idx_t row_idx = 0;
     yyjson_val *item;
 
-    while (row_idx < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row_idx < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         yyjson_val *values_arr = yyjson_obj_get(item, "values");
         yyjson_val *inner_arr  = (values_arr && yyjson_is_arr(values_arr))
                                      ? yyjson_arr_get_first(values_arr) : nullptr;
@@ -796,7 +821,7 @@ void GraphExcelFunctions::ExcelTableDataScan(
         row_idx++;
     }
 
-    if (row_idx < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row_idx < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row_idx);
 }
 
@@ -844,8 +869,11 @@ void GraphExcelFunctions::AddRowsScan(
     TableFunctionInput &data_p,
     DataChunk &output) {
 
+    // One-shot by design: the write happens here, so the flag lives on the bind data
+    // deliberately and a second EXECUTE of a bound plan adds nothing further rather than
+    // duplicating rows in the workbook. This is NOT the #202 read defect.
     auto &bind = data_p.bind_data->CastNoConst<AddRowsBindData>();
-    if (bind.done) { return; }
+    if (bind.done) { output.SetCardinality(0); return; }
     bind.done = true;
 
     if (bind.rows_json.empty()) {
@@ -963,8 +991,10 @@ void GraphExcelFunctions::DeleteRowsScan(
     TableFunctionInput &data_p,
     DataChunk &output) {
 
+    // One-shot by design - see the note in AddRowsScan. A second EXECUTE deletes nothing
+    // further rather than deleting another row.
     auto &bind = data_p.bind_data->CastNoConst<DeleteRowsBindData>();
-    if (bind.done) { return; }
+    if (bind.done) { output.SetCardinality(0); return; }
     bind.done = true;
 
     auto auth_info = ResolveGraphAuth(context, bind.secret_name);
@@ -997,6 +1027,7 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         list_files.named_parameters["secret"] = LogicalType::VARCHAR;
         list_files.named_parameters["drive"] = LogicalType::VARCHAR;
         list_files.named_parameters["site"] = LogicalType::VARCHAR;
+        list_files.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(list_files);
         FunctionDescription desc;
         desc.description = "List files and folders in OneDrive or a SharePoint document library. "
@@ -1020,6 +1051,7 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_tables.named_parameters["secret"] = LogicalType::VARCHAR;
         excel_tables.named_parameters["drive"] = LogicalType::VARCHAR;
         excel_tables.named_parameters["site"] = LogicalType::VARCHAR;
+        excel_tables.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(excel_tables);
         FunctionDescription desc;
         desc.description = "List all named tables in a Microsoft Excel workbook. "
@@ -1043,6 +1075,7 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_worksheets.named_parameters["secret"] = LogicalType::VARCHAR;
         excel_worksheets.named_parameters["drive"] = LogicalType::VARCHAR;
         excel_worksheets.named_parameters["site"] = LogicalType::VARCHAR;
+        excel_worksheets.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(excel_worksheets);
         FunctionDescription desc;
         desc.description = "List all worksheets in a Microsoft Excel workbook. "
@@ -1068,13 +1101,17 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_range.named_parameters["secret"] = LogicalType::VARCHAR;
         excel_range.named_parameters["drive"] = LogicalType::VARCHAR;
         excel_range.named_parameters["site"] = LogicalType::VARCHAR;
+        excel_range.init_global = ExcelRangeScanState::Init;
         CreateTableFunctionInfo info(excel_range);
         FunctionDescription desc;
         desc.description = "Read a cell range from a worksheet in a Microsoft Excel workbook. "
                            "Returns dynamic columns named by the first header row. "
                            "sheet_name must match exactly (use graph_excel_worksheets() to discover names). "
                            "Optionally pass a range address as a third positional argument (e.g. 'A1:D100'); "
-                           "omit it to read the sheet's used range.";
+                           "omit it to read the sheet's used range. "
+                           "The range is fetched once while the statement is bound, in order to infer the "
+                           "column types; re-executing a prepared statement replays that snapshot rather "
+                           "than re-reading the workbook.";
         desc.parameter_names = {"file_path", "sheet_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -1094,12 +1131,16 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         excel_table_data.named_parameters["secret"] = LogicalType::VARCHAR;
         excel_table_data.named_parameters["drive"] = LogicalType::VARCHAR;
         excel_table_data.named_parameters["site"] = LogicalType::VARCHAR;
+        excel_table_data.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(excel_table_data);
         FunctionDescription desc;
         desc.description = "Read all rows from a named table in a Microsoft Excel workbook. "
                            "Returns dynamic columns matching the table's header row. "
                            "table_name must match a name returned by graph_excel_tables(). "
-                           "Use graph_excel_tables() to discover available table names first.";
+                           "Use graph_excel_tables() to discover available table names first. "
+                           "The rows are fetched once while the statement is bound, in order to infer the "
+                           "column types; re-executing a prepared statement replays that snapshot rather "
+                           "than re-reading the workbook.";
         desc.parameter_names = {"file_path", "table_name", "secret", "drive", "site"};
         desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                                  LogicalType::VARCHAR, LogicalType::VARCHAR};

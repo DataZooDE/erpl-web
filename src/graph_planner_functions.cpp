@@ -8,6 +8,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "yyjson.hpp"
 #include "erpl_web_banner.hpp"
+#include "graph_json_scan.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -22,94 +23,16 @@ using namespace duckdb;
 struct PlansBindData : public TableFunctionData {
     std::string secret_name;
     std::string group_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~PlansBindData() override {
-        if (parsed_doc) {
-            yyjson_doc_free(parsed_doc);
-        }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) {
-            return false;
-        }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) {
-            return false;
-        }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
 struct BucketsBindData : public TableFunctionData {
     std::string secret_name;
     std::string plan_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~BucketsBindData() override {
-        if (parsed_doc) {
-            yyjson_doc_free(parsed_doc);
-        }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) {
-            return false;
-        }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) {
-            return false;
-        }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
 struct TasksBindData : public TableFunctionData {
     std::string secret_name;
     std::string plan_id;
-    std::string json_response;
-    yyjson_doc *parsed_doc = nullptr;
-    yyjson_arr_iter item_iter = {};
-    bool done = false;
-
-    ~TasksBindData() override {
-        if (parsed_doc) {
-            yyjson_doc_free(parsed_doc);
-        }
-    }
-
-    bool InitIterator() {
-        parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-        json_response.clear();
-        json_response.shrink_to_fit();
-        if (!parsed_doc) {
-            return false;
-        }
-        yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-        yyjson_val *arr = yyjson_obj_get(root, "value");
-        if (!arr || !yyjson_is_arr(arr)) {
-            return false;
-        }
-        yyjson_arr_iter_init(arr, &item_iter);
-        return true;
-    }
 };
 
 // ============================================================================
@@ -154,22 +77,23 @@ void GraphPlannerFunctions::PlansScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<PlansBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    auto &bind_data = data.bind_data->Cast<PlansBindData>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
-        bind_data.json_response = client.GetGroupPlans(bind_data.group_id);
+        state.json_response = client.GetGroupPlans(bind_data.group_id);
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -177,7 +101,7 @@ void GraphPlannerFunctions::PlansScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "title"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "owner"));
@@ -186,7 +110,7 @@ void GraphPlannerFunctions::PlansScan(
     }
 
     if (row < STANDARD_VECTOR_SIZE) {
-        bind_data.done = true;
+        state.done = true;
     }
     output.SetCardinality(row);
 }
@@ -233,22 +157,23 @@ void GraphPlannerFunctions::BucketsScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<BucketsBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    auto &bind_data = data.bind_data->Cast<BucketsBindData>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
-        bind_data.json_response = client.GetPlanBuckets(bind_data.plan_id);
+        state.json_response = client.GetPlanBuckets(bind_data.plan_id);
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -256,7 +181,7 @@ void GraphPlannerFunctions::BucketsScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "planId"));
@@ -265,7 +190,7 @@ void GraphPlannerFunctions::BucketsScan(
     }
 
     if (row < STANDARD_VECTOR_SIZE) {
-        bind_data.done = true;
+        state.done = true;
     }
     output.SetCardinality(row);
 }
@@ -318,22 +243,23 @@ void GraphPlannerFunctions::TasksScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<TasksBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
+    auto &bind_data = data.bind_data->Cast<TasksBindData>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphPlannerClient client(auth_info.auth_params);
-        bind_data.json_response = client.GetPlanTasks(bind_data.plan_id);
+        state.json_response = client.GetPlanTasks(bind_data.plan_id);
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -341,7 +267,7 @@ void GraphPlannerFunctions::TasksScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "title"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "bucketId"));
@@ -355,7 +281,7 @@ void GraphPlannerFunctions::TasksScan(
     }
 
     if (row < STANDARD_VECTOR_SIZE) {
-        bind_data.done = true;
+        state.done = true;
     }
     output.SetCardinality(row);
 }
@@ -436,12 +362,15 @@ void GraphPlannerFunctions::CreateTaskScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<CreateTaskBindData>();
-    if (bind_data.done) {
+    // The task is created in CreateTaskBind, so this scan only emits the resulting ids:
+    // the one-shot flag is a per-execution emit cursor and creates nothing on a repeat.
+    auto &bind_data = data.bind_data->Cast<CreateTaskBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
-    bind_data.done = true;
+    state.finished = true;
     output.SetValue(0, 0, Value(bind_data.task_id));
     output.SetValue(1, 0, Value(bind_data.task_url));
     output.SetCardinality(1);
@@ -458,6 +387,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         TableFunction planner_plans("graph_planner_plans", {LogicalType::VARCHAR},
                                     DATAZOO_GUARD(ERPL_WEB_BANNER, PlansScan), DATAZOO_GUARD(ERPL_WEB_BANNER, PlansBind));
         planner_plans.named_parameters["secret"] = LogicalType::VARCHAR;
+        planner_plans.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(planner_plans);
         FunctionDescription desc;
         desc.description = "List all Microsoft Planner plans in a Microsoft 365 group.";
@@ -472,6 +402,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         TableFunction planner_buckets("graph_planner_buckets", {LogicalType::VARCHAR},
                                       DATAZOO_GUARD(ERPL_WEB_BANNER, BucketsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, BucketsBind));
         planner_buckets.named_parameters["secret"] = LogicalType::VARCHAR;
+        planner_buckets.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(planner_buckets);
         FunctionDescription desc;
         desc.description = "List all buckets in a Microsoft Planner plan.";
@@ -486,6 +417,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         TableFunction planner_tasks("graph_planner_tasks", {LogicalType::VARCHAR},
                                     DATAZOO_GUARD(ERPL_WEB_BANNER, TasksScan), DATAZOO_GUARD(ERPL_WEB_BANNER, TasksBind));
         planner_tasks.named_parameters["secret"] = LogicalType::VARCHAR;
+        planner_tasks.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(planner_tasks);
         FunctionDescription desc;
         desc.description = "List all tasks in a Microsoft Planner plan.";
@@ -501,6 +433,7 @@ void GraphPlannerFunctions::Register(ExtensionLoader &loader) {
         TableFunction create_task("graph_planner_create_task",
                                    {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                    DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateTaskBind));
+        create_task.init_global = ScanRowCursorState::Init;
         create_task.named_parameters["bucket_id"]        = LogicalType::VARCHAR;
         create_task.named_parameters["due_date"]         = LogicalType::VARCHAR;
         create_task.named_parameters["start_date"]       = LogicalType::VARCHAR;

@@ -150,8 +150,15 @@ static unique_ptr<FunctionData> ODataAttachBind(ClientContext &context,
 
 static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) 
 {
+    // One-shot by design, and the latch stays on the BIND DATA on purpose. This scan is a
+    // side-effecting DDL statement: it fetches the service document and creates a view per
+    // entity set with replace = Overwrite(), which defaults to false. Giving it
+    // per-execution state would make a second EXECUTE of a bound plan re-run the DDL and
+    // fail with "already exists" where it previously did nothing. See scan_row_cursor.hpp
+    // and the exemption list in test_graph_scan_reexecution.cpp.
     auto &data = data_p.bind_data->CastNoConst<ODataAttachBindData>();
 	if (data.IsFinished()) {
+		output.SetCardinality(0);
 		return;
 	}
 
@@ -164,6 +171,7 @@ static void ODataAttachScan(ClientContext &context, TableFunctionInput &data_p, 
     }
 	
     data.SetFinished();
+    output.SetCardinality(0);
 }
 
 TableFunctionSet CreateODataAttachFunction()

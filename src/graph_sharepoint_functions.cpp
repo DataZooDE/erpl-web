@@ -24,28 +24,28 @@ using namespace duckdb;
 // Bind Data Structures
 // ============================================================================
 
-struct ShowSitesBindData : public GraphJsonArrayScanBindData {
+struct ShowSitesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string search_query;
 };
 
-struct ShowListsBindData : public GraphJsonArrayScanBindData {
+struct ShowListsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
 };
 
-struct ShowDrivesBindData : public GraphJsonArrayScanBindData {
+struct ShowDrivesBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
 };
 
-struct DescribeListBindData : public GraphJsonArrayScanBindData {
+struct DescribeListBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
 };
 
-struct ListItemsBindData : public GraphJsonArrayScanBindData {
+struct ListItemsBindData : public duckdb::TableFunctionData {
     std::string secret_name;
     std::string site_id;
     std::string list_id;
@@ -96,21 +96,22 @@ void GraphSharePointFunctions::ShowSitesScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ShowSitesBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.json_response = client.SearchSites(bind_data.search_query);
+        state.json_response = client.SearchSites(bind_data.search_query);
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -118,7 +119,7 @@ void GraphSharePointFunctions::ShowSitesScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "displayName"));
@@ -127,7 +128,7 @@ void GraphSharePointFunctions::ShowSitesScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -177,21 +178,22 @@ void GraphSharePointFunctions::ShowListsScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ShowListsBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListLists(client.ResolveSiteId(bind_data.site_id));
+        state.json_response = client.ListLists(client.ResolveSiteId(bind_data.site_id));
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -199,7 +201,7 @@ void GraphSharePointFunctions::ShowListsScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "displayName"));
@@ -210,7 +212,7 @@ void GraphSharePointFunctions::ShowListsScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -240,6 +242,17 @@ unique_ptr<FunctionData> GraphSharePointFunctions::DescribeListBind(
     }
     bind_data->secret_name = secret_name;
 
+    // Resolve site name/URL and list name to GUIDs here rather than in the scan: bind data
+    // is shared across executions, so a scan that wrote resolved ids back into it would
+    // re-issue both round trips on every execution and mutate shared state (ListItemsBind
+    // already resolves at bind for the same reason).
+    {
+        auto auth_info = ResolveGraphAuth(context, bind_data->secret_name);
+        GraphSharePointClient client(auth_info.auth_params);
+        bind_data->site_id = client.ResolveSiteId(bind_data->site_id);
+        bind_data->list_id = client.ResolveListId(bind_data->site_id, bind_data->list_id);
+    }
+
     // Return schema: name, displayName, columnType, description, required
     names = {"name", "display_name", "column_type", "description", "required"};
     return_types = {
@@ -258,24 +271,23 @@ void GraphSharePointFunctions::DescribeListScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<DescribeListBindData>();
+    auto &bind_data = data.bind_data->Cast<DescribeListBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.site_id = client.ResolveSiteId(bind_data.site_id);
-        bind_data.list_id = client.ResolveListId(bind_data.site_id, bind_data.list_id);
-        bind_data.json_response = client.GetListColumns(bind_data.site_id, bind_data.list_id);
+        state.json_response = client.GetListColumns(bind_data.site_id, bind_data.list_id);
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -283,7 +295,7 @@ void GraphSharePointFunctions::DescribeListScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         // name
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "name"));
 
@@ -327,7 +339,7 @@ void GraphSharePointFunctions::DescribeListScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -426,9 +438,6 @@ unique_ptr<FunctionData> GraphSharePointFunctions::ListItemsBind(
         bind_data->column_types.push_back(LogicalType::VARCHAR);
     }
 
-    // Fetch items
-    bind_data->json_response = client.GetListItems(bind_data->site_id, bind_data->list_id);
-
     return std::move(bind_data);
 }
 
@@ -438,15 +447,22 @@ void GraphSharePointFunctions::ListItemsScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ListItemsBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (state.NeedsFetch()) {
+        auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
+        GraphSharePointClient client(auth_info.auth_params);
+        state.json_response = client.GetListItems(bind_data.site_id, bind_data.list_id);
+    }
+
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -456,7 +472,7 @@ void GraphSharePointFunctions::ListItemsScan(
     idx_t row = 0;
     yyjson_val *item;
 
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         yyjson_val *fields_obj = yyjson_obj_get(item, "fields");
 
         for (size_t col = 0; col < col_count; col++) {
@@ -472,7 +488,7 @@ void GraphSharePointFunctions::ListItemsScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -520,21 +536,22 @@ void GraphSharePointFunctions::ShowDrivesScan(
     DataChunk &output) {
 
     auto &bind_data = data.bind_data->CastNoConst<ShowDrivesBindData>();
+    auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-    if (bind_data.done) {
+    if (state.done) {
         output.SetCardinality(0);
         return;
     }
 
-    if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+    if (!state.parsed_doc && state.json_response.empty()) {
         auto auth_info = ResolveGraphAuth(context, bind_data.secret_name);
         GraphSharePointClient client(auth_info.auth_params);
-        bind_data.json_response = client.ListDrives(client.ResolveSiteId(bind_data.site_id));
+        state.json_response = client.ListDrives(client.ResolveSiteId(bind_data.site_id));
     }
 
-    if (!bind_data.parsed_doc) {
-        if (!bind_data.InitIterator()) {
-            bind_data.done = true;
+    if (!state.parsed_doc) {
+        if (!state.InitIterator()) {
+            state.done = true;
             output.SetCardinality(0);
             return;
         }
@@ -542,7 +559,7 @@ void GraphSharePointFunctions::ShowDrivesScan(
 
     idx_t row = 0;
     yyjson_val *item;
-    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+    while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
         SetStrCell(output.data[0], row, yyjson_obj_get(item, "id"));
         SetStrCell(output.data[1], row, yyjson_obj_get(item, "name"));
         SetStrCell(output.data[2], row, yyjson_obj_get(item, "driveType"));
@@ -552,7 +569,7 @@ void GraphSharePointFunctions::ShowDrivesScan(
         row++;
     }
 
-    if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+    if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
     output.SetCardinality(row);
 }
 
@@ -566,7 +583,6 @@ struct CreateItemBindData : public TableFunctionData {
     std::string list_id;
     std::string fields_json;
     std::string new_item_id;
-    bool done = false;
 };
 
 unique_ptr<FunctionData> GraphSharePointFunctions::CreateItemBind(
@@ -605,12 +621,16 @@ void GraphSharePointFunctions::CreateItemScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<CreateItemBindData>();
-    if (bind_data.done) {
+    // The item is created in CreateItemBind, so this scan only emits the resulting id.
+    // The one-shot flag is therefore a per-execution emit cursor: a second EXECUTE of the
+    // bound plan re-emits the same id and creates nothing further.
+    auto &bind_data = data.bind_data->Cast<CreateItemBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
-    bind_data.done = true;
+    state.finished = true;
     output.SetValue(0, 0, Value(bind_data.new_item_id));
     output.SetCardinality(1);
 }
@@ -733,6 +753,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         TableFunction show_sites("graph_show_sites", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, ShowSitesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ShowSitesBind));
         show_sites.varargs = LogicalType::VARCHAR;
         show_sites.named_parameters["secret"] = LogicalType::VARCHAR;
+        show_sites.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(show_sites);
         FunctionDescription desc;
         desc.description = "Search and list SharePoint sites accessible via Microsoft Graph. "
@@ -754,6 +775,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         show_drives.varargs = LogicalType::VARCHAR;
         show_drives.named_parameters["secret"] = LogicalType::VARCHAR;
         show_drives.named_parameters["site"] = LogicalType::VARCHAR;
+        show_drives.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(show_drives);
         FunctionDescription desc;
         desc.description = "List document library drives in a SharePoint site. "
@@ -775,6 +797,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
         show_lists.varargs = LogicalType::VARCHAR;
         show_lists.named_parameters["secret"] = LogicalType::VARCHAR;
         show_lists.named_parameters["site"] = LogicalType::VARCHAR;
+        show_lists.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(show_lists);
         FunctionDescription desc;
         desc.description = "List all lists in a SharePoint site. "
@@ -798,6 +821,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
                                     {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                     DATAZOO_GUARD(ERPL_WEB_BANNER, DescribeListScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DescribeListBind));
         describe_list.named_parameters["secret"] = LogicalType::VARCHAR;
+        describe_list.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(describe_list);
         FunctionDescription desc;
         desc.description = "Describe the column schema of a SharePoint list. "
@@ -820,6 +844,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
                                  {LogicalType::VARCHAR, LogicalType::VARCHAR},
                                  DATAZOO_GUARD(ERPL_WEB_BANNER, ListItemsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, ListItemsBind));
         list_items.named_parameters["secret"] = LogicalType::VARCHAR;
+        list_items.init_global = GraphJsonArrayScanState::Init;
         CreateTableFunctionInfo info(list_items);
         FunctionDescription desc;
         desc.description = "Read all items from a SharePoint list. "
@@ -842,6 +867,7 @@ void GraphSharePointFunctions::Register(ExtensionLoader &loader) {
                                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
                                   DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemScan), DATAZOO_GUARD(ERPL_WEB_BANNER, CreateItemBind));
         create_item.named_parameters["secret"] = LogicalType::VARCHAR;
+        create_item.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(create_item);
         FunctionDescription desc;
         desc.description = "Create a new item in a SharePoint list. "

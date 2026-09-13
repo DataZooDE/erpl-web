@@ -22,6 +22,11 @@ public:
     std::vector<std::string> GetResultNames();
     std::vector<LogicalType> GetResultTypes();
     bool HasMoreResults() const;
+    // Issues the request and writes the single response row. Does NOT latch: the caller
+    // decides whether the result may be produced again (a read verb re-issues per
+    // execution, a mutating verb must not).
+    unsigned int SendRequest(DataChunk &output) const;
+    // SendRequest plus the bind-data latch, for the mutating verbs.
     unsigned int FetchNextResult(DataChunk &output) const; 
 
 private :

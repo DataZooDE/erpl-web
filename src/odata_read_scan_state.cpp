@@ -662,17 +662,22 @@ namespace {
 // Datasphere readers all return ODataReadGlobalState, so each execution of a
 // bound plan gets its own state.
 //
-// The fallback to the bind data remains for any caller that still supplies a
-// bare GlobalTableFunctionState. It is not a safe default - it is the historical
-// behaviour that made the second EXECUTE of a bound plan return nothing - so a
-// new reader should return ODataReadGlobalState rather than rely on it.
+// A caller that supplies anything else has no per-execution state, which used to fall
+// back to scanning straight out of the shared bind data - the historical behaviour that
+// made the second EXECUTE of a bound plan return nothing, silently. Failing here instead
+// turns the next mis-wired reader into an immediate, diagnosable error rather than a
+// wrong answer. NOT InternalException: DuckDB treats that as fatal to the whole database
+// instance (ValidChecker::Invalidate), which is far too much for one mis-registered
+// function - the query should fail, not the connection.
 ODataReadBindData &ResolveScanState(const duckdb::FunctionData *bind_data,
                                     const GlobalTableFunctionState *global_state) {
   auto *odata_global = dynamic_cast<const ODataReadGlobalState *>(global_state);
-  if (odata_global != nullptr) {
-    return const_cast<ODataReadGlobalState *>(odata_global)->Scan();
+  if (odata_global == nullptr) {
+    throw duckdb::NotImplementedException(
+        "OData scan has no per-execution state: the table function must register "
+        "ODataReadTableInitGlobalState as its init_global");
   }
-  return bind_data->CastNoConst<ODataReadBindData>();
+  return const_cast<ODataReadGlobalState *>(odata_global)->Scan();
 }
 
 } // namespace

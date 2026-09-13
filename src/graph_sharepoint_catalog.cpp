@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <mutex>
 #include <unordered_set>
+#include "graph_json_scan.hpp"
 
 using namespace duckdb_yyjson;
 using namespace duckdb;
@@ -36,29 +37,9 @@ struct SharePointListScanBindData : public duckdb::TableFunctionData {
 	std::shared_ptr<HttpAuthParams> auth_params;
 	std::vector<std::string> column_names;
 	std::vector<duckdb::LogicalType> column_types;
-	std::string json_response;
-	yyjson_doc *parsed_doc = nullptr;
-	yyjson_arr_iter item_iter = {};
-	bool done = false;
 	// Pointer back to the owning table entry so LogicalGet::GetTable() works,
 	// which is required for DELETE/UPDATE to be recognized as a base table operation.
 	duckdb::TableCatalogEntry *table_entry = nullptr;
-
-	~SharePointListScanBindData() override {
-		if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-	}
-
-	bool InitIterator() {
-		parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-		json_response.clear();
-		json_response.shrink_to_fit();
-		if (!parsed_doc) { return false; }
-		yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-		yyjson_val *arr = yyjson_obj_get(root, "value");
-		if (!arr || !yyjson_is_arr(arr)) { return false; }
-		yyjson_arr_iter_init(arr, &item_iter);
-		return true;
-	}
 };
 
 // Local state stores which columns (by column_t ID) the current execution is projecting.
@@ -84,24 +65,25 @@ static void SharePointListScan(duckdb::ClientContext &context,
                                 duckdb::TableFunctionInput &data,
                                 duckdb::DataChunk &output)
 {
-	auto &bind_data = data.bind_data->CastNoConst<SharePointListScanBindData>();
+	auto &bind_data = data.bind_data->Cast<SharePointListScanBindData>();
 	auto &local_state = data.local_state->Cast<SharePointListScanLocalState>();
+	auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-	if (bind_data.done) {
+	if (state.done) {
 		output.SetCardinality(0);
 		return;
 	}
 
 	// Lazy-fetch on first call
-	if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+	if (!state.parsed_doc && state.json_response.empty()) {
 		GraphSharePointClient client(bind_data.auth_params);
-		bind_data.json_response = client.GetListItems(bind_data.site_id, bind_data.list_id);
+		state.json_response = client.GetListItems(bind_data.site_id, bind_data.list_id);
 	}
 
 	// Parse once; keep doc alive in bind_data so iterator stays valid across batches
-	if (!bind_data.parsed_doc) {
-		if (!bind_data.InitIterator()) {
-			bind_data.done = true;
+	if (!state.parsed_doc) {
+		if (!state.InitIterator()) {
+			state.done = true;
 			output.SetCardinality(0);
 			return;
 		}
@@ -111,7 +93,7 @@ static void SharePointListScan(duckdb::ClientContext &context,
 	idx_t row = 0;
 	yyjson_val *item;
 
-	while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+	while (row < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
 		yyjson_val *fields_obj = yyjson_obj_get(item, "fields");
 
 		for (size_t col = 0; col < output_col_count; col++) {
@@ -142,7 +124,7 @@ static void SharePointListScan(duckdb::ClientContext &context,
 		row++;
 	}
 
-	if (row < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+	if (row < STANDARD_VECTOR_SIZE) { state.done = true; }
 	output.SetCardinality(row);
 }
 
@@ -678,7 +660,7 @@ duckdb::TableFunction SharePointTableEntry::GetScanFunction(duckdb::ClientContex
 	bind_data = std::move(scan_bind_data);
 
 	duckdb::TableFunction table_function("sharepoint_list_scan", {}, SharePointListScan,
-	                                     nullptr, nullptr, SharePointListScanInitLocal);
+	                                     nullptr, GraphJsonArrayScanState::Init, SharePointListScanInitLocal);
 	table_function.projection_pushdown = true;
 	table_function.get_bind_info = SharePointListScanGetBindInfo;
 	return table_function;

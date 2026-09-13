@@ -8,6 +8,7 @@
 #include "tracing.hpp"
 #include "yyjson.hpp"
 #include "erpl_web_banner.hpp"
+#include "graph_json_scan.hpp"
 
 using namespace duckdb;
 using namespace duckdb_yyjson;
@@ -28,8 +29,6 @@ struct GraphUsersBindData : public TableFunctionData {
     std::vector<std::string> job_titles;
     std::vector<std::string> departments;
     std::vector<bool> account_enabled;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
 struct GraphGroupsBindData : public TableFunctionData {
@@ -41,8 +40,6 @@ struct GraphGroupsBindData : public TableFunctionData {
     std::vector<std::string> mail_addresses;
     std::vector<bool> mail_enabled;
     std::vector<bool> security_enabled;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
 struct GraphDevicesBindData : public TableFunctionData {
@@ -54,8 +51,6 @@ struct GraphDevicesBindData : public TableFunctionData {
     std::vector<std::string> os_versions;
     std::vector<std::string> trust_types;
     std::vector<bool> account_enabled;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
 struct GraphSignInLogsBindData : public TableFunctionData {
@@ -68,8 +63,6 @@ struct GraphSignInLogsBindData : public TableFunctionData {
     std::vector<std::string> ip_addresses;
     std::vector<std::string> created_datetimes;
     std::vector<std::string> statuses;
-    idx_t current_idx = 0;
-    bool done = false;
 };
 
 // =============================================================================
@@ -143,9 +136,10 @@ void GraphEntraFunctions::UsersScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphUsersBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data.bind_data->Cast<GraphUsersBindData>();
 
-    if (bind_data.done) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -153,8 +147,8 @@ void GraphEntraFunctions::UsersScan(
     idx_t count = 0;
     idx_t max_count = STANDARD_VECTOR_SIZE;
 
-    while (bind_data.current_idx < bind_data.user_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
+    while (state.current_index < bind_data.user_ids.size() && count < max_count) {
+        idx_t i = state.current_index;
 
         SetStrCellNN(output.data[0], count, bind_data.user_ids[i].c_str());
         SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
@@ -164,12 +158,12 @@ void GraphEntraFunctions::UsersScan(
         SetStrCellNN(output.data[5], count, bind_data.departments[i].c_str());
         SetBoolCellNN(output.data[6], count, bind_data.account_enabled[i]);
 
-        bind_data.current_idx++;
+        state.current_index++;
         count++;
     }
 
-    if (bind_data.current_idx >= bind_data.user_ids.size()) {
-        bind_data.done = true;
+    if (state.current_index >= bind_data.user_ids.size()) {
+        state.finished = true;
     }
 
     output.SetCardinality(count);
@@ -240,9 +234,10 @@ void GraphEntraFunctions::GroupsScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphGroupsBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data.bind_data->Cast<GraphGroupsBindData>();
 
-    if (bind_data.done) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -250,8 +245,8 @@ void GraphEntraFunctions::GroupsScan(
     idx_t count = 0;
     idx_t max_count = STANDARD_VECTOR_SIZE;
 
-    while (bind_data.current_idx < bind_data.group_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
+    while (state.current_index < bind_data.group_ids.size() && count < max_count) {
+        idx_t i = state.current_index;
 
         SetStrCellNN(output.data[0], count, bind_data.group_ids[i].c_str());
         SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
@@ -260,12 +255,12 @@ void GraphEntraFunctions::GroupsScan(
         SetBoolCellNN(output.data[4], count, bind_data.mail_enabled[i]);
         SetBoolCellNN(output.data[5], count, bind_data.security_enabled[i]);
 
-        bind_data.current_idx++;
+        state.current_index++;
         count++;
     }
 
-    if (bind_data.current_idx >= bind_data.group_ids.size()) {
-        bind_data.done = true;
+    if (state.current_index >= bind_data.group_ids.size()) {
+        state.finished = true;
     }
 
     output.SetCardinality(count);
@@ -336,9 +331,10 @@ void GraphEntraFunctions::DevicesScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphDevicesBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data.bind_data->Cast<GraphDevicesBindData>();
 
-    if (bind_data.done) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -346,8 +342,8 @@ void GraphEntraFunctions::DevicesScan(
     idx_t count = 0;
     idx_t max_count = STANDARD_VECTOR_SIZE;
 
-    while (bind_data.current_idx < bind_data.device_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
+    while (state.current_index < bind_data.device_ids.size() && count < max_count) {
+        idx_t i = state.current_index;
 
         SetStrCellNN(output.data[0], count, bind_data.device_ids[i].c_str());
         SetStrCellNN(output.data[1], count, bind_data.display_names[i].c_str());
@@ -356,12 +352,12 @@ void GraphEntraFunctions::DevicesScan(
         SetStrCellNN(output.data[4], count, bind_data.trust_types[i].c_str());
         SetBoolCellNN(output.data[5], count, bind_data.account_enabled[i]);
 
-        bind_data.current_idx++;
+        state.current_index++;
         count++;
     }
 
-    if (bind_data.current_idx >= bind_data.device_ids.size()) {
-        bind_data.done = true;
+    if (state.current_index >= bind_data.device_ids.size()) {
+        state.finished = true;
     }
 
     output.SetCardinality(count);
@@ -447,9 +443,10 @@ void GraphEntraFunctions::SignInLogsScan(
     TableFunctionInput &data,
     DataChunk &output) {
 
-    auto &bind_data = data.bind_data->CastNoConst<GraphSignInLogsBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+    auto &bind_data = data.bind_data->Cast<GraphSignInLogsBindData>();
 
-    if (bind_data.done) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
@@ -457,8 +454,8 @@ void GraphEntraFunctions::SignInLogsScan(
     idx_t count = 0;
     idx_t max_count = STANDARD_VECTOR_SIZE;
 
-    while (bind_data.current_idx < bind_data.log_ids.size() && count < max_count) {
-        idx_t i = bind_data.current_idx;
+    while (state.current_index < bind_data.log_ids.size() && count < max_count) {
+        idx_t i = state.current_index;
 
         SetStrCellNN(output.data[0], count, bind_data.log_ids[i].c_str());
         SetStrCellNN(output.data[1], count, bind_data.user_display_names[i].c_str());
@@ -468,12 +465,12 @@ void GraphEntraFunctions::SignInLogsScan(
         SetStrCellNN(output.data[5], count, bind_data.created_datetimes[i].c_str());
         SetStrCellNN(output.data[6], count, bind_data.statuses[i].c_str());
 
-        bind_data.current_idx++;
+        state.current_index++;
         count++;
     }
 
-    if (bind_data.current_idx >= bind_data.log_ids.size()) {
-        bind_data.done = true;
+    if (state.current_index >= bind_data.log_ids.size()) {
+        state.finished = true;
     }
 
     output.SetCardinality(count);
@@ -487,6 +484,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction users_func("graph_users", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, UsersScan), DATAZOO_GUARD(ERPL_WEB_BANNER, UsersBind));
         users_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        users_func.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(users_func);
         FunctionDescription desc;
         desc.description = "List users from Microsoft Entra ID (Azure Active Directory).";
@@ -500,6 +498,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction groups_func("graph_groups", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, GroupsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, GroupsBind));
         groups_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        groups_func.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(groups_func);
         FunctionDescription desc;
         desc.description = "List groups from Microsoft Entra ID (Azure Active Directory).";
@@ -513,6 +512,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction devices_func("graph_devices", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, DevicesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DevicesBind));
         devices_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        devices_func.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(devices_func);
         FunctionDescription desc;
         desc.description = "List registered devices from Microsoft Entra ID (Azure Active Directory).";
@@ -526,6 +526,7 @@ void GraphEntraFunctions::Register(ExtensionLoader &loader) {
     {
         TableFunction signin_logs_func("graph_signin_logs", {}, DATAZOO_GUARD(ERPL_WEB_BANNER, SignInLogsScan), DATAZOO_GUARD(ERPL_WEB_BANNER, SignInLogsBind));
         signin_logs_func.named_parameters["secret"] = LogicalType::VARCHAR;
+        signin_logs_func.init_global = ScanRowCursorState::Init;
         CreateTableFunctionInfo info(signin_logs_func);
         FunctionDescription desc;
         desc.description = "List sign-in logs from Microsoft Entra ID (requires Azure AD Premium P1 or P2).";

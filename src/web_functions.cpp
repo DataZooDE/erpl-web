@@ -2,6 +2,7 @@
 #include "duckdb_argument_helper.hpp"
 
 #include "telemetry.hpp"
+#include "scan_row_cursor.hpp"
 #include "tracing.hpp"
 
 namespace erpl_web {
@@ -34,7 +35,7 @@ bool HttpBindData::HasMoreResults() const
     return *done == false;
 }
 
-unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
+unsigned int HttpBindData::SendRequest(DataChunk &output) const
 {
     HttpClient client(http_params);
     auto response = client.SendRequest(*request);
@@ -44,9 +45,15 @@ unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
         output.SetValue(i, 0, row[i]);
     }
 
-    *done = true;
     output.SetCardinality(1);
     return 1;
+}
+
+unsigned int HttpBindData::FetchNextResult(DataChunk &output) const
+{
+    const auto rows = SendRequest(output);
+    *done = true;
+    return rows;
 }
 
 // ----------------------------------------------------------------------
@@ -349,6 +356,10 @@ static unique_ptr<FunctionData> HttpDeleteBind(ClientContext &context,
 
 // ----------------------------------------------------------------------
 
+// Scan for the mutating verbs (POST/PUT/PATCH/DELETE). One-shot by design, and the latch
+// stays on the BIND DATA on purpose: the request is issued here, so a second EXECUTE of a
+// bound plan must not repeat it against the remote resource. The read verbs use
+// HttpReadScan below, which re-issues per execution. See scan_row_cursor.hpp.
 static void HttpScan(ClientContext &context, 
                         TableFunctionInput &data, 
                         DataChunk &output) 
@@ -367,6 +378,35 @@ static void HttpScan(ClientContext &context,
         auto rows_fetched = bind_data.FetchNextResult(output);
         ERPL_TRACE_INFO("HTTP_SCAN", "Successfully fetched " + std::to_string(rows_fetched) + " rows");
     } catch (const std::exception& e) {
+        ERPL_TRACE_ERROR("HTTP_SCAN", "Failed to fetch results: " + std::string(e.what()));
+        throw;
+    }
+}
+
+
+// Scan for the read verbs (GET/HEAD). The request is re-issued once per EXECUTION, so a
+// prepared statement run twice performs two GETs and returns a row each time rather than
+// returning nothing the second time (GitHub #202).
+static void HttpReadScan(ClientContext &context,
+                         TableFunctionInput &data,
+                         DataChunk &output)
+{
+    ERPL_TRACE_DEBUG("HTTP_SCAN", "Starting HTTP read scan operation");
+
+    auto &bind_data = data.bind_data->Cast<HttpBindData>();
+    auto &state = data.global_state->Cast<ScanRowCursorState>();
+
+    if (state.finished) {
+        ERPL_TRACE_DEBUG("HTTP_SCAN", "Response already emitted for this execution");
+        output.SetCardinality(0);
+        return;
+    }
+    state.finished = true;
+
+    try {
+        const auto rows_fetched = bind_data.SendRequest(output);
+        ERPL_TRACE_INFO("HTTP_SCAN", "Successfully fetched " + std::to_string(rows_fetched) + " rows");
+    } catch (const std::exception &e) {
         ERPL_TRACE_ERROR("HTTP_SCAN", "Failed to fetch results: " + std::string(e.what()));
         throw;
     }
@@ -411,7 +451,8 @@ TableFunctionSet CreatHttpFunction(const std::string &http_verb, const duckdb::t
 {
     TableFunctionSet function_set(StringUtil::Format("http_%s", http_verb));
 	
-    auto get_with_url = TableFunction({ LogicalType::VARCHAR}, HttpScan, bind_func);
+    auto get_with_url = TableFunction({ LogicalType::VARCHAR}, HttpReadScan, bind_func);
+    get_with_url.init_global = ScanRowCursorState::Init;
     AddDefaultHttpNamedParams(get_with_url);
 
     function_set.AddFunction(get_with_url);

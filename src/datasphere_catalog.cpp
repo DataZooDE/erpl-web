@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include "erpl_web_banner.hpp"
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -303,12 +304,32 @@ DatasphereDescribeBindData::DatasphereDescribeBindData(std::shared_ptr<ODataServ
 {
 }
 
+// NOTE ON REACHABILITY: this function is currently DEAD CODE. Its only caller gates on
+// `resource_data[0].size() < 15`, and both paths that build an asset row produce exactly
+// 15 columns (the DWAAS path pushes 15; the catalog fallback resize(15)s). Rows shorter
+// than that are 2-element error rows, which hit the `size() < 8` return below.
+//
+// The credential gate in here is therefore defence in depth, not a live fix: the #205
+// exposure on this path is LATENT. It is written rather than skipped because the guard
+// must already be in place if reachability is ever restored - at which point the wrong
+// column index below would also start mattering. Restoring reachability is a behavioural
+// change (it would start issuing metadata requests that never happen today) and is
+// deliberately not part of the #205 fix.
 std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadata(duckdb::ClientContext &context, 
                                                                                    const OAuth2Config &config,
                                                                                    const std::shared_ptr<HttpAuthParams> &auth_params) {
     std::vector<duckdb::Value> extended_data;
     
     try {
+        // The origin every service-supplied metadata URL is measured against. It comes from
+        // the CONFIGURED tenant, not from the response: tenant_name / data_center are also
+        // parsed out of the returned URLs further down, and an origin derived from the URL
+        // under test would make the credential gate vacuous (GitHub #205).
+        const std::string catalog_service_origin =
+            (!config.tenant_name.empty() && !config.data_center.empty())
+                ? DatasphereUrlBuilder::BuildCatalogUrl(config.tenant_name, config.data_center)
+                : std::string();
+
         // Get the basic asset data to extract URLs
         if (resource_data.empty() || resource_data[0].size() < 8) {
             ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Cannot fetch extended metadata without basic asset data");
@@ -317,7 +338,11 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         
         auto &asset_row = resource_data[0];
         std::string relational_metadata_url = asset_row[3].ToString(); // assetRelationalMetadataUrl
-        std::string analytical_metadata_url = asset_row[6].ToString(); // assetAnalyticalMetadataUrl
+        // Column 5, not 6: 5 is assetAnalyticalMetadataUrl and 6 is assetAnalyticalDataUrl
+        // (see the row construction below and the projection in the describe scan). This
+        // read has always named the wrong column; it is latent only because this whole
+        // function is currently unreachable - see the note at the top.
+        std::string analytical_metadata_url = asset_row[5].ToString(); // assetAnalyticalMetadataUrl
         std::string supports_analytical = asset_row[7].ToString(); // supports_analytical_queries
         
         // Extract tenant and data center from the analytical metadata URL if available
@@ -347,7 +372,8 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         std::string relational_schema = "Not available";
         if (relational_metadata_url != "NULL" && !relational_metadata_url.empty()) {
             try {
-                relational_schema = FetchMetadataSummary(relational_metadata_url, auth_params, "relational");
+                relational_schema = FetchMetadataSummary(relational_metadata_url, auth_params, "relational",
+                                                        catalog_service_origin);
         } catch (...) {
                 relational_schema = "Fetch failed";
             }
@@ -358,7 +384,8 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
         duckdb::Value analytical_schema = duckdb::Value("Not available");
         if (analytical_metadata_url != "NULL" && !analytical_metadata_url.empty()) {
             try {
-                analytical_schema = FetchDetailedAnalyticalSchema(analytical_metadata_url, auth_params);
+                analytical_schema = FetchDetailedAnalyticalSchema(analytical_metadata_url, auth_params,
+                                                                 catalog_service_origin);
             } catch (...) {
                 analytical_schema = duckdb::Value("Fetch failed");
             }
@@ -402,18 +429,53 @@ std::vector<duckdb::Value> DatasphereDescribeBindData::FetchAssetExtendedMetadat
     return extended_data;
 }
 
+
+// A URL that arrives in a response body is attacker-controlled the moment the service is
+// compromised or impersonated, so the caller's bearer token may only follow it when it
+// names the origin this client was opened against. Returns the credentials to use: the
+// caller's for a same-origin URL, none otherwise.
+//
+// Fails CLOSED. Written as `origin.empty() || IsSameOrigin(...)` this would attach
+// credentials to whatever host the service named whenever the origin had not been
+// recorded - the wrong polarity for a credential decision (GitHub #187, #205).
+std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
+    const std::string &url, const std::string &service_origin,
+    const std::shared_ptr<HttpAuthParams> &auth_params, const char *what)
+{
+    if (!auth_params) {
+        return nullptr;
+    }
+    try {
+        if (!service_origin.empty() && HttpUrl(url).IsSameOrigin(HttpUrl(service_origin))) {
+            return auth_params;
+        }
+    } catch (const std::exception &e) {
+        // A URL we cannot parse is not a URL we send credentials to.
+        ERPL_TRACE_WARN("DATASPHERE_CATALOG", "Could not compare origins: " + std::string(e.what()));
+    }
+    ERPL_TRACE_WARN("DATASPHERE_CATALOG",
+                    std::string(what) + " URL from the catalog response points at a different "
+                    "origin than the service (" + service_origin + " -> " + url +
+                    "); requesting it without credentials");
+    return nullptr;
+}
+
 std::string DatasphereDescribeBindData::FetchMetadataSummary(const std::string &metadata_url, 
                                                            const std::shared_ptr<HttpAuthParams> &auth_params,
-                                                           const std::string &metadata_type) {
+                                                           const std::string &metadata_type,
+                                                           const std::string &service_origin) {
     try {
         // Create HTTP client for metadata fetch
         auto http_client = std::make_shared<HttpClient>();
-        
+
+        const auto credentials = CredentialsForServiceSuppliedUrl(metadata_url, service_origin,
+                                                                  auth_params, "Relational metadata");
+
         // Fetch metadata (we'll just get a summary for now to avoid parsing complex XML/JSON)
         auto metadata_client = std::make_shared<ODataServiceClient>(
             http_client,
             HttpUrl(metadata_url),
-            auth_params
+            credentials
         );
         
         auto metadata_response = metadata_client->Get();
@@ -437,18 +499,22 @@ std::string DatasphereDescribeBindData::FetchMetadataSummary(const std::string &
 }
 
 duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const std::string &metadata_url, 
-                                                                       const std::shared_ptr<HttpAuthParams> &auth_params) {
+                                                                       const std::shared_ptr<HttpAuthParams> &auth_params,
+                                                                       const std::string &service_origin) {
     try {
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Fetching detailed analytical schema from: " + metadata_url);
         
         // Create HTTP client for metadata fetch
         auto http_client = std::make_shared<HttpClient>();
-        
+
+        const auto credentials = CredentialsForServiceSuppliedUrl(metadata_url, service_origin,
+                                                                  auth_params, "Analytical metadata");
+
         // Fetch the actual metadata document
         auto metadata_client = std::make_shared<ODataServiceClient>(
             http_client, 
             HttpUrl(metadata_url),
-            auth_params
+            credentials
         );
         
         auto metadata_response = metadata_client->Get();
@@ -479,9 +545,13 @@ duckdb::Value DatasphereDescribeBindData::FetchDetailedAnalyticalSchema(const st
         auto metadata_http_client = CreateODataHttpClient();
         
         // Create a direct HTTP request to the metadata URL
+        // The $metadata URL is derived from the same service-supplied URL, so it is gated
+        // against the same origin rather than trusted because it was rewritten here.
+        const auto endpoint_credentials = CredentialsForServiceSuppliedUrl(
+            metadata_endpoint_url, service_origin, auth_params, "Analytical $metadata");
         HttpRequest metadata_request(HttpMethod::GET, HttpUrl(metadata_endpoint_url));
-        if (auth_params) {
-            metadata_request.AuthHeadersFromParams(*auth_params);
+        if (endpoint_credentials) {
+            metadata_request.AuthHeadersFromParams(*endpoint_credentials);
         }
         
         // Execute the request
@@ -1136,17 +1206,21 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
                                            duckdb::TableFunctionInput &data_p, 
                                            duckdb::DataChunk &output) {
     auto &bind_data = (DatasphereDescribeBindData &)*data_p.bind_data;
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     if (output.GetCapacity() == 0) {
         return;
     }
     
     // Check if we've already returned the data
-    if (bind_data.data_returned) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
     
+    // Bind-time snapshot by design: the details are fetched on the first execution and
+    // kept on the bind data, so re-executing a prepared statement replays them. The
+    // emit latch above is per-execution. See the contract in graph_json_scan.hpp.
     // Load resource details if not already loaded
     if (bind_data.resource_data.empty()) {
         bind_data.LoadResourceDetails(context);
@@ -1174,7 +1248,7 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
     }
     
     // Mark that we've returned the data
-    bind_data.data_returned = true;
+    state.finished = true;
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Returned actual space details for: " + bind_data.resource_id);
 }
@@ -1183,17 +1257,21 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
                                            duckdb::TableFunctionInput &data_p, 
                                            duckdb::DataChunk &output) {
     auto &bind_data = (DatasphereDescribeBindData &)*data_p.bind_data;
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     if (output.GetCapacity() == 0) {
         return;
     }
     
     // Check if we've already returned the data
-    if (bind_data.data_returned) {
+    if (state.finished) {
         output.SetCardinality(0);
         return;
     }
     
+    // Bind-time snapshot by design: the details are fetched on the first execution and
+    // kept on the bind data, so re-executing a prepared statement replays them. The
+    // emit latch above is per-execution. See the contract in graph_json_scan.hpp.
     // Load resource details if not already loaded
     if (bind_data.resource_data.empty()) {
         ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Loading resource details for asset: " + bind_data.resource_id);
@@ -1244,7 +1322,7 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
     }
     
     // Mark that we've returned the data
-    bind_data.data_returned = true;
+    state.finished = true;
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Returned actual asset details for: " + bind_data.resource_id + " in space: " + bind_data.space_id);
 }
@@ -1255,15 +1333,16 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
     
     // Single implementation using DWAAS core API to match CLI behavior exactly
     // Signature: no args → single VARCHAR column 'name'
-    function_set.AddFunction(duckdb::TableFunction(
+    auto scan_function = duckdb::TableFunction(
         {},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpacesListBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpacesListBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.space_names.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.space_names[bind.next_index].c_str());
-                bind.next_index++;
+            while (state.current_index < bind.space_names.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.space_names[state.current_index].c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1314,7 +1393,9 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             }
             return std::move(bind);
         }
-    ));
+    );
+    scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(scan_function);
 
     return function_set;
 }
@@ -1323,17 +1404,18 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
     duckdb::TableFunctionSet function_set("datasphere_show_assets");
     
     // Replace with DWAAS core API listing across multiple object categories
-    function_set.AddFunction(duckdb::TableFunction(
+    auto scan_function = duckdb::TableFunction(
         {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
-                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
-                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
-                bind.next_index++;
+            while (state.current_index < bind.items.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.items[state.current_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[state.current_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[state.current_index].technical_name.c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1482,21 +1564,24 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             }
             return std::move(bind);
         }
-    ));
+    );
+    scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(scan_function);
 
     // Function 2: Show all assets from all accessible spaces (new functionality)
-    function_set.AddFunction(duckdb::TableFunction(
+    auto all_spaces_scan_function = duckdb::TableFunction(
         {},
         // scan
         [](duckdb::ClientContext &context, duckdb::TableFunctionInput &data_p, duckdb::DataChunk &output) {
-            auto &bind = data_p.bind_data->CastNoConst<DatasphereSpaceObjectsBindData>();
+            auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+            auto &bind = data_p.bind_data->Cast<DatasphereSpaceObjectsBindData>();
             idx_t count = 0;
-            while (bind.next_index < bind.items.size() && count < output.GetCapacity()) {
-                SetStrCellNN(output.data[0], count, bind.items[bind.next_index].name.c_str());
-                SetStrCellNN(output.data[1], count, bind.items[bind.next_index].object_type.c_str());
-                SetStrCellNN(output.data[2], count, bind.items[bind.next_index].technical_name.c_str());
-                SetStrCellNN(output.data[3], count, bind.items[bind.next_index].space_name.c_str());
-                bind.next_index++;
+            while (state.current_index < bind.items.size() && count < output.GetCapacity()) {
+                SetStrCellNN(output.data[0], count, bind.items[state.current_index].name.c_str());
+                SetStrCellNN(output.data[1], count, bind.items[state.current_index].object_type.c_str());
+                SetStrCellNN(output.data[2], count, bind.items[state.current_index].technical_name.c_str());
+                SetStrCellNN(output.data[3], count, bind.items[state.current_index].space_name.c_str());
+                state.current_index++;
                 count++;
             }
             output.SetCardinality(count);
@@ -1659,7 +1744,9 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             return std::move(bind);
         }
-    ));
+    );
+    all_spaces_scan_function.init_global = ScanRowCursorState::Init;
+    function_set.AddFunction(all_spaces_scan_function);
 
     return function_set;
 }
@@ -1668,6 +1755,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     duckdb::TableFunctionSet function_set("datasphere_describe_space");
     
     duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceBind));
+    describe_space.init_global = ScanRowCursorState::Init;
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1678,6 +1766,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     
     duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
                                         DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetBind));
+    describe_asset.init_global = ScanRowCursorState::Init;
     
     function_set.AddFunction(describe_asset);
     return function_set;

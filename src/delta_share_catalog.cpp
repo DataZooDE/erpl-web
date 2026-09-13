@@ -35,19 +35,28 @@ using duckdb::PostHogTelemetry;
 // Helper Bind Data Structures
 // ============================================================================
 
+// Per-execution scan cursor shared by the delta-share catalog functions. The
+// position must not live on the bind data: a bound plan that is EXECUTEd twice
+// would otherwise return zero rows the second time (GitHub #202).
+struct DeltaShareRowCursorState : public duckdb::GlobalTableFunctionState {
+	size_t current_index = 0;
+	bool finished = false;
+
+	static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
+	                                                                duckdb::TableFunctionInitInput &) {
+		return duckdb::make_uniq<DeltaShareRowCursorState>();
+	}
+};
+
 struct DeltaShareShowSharesBindData : public TableFunctionData {
 public:
 	std::vector<DeltaShareInfo> shares;
-	size_t current_index = 0;
-	bool finished = false;
 
 	DeltaShareShowSharesBindData() = default;
 
 	duckdb::unique_ptr<FunctionData> Copy() const override {
 		auto result = duckdb::make_uniq<DeltaShareShowSharesBindData>();
 		result->shares = shares;
-		result->current_index = current_index;
-		result->finished = finished;
 		return std::move(result);
 	}
 };
@@ -55,16 +64,12 @@ public:
 struct DeltaShareShowSchemasBindData : public TableFunctionData {
 public:
 	std::vector<DeltaSchemaInfo> schemas;
-	size_t current_index = 0;
-	bool finished = false;
 
 	DeltaShareShowSchemasBindData() = default;
 
 	duckdb::unique_ptr<FunctionData> Copy() const override {
 		auto result = duckdb::make_uniq<DeltaShareShowSchemasBindData>();
 		result->schemas = schemas;
-		result->current_index = current_index;
-		result->finished = finished;
 		return std::move(result);
 	}
 };
@@ -72,16 +77,12 @@ public:
 struct DeltaShareShowTablesBindData : public TableFunctionData {
 public:
 	std::vector<DeltaTableInfo> tables;
-	size_t current_index = 0;
-	bool finished = false;
 
 	DeltaShareShowTablesBindData() = default;
 
 	duckdb::unique_ptr<FunctionData> Copy() const override {
 		auto result = duckdb::make_uniq<DeltaShareShowTablesBindData>();
 		result->tables = tables;
-		result->current_index = current_index;
-		result->finished = finished;
 		return std::move(result);
 	}
 };
@@ -92,25 +93,26 @@ public:
 
 static void DeltaShareShowSharesScan(ClientContext &context, TableFunctionInput &data_p,
 									   DataChunk &output) {
-	auto &bind_data = data_p.bind_data->CastNoConst<DeltaShareShowSharesBindData>();
+	auto &state = data_p.global_state->Cast<DeltaShareRowCursorState>();
+	auto &bind_data = data_p.bind_data->Cast<DeltaShareShowSharesBindData>();
 
-	if (bind_data.finished) {
+	if (state.finished) {
 		output.SetCardinality(0);
 		return;
 	}
 
 	idx_t count = 0;
-	while (bind_data.current_index < bind_data.shares.size() && count < output.GetCapacity()) {
-		const auto &share = bind_data.shares[bind_data.current_index];
+	while (state.current_index < bind_data.shares.size() && count < output.GetCapacity()) {
+		const auto &share = bind_data.shares[state.current_index];
 
 		output.SetValue(0, count, Value(share.name));
 		output.SetValue(1, count, Value(share.id));
 
-		bind_data.current_index++;
+		state.current_index++;
 		count++;
 	}
 
-	bind_data.finished = (bind_data.current_index >= bind_data.shares.size());
+	state.finished = (state.current_index >= bind_data.shares.size());
 	output.SetCardinality(count);
 }
 
@@ -150,8 +152,6 @@ DeltaShareShowSharesBind(ClientContext &context, TableFunctionBindInput &input,
 		// Create and populate bind data
 		auto bind = duckdb::make_uniq<DeltaShareShowSharesBindData>();
 		bind->shares = shares;
-		bind->current_index = 0;
-		bind->finished = shares.empty();
 
 		return std::move(bind);
 	} catch (const std::exception &e) {
@@ -166,25 +166,26 @@ DeltaShareShowSharesBind(ClientContext &context, TableFunctionBindInput &input,
 
 static void DeltaShareShowSchemasScan(ClientContext &context, TableFunctionInput &data_p,
 									    DataChunk &output) {
-	auto &bind_data = data_p.bind_data->CastNoConst<DeltaShareShowSchemasBindData>();
+	auto &state = data_p.global_state->Cast<DeltaShareRowCursorState>();
+	auto &bind_data = data_p.bind_data->Cast<DeltaShareShowSchemasBindData>();
 
-	if (bind_data.finished) {
+	if (state.finished) {
 		output.SetCardinality(0);
 		return;
 	}
 
 	idx_t count = 0;
-	while (bind_data.current_index < bind_data.schemas.size() && count < output.GetCapacity()) {
-		const auto &schema = bind_data.schemas[bind_data.current_index];
+	while (state.current_index < bind_data.schemas.size() && count < output.GetCapacity()) {
+		const auto &schema = bind_data.schemas[state.current_index];
 
 		output.SetValue(0, count, Value(schema.name));
 		output.SetValue(1, count, Value(schema.share));
 
-		bind_data.current_index++;
+		state.current_index++;
 		count++;
 	}
 
-	bind_data.finished = (bind_data.current_index >= bind_data.schemas.size());
+	state.finished = (state.current_index >= bind_data.schemas.size());
 	output.SetCardinality(count);
 }
 
@@ -227,8 +228,6 @@ DeltaShareShowSchemasBind(ClientContext &context, TableFunctionBindInput &input,
 		// Create and populate bind data
 		auto bind = duckdb::make_uniq<DeltaShareShowSchemasBindData>();
 		bind->schemas = schemas;
-		bind->current_index = 0;
-		bind->finished = schemas.empty();
 
 		return std::move(bind);
 	} catch (const std::exception &e) {
@@ -244,16 +243,17 @@ DeltaShareShowSchemasBind(ClientContext &context, TableFunctionBindInput &input,
 
 static void DeltaShareShowTablesScan(ClientContext &context, TableFunctionInput &data_p,
 									   DataChunk &output) {
-	auto &bind_data = data_p.bind_data->CastNoConst<DeltaShareShowTablesBindData>();
+	auto &state = data_p.global_state->Cast<DeltaShareRowCursorState>();
+	auto &bind_data = data_p.bind_data->Cast<DeltaShareShowTablesBindData>();
 
-	if (bind_data.finished) {
+	if (state.finished) {
 		output.SetCardinality(0);
 		return;
 	}
 
 	idx_t count = 0;
-	while (bind_data.current_index < bind_data.tables.size() && count < output.GetCapacity()) {
-		const auto &table = bind_data.tables[bind_data.current_index];
+	while (state.current_index < bind_data.tables.size() && count < output.GetCapacity()) {
+		const auto &table = bind_data.tables[state.current_index];
 
 		output.SetValue(0, count, Value(table.name));
 		output.SetValue(1, count, Value(table.schema));
@@ -265,11 +265,11 @@ static void DeltaShareShowTablesScan(ClientContext &context, TableFunctionInput 
 			output.SetValue(4, count, Value());
 		}
 
-		bind_data.current_index++;
+		state.current_index++;
 		count++;
 	}
 
-	bind_data.finished = (bind_data.current_index >= bind_data.tables.size());
+	state.finished = (state.current_index >= bind_data.tables.size());
 	output.SetCardinality(count);
 }
 
@@ -317,8 +317,6 @@ DeltaShareShowTablesBind(ClientContext &context, TableFunctionBindInput &input,
 		// Create and populate bind data
 		auto bind = duckdb::make_uniq<DeltaShareShowTablesBindData>();
 		bind->tables = tables;
-		bind->current_index = 0;
-		bind->finished = tables.empty();
 
 		return std::move(bind);
 	} catch (const std::exception &e) {
@@ -336,6 +334,7 @@ static TableFunctionSet CreateDeltaShareShowSharesFunctionInternal() {
 	TableFunctionSet function_set("delta_share_show_shares");
 
 	duckdb::TableFunction func({LogicalTypeId::VARCHAR}, DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSharesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSharesBind));
+	func.init_global = DeltaShareRowCursorState::Init;
 
 	function_set.AddFunction(func);
 	return function_set;
@@ -346,6 +345,7 @@ static TableFunctionSet CreateDeltaShareShowSchemasFunctionInternal() {
 
 	duckdb::TableFunction func({LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR},
 							   DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSchemasScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowSchemasBind));
+	func.init_global = DeltaShareRowCursorState::Init;
 
 	function_set.AddFunction(func);
 	return function_set;
@@ -356,6 +356,7 @@ static TableFunctionSet CreateDeltaShareShowTablesFunctionInternal() {
 
 	duckdb::TableFunction func({LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR, LogicalTypeId::VARCHAR},
 							   DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowTablesScan), DATAZOO_GUARD(ERPL_WEB_BANNER, DeltaShareShowTablesBind));
+	func.init_global = DeltaShareRowCursorState::Init;
 
 	function_set.AddFunction(func);
 	return function_set;

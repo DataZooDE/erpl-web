@@ -15,6 +15,7 @@
 #include "duckdb/parser/column_definition.hpp"
 #include "yyjson.hpp"
 #include <mutex>
+#include "graph_json_scan.hpp"
 
 using namespace duckdb_yyjson;
 using namespace duckdb;
@@ -31,27 +32,7 @@ struct ExcelTableScanBindData : public duckdb::TableFunctionData {
 	std::string drive_id;
 	std::shared_ptr<HttpAuthParams> auth_params;
 	std::vector<std::string> column_names;
-	std::string json_response;
-	yyjson_doc *parsed_doc = nullptr;
-	yyjson_arr_iter item_iter = {};
-	bool done = false;
 	duckdb::TableCatalogEntry *table_entry = nullptr;
-
-	~ExcelTableScanBindData() override {
-		if (parsed_doc) { yyjson_doc_free(parsed_doc); }
-	}
-
-	bool InitIterator() {
-		parsed_doc = yyjson_read(json_response.c_str(), json_response.length(), 0);
-		json_response.clear();
-		json_response.shrink_to_fit();
-		if (!parsed_doc) { return false; }
-		yyjson_val *root = yyjson_doc_get_root(parsed_doc);
-		yyjson_val *arr  = yyjson_obj_get(root, "value");
-		if (!arr || !yyjson_is_arr(arr)) { return false; }
-		yyjson_arr_iter_init(arr, &item_iter);
-		return true;
-	}
 };
 
 static duckdb::BindInfo ExcelTableScanGetBindInfo(const duckdb::optional_ptr<duckdb::FunctionData> bind_data_p) {
@@ -63,22 +44,23 @@ static void ExcelTableScan(duckdb::ClientContext &context,
                             duckdb::TableFunctionInput &data,
                             duckdb::DataChunk &output)
 {
-	auto &bind_data = data.bind_data->CastNoConst<ExcelTableScanBindData>();
+	auto &bind_data = data.bind_data->Cast<ExcelTableScanBindData>();
+	auto &state = data.global_state->Cast<GraphJsonArrayScanState>();
 
-	if (bind_data.done) {
+	if (state.done) {
 		output.SetCardinality(0);
 		return;
 	}
 
 	// Lazy-fetch on first call
-	if (!bind_data.parsed_doc && bind_data.json_response.empty()) {
+	if (!state.parsed_doc && state.json_response.empty()) {
 		GraphExcelClient client(bind_data.auth_params);
-		bind_data.json_response = client.GetTableRowsByPath(bind_data.file_path, bind_data.table_name, bind_data.drive_id);
+		state.json_response = client.GetTableRowsByPath(bind_data.file_path, bind_data.table_name, bind_data.drive_id);
 	}
 
-	if (!bind_data.parsed_doc) {
-		if (!bind_data.InitIterator()) {
-			bind_data.done = true;
+	if (!state.parsed_doc) {
+		if (!state.InitIterator()) {
+			state.done = true;
 			output.SetCardinality(0);
 			return;
 		}
@@ -88,7 +70,7 @@ static void ExcelTableScan(duckdb::ClientContext &context,
 	idx_t row_idx = 0;
 	yyjson_val *item;
 
-	while (row_idx < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&bind_data.item_iter))) {
+	while (row_idx < STANDARD_VECTOR_SIZE && (item = yyjson_arr_iter_next(&state.item_iter))) {
 		// Each row object: { "values": [[cell1, cell2, ...]], ... }
 		yyjson_val *values_arr = yyjson_obj_get(item, "values");
 		yyjson_val *inner_arr  = (values_arr && yyjson_is_arr(values_arr))
@@ -127,7 +109,7 @@ static void ExcelTableScan(duckdb::ClientContext &context,
 		row_idx++;
 	}
 
-	if (row_idx < STANDARD_VECTOR_SIZE) { bind_data.done = true; }
+	if (row_idx < STANDARD_VECTOR_SIZE) { state.done = true; }
 	output.SetCardinality(row_idx);
 }
 
@@ -423,7 +405,8 @@ duckdb::TableFunction ExcelTableEntry::GetScanFunction(duckdb::ClientContext &,
 
 	bind_data = std::move(scan_data);
 
-	duckdb::TableFunction fn("excel_table_scan", {}, ExcelTableScan, nullptr, nullptr);
+	duckdb::TableFunction fn("excel_table_scan", {}, ExcelTableScan, nullptr,
+	                         GraphJsonArrayScanState::Init);
 	fn.get_bind_info = ExcelTableScanGetBindInfo;
 	return fn;
 }

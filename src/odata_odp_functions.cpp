@@ -11,6 +11,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include "scan_row_cursor.hpp"
 
 namespace erpl_web {
 
@@ -153,14 +154,19 @@ static void SapODataShowScan(duckdb::ClientContext &context,
                              duckdb::TableFunctionInput &data_p, 
                              duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<SapODataShowBindData>();
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     try {
+        // Bind-time snapshot by design: the service catalogue is fetched once and kept on
+        // the bind data, so a re-executed prepared statement replays it instead of
+        // re-discovering. The row cursor is per-execution, so every execution returns the
+        // full list. See the re-execution contract in graph_json_scan.hpp.
         if (!bind_data.data_loaded) {
             bind_data.LoadServiceData();
         }
         
         // Return the discovered services
-        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Scan: service_data.size() = " + std::to_string(bind_data.service_data.size()) + ", next_index = " + std::to_string(bind_data.next_index));
+        ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Scan: service_data.size() = " + std::to_string(bind_data.service_data.size()) + ", next_index = " + std::to_string(state.current_index));
         if (bind_data.service_data.empty()) {
             ERPL_TRACE_DEBUG("SAP_ODATA_SHOW", "Scan: service_data is empty, returning 0 rows");
             output.SetCardinality(0);
@@ -169,7 +175,7 @@ static void SapODataShowScan(duckdb::ClientContext &context,
     
     // Get the next batch of services (align with STANDARD_VECTOR_SIZE semantics)
     const idx_t target = STANDARD_VECTOR_SIZE;
-    idx_t start_idx = bind_data.next_index;
+    idx_t start_idx = state.current_index;
     idx_t end_idx = std::min(start_idx + target, static_cast<idx_t>(bind_data.service_data.size()));
     idx_t count = end_idx - start_idx;
     
@@ -191,7 +197,7 @@ static void SapODataShowScan(duckdb::ClientContext &context,
     }
     
     output.SetCardinality(count);
-    bind_data.next_index = end_idx;
+    state.current_index = end_idx;
     
     } catch (const std::exception& e) {
         // Convert the exception to a DuckDB error that will be shown to the user
@@ -236,7 +242,8 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
                              duckdb::TableFunctionInput &data_p, 
                              duckdb::DataChunk &output) {
     auto &bind_data = data_p.bind_data->CastNoConst<OdpODataShowBindData>();
-    
+    auto &state = data_p.global_state->Cast<ScanRowCursorState>();
+
     try {
         if (!bind_data.data_loaded) {
             ERPL_TRACE_DEBUG("ODP_SCAN", "Loading ODP service data in scan function");
@@ -254,7 +261,7 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
     
     // Get the next batch of services (align with STANDARD_VECTOR_SIZE semantics)
     const idx_t target = STANDARD_VECTOR_SIZE;
-    idx_t start_idx = bind_data.next_index;
+    idx_t start_idx = state.current_index;
     idx_t end_idx = std::min(start_idx + target, static_cast<idx_t>(bind_data.odp_service_data.size()));
     idx_t count = end_idx - start_idx;
     
@@ -281,7 +288,7 @@ static void OdpODataShowScan(duckdb::ClientContext &context,
     }
     
     output.SetCardinality(count);
-    bind_data.next_index = end_idx;
+    state.current_index = end_idx;
     
     } catch (const std::exception& e) {
         // Convert the exception to a DuckDB error that will be shown to the user
@@ -869,6 +876,7 @@ duckdb::TableFunctionSet CreateODataSapShowFunction() {
     
     // Add named parameters for optional configuration
     sap_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+    sap_odata_show.init_global = ScanRowCursorState::Init;
     
     function_set.AddFunction(sap_odata_show);
     
@@ -888,6 +896,8 @@ duckdb::TableFunctionSet CreateOdpODataShowFunction() {
     // Add named parameters for optional configuration
     odp_odata_show.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
+    odp_odata_show.init_global = ScanRowCursorState::Init;
+
     function_set.AddFunction(odp_odata_show);
     
     ERPL_TRACE_DEBUG("ODP_FUNCTION_REGISTRATION", "=== REGISTERING ODP_ODATA_SHOW FUNCTION ===");

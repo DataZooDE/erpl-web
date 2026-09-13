@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "odata_url_helpers.hpp"
 #include "duckdb.hpp"
 #include "graph_sharepoint_client.hpp"
 
@@ -158,4 +159,16 @@ TEST_CASE("Microsoft Graph SharePoint uses Graph Secret Type", "[graph_sharepoin
         // Cleanup
         con.Query("DROP SECRET test_sp_secret");
     }
+}
+
+// GitHub #202 review, F9: ResolveSiteId tested the scheme prefixes byte-exactly while the
+// shared LooksLikeAbsoluteHttpUrl lowercases first, so an uppercase scheme fell into the
+// name-search path and failed with "No SharePoint site found". One predicate now.
+TEST_CASE("an absolute site URL is recognised whatever the scheme's case",
+          "[graph_sharepoint][url_builder]") {
+    REQUIRE(erpl_web::LooksLikeAbsoluteHttpUrl("https://tenant.sharepoint.com/sites/Finance"));
+    REQUIRE(erpl_web::LooksLikeAbsoluteHttpUrl("HTTPS://tenant.sharepoint.com/sites/Finance"));
+    REQUIRE(erpl_web::LooksLikeAbsoluteHttpUrl("Http://tenant.sharepoint.com"));
+    REQUIRE_FALSE(erpl_web::LooksLikeAbsoluteHttpUrl("Finance"));
+    REQUIRE_FALSE(erpl_web::LooksLikeAbsoluteHttpUrl("tenant.sharepoint.com/sites/Finance"));
 }

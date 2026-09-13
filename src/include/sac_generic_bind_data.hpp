@@ -22,8 +22,8 @@ template <typename ItemType>
 class SacGenericBindData : public duckdb::TableFunctionData {
 public:
     std::vector<ItemType> items;       // Collection of items (models, stories, etc.)
-    size_t current_index = 0;          // Current iteration position
-    bool finished = false;             // Scan completion flag
+    // The scan position is NOT here: it lives on ScanRowCursorState, per execution, so a
+    // bound plan returns every row on each EXECUTE (GitHub #202). See scan_row_cursor.hpp.
 
     SacGenericBindData() = default;
     virtual ~SacGenericBindData() = default;
@@ -47,8 +47,8 @@ class SacSingleItemBindData : public duckdb::TableFunctionData {
 public:
     ItemType item;                     // Single item to return
     bool item_found = false;           // Whether item was found/retrieved
-    size_t current_index = 0;          // Current iteration position (0 or 1 for single row)
-    bool finished = false;             // Scan completion flag
+    // The scan position lives on ScanRowCursorState, per execution - see
+    // scan_row_cursor.hpp and GitHub #202.
 
     SacSingleItemBindData() = default;
     virtual ~SacSingleItemBindData() = default;
@@ -70,8 +70,8 @@ public:
     ItemType item;                     // Main item (model, story)
     std::vector<std::string> details;  // Additional details (dimensions, measures, etc.)
     bool item_found = false;           // Whether item was found/retrieved
-    size_t current_index = 0;          // Current iteration position
-    bool finished = false;             // Scan completion flag
+    // The scan position lives on ScanRowCursorState, per execution - see
+    // scan_row_cursor.hpp and GitHub #202.
 
     SacItemWithDetailsBindData() = default;
     virtual ~SacItemWithDetailsBindData() = default;

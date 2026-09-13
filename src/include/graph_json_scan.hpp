@@ -1,19 +1,51 @@
 #pragma once
 
 #include "duckdb/function/table_function.hpp"
+#include "scan_row_cursor.hpp"
 #include "yyjson.hpp"
 #include <string>
 
 namespace erpl_web {
 
-struct GraphJsonArrayScanBindData : public duckdb::TableFunctionData {
+// Per-execution scan cursor: the fetched response, the parsed document and the
+// array iterator over it. A fresh instance is created for every execution of
+// the bound plan, which is what makes a bound plan re-executable (GitHub #75, #202).
+//
+// The iterator sits in GLOBAL rather than local state, which is only safe because none of
+// these functions overrides MaxThreads(): the base GlobalTableFunctionState returns 1, so
+// DuckDB runs one thread per scan and no two threads call yyjson_arr_iter_next on this
+// iterator. Any function that later declares itself parallel must move the iterator into
+// a LocalTableFunctionState and leave only the payload here.
+struct GraphJsonArrayScanState : public duckdb::GlobalTableFunctionState {
     std::string json_response;
     duckdb_yyjson::yyjson_doc *parsed_doc = nullptr;
     duckdb_yyjson::yyjson_arr_iter item_iter = {};
     bool done = false;
 
-    ~GraphJsonArrayScanBindData() override {
+    ~GraphJsonArrayScanState() override {
         ResetDoc();
+    }
+
+    static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
+                                                                    duckdb::TableFunctionInitInput &) {
+        return duckdb::make_uniq<GraphJsonArrayScanState>();
+    }
+
+    // Seed the state from a response the bind phase already fetched (kept on the bind
+    // data as an immutable payload, so every execution can re-seed from it).
+    //
+    // Re-execution contract. A reader that fetches in the SCAN re-authorizes and re-fetches
+    // on every execution, so a repeated EXECUTE sees current data and a revoked credential
+    // fails. A reader that fetches at BIND and re-seeds through this method replays that
+    // bind-time snapshot instead: no second request, no second authorization. Use SeedFrom
+    // only where bind must fetch anyway to infer the schema (graph_excel_read), and say so
+    // in the function's description; everywhere else fetch in the scan.
+    void SeedFrom(const std::string &payload) {
+        json_response = payload;
+    }
+
+    bool NeedsFetch() const {
+        return parsed_doc == nullptr && json_response.empty();
     }
 
     bool InitIterator(const char *array_key = "value") {
@@ -40,6 +72,103 @@ private:
         if (parsed_doc) {
             duckdb_yyjson::yyjson_doc_free(parsed_doc);
             parsed_doc = nullptr;
+        }
+    }
+};
+
+// Per-execution cursor for a scan that follows @odata.nextLink across pages, holding one
+// page at a time (the Teams and Outlook readers). The paging position belongs here for
+// the same reason the iterator does: a bound plan executed twice must start at page one.
+struct GraphPagedScanState : public duckdb::GlobalTableFunctionState {
+    // Upper bound on pages followed in one scan, matching GraphClient::GetAllPagesMerged
+    // and ODataClient. Following links across empty pages (which the reader must do, see
+    // NextItem) makes an unbounded authenticated request loop reachable otherwise: the
+    // self-reference check below catches A->A but not A->B->A, nor a service that emits a
+    // fresh URL per request with an empty array every time.
+    static constexpr size_t MAX_PAGES = 10000;
+
+    duckdb_yyjson::yyjson_doc *current_doc = nullptr;
+    duckdb_yyjson::yyjson_arr_iter item_iter = {};
+    std::string next_url;
+    // The origin of the FIRST url of this scan. A next link naming any other origin is
+    // fetched without credentials - see GraphClient::GetServerSuppliedUrl.
+    std::string origin_url;
+    size_t pages_followed = 0;
+    bool initialized = false;
+    bool done = false;
+
+    ~GraphPagedScanState() override {
+        FreeDoc();
+    }
+
+    static duckdb::unique_ptr<duckdb::GlobalTableFunctionState> Init(duckdb::ClientContext &,
+                                                                    duckdb::TableFunctionInitInput &) {
+        return duckdb::make_uniq<GraphPagedScanState>();
+    }
+
+    // Parses one page body, takes its @odata.nextLink as the next page to fetch, and
+    // points the iterator at `array_key`.
+    bool LoadPage(const std::string &body, const char *array_key = "value") {
+        // Parse and validate before touching the cursor: a page that turns out to be
+        // unusable must leave the previous position intact rather than installing a
+        // half-loaded document and a next link belonging to the page that failed.
+        auto *doc = duckdb_yyjson::yyjson_read(body.c_str(), body.size(), 0);
+        if (!doc) {
+            return false;
+        }
+        auto *root = duckdb_yyjson::yyjson_doc_get_root(doc);
+        auto *arr = duckdb_yyjson::yyjson_obj_get(root, array_key);
+        if (!arr || !duckdb_yyjson::yyjson_is_arr(arr)) {
+            duckdb_yyjson::yyjson_doc_free(doc);
+            return false;
+        }
+
+        FreeDoc();
+        current_doc = doc;
+        auto *next = duckdb_yyjson::yyjson_obj_get(root, "@odata.nextLink");
+        next_url = (next && duckdb_yyjson::yyjson_is_str(next)) ? duckdb_yyjson::yyjson_get_str(next) : "";
+        duckdb_yyjson::yyjson_arr_iter_init(arr, &item_iter);
+        return true;
+    }
+
+    // Returns the next item, crossing page boundaries. `fetch_page` is called with the
+    // next link and must load that page into this state (returning false to give up).
+    //
+    // It keeps following links across EMPTY pages: a service may serve a page whose array
+    // is empty while still advertising a next page, and stopping at the first such page
+    // silently drops everything after it. A service that hands back the link it was just
+    // called with would spin here forever, so that is treated as the end.
+    template <class FetchPage>
+    duckdb_yyjson::yyjson_val *NextItem(FetchPage &&fetch_page) {
+        if (auto *item = duckdb_yyjson::yyjson_arr_iter_next(&item_iter)) {
+            return item;
+        }
+        while (!next_url.empty()) {
+            if (++pages_followed > MAX_PAGES) {
+                throw duckdb::IOException(
+                    "Microsoft Graph paging exceeded " + std::to_string(MAX_PAGES) +
+                    " pages; the service keeps returning a next link. Aborting to avoid an "
+                    "unbounded request loop.");
+            }
+            const std::string requested = next_url;
+            if (!fetch_page(requested)) {
+                return nullptr;
+            }
+            if (auto *item = duckdb_yyjson::yyjson_arr_iter_next(&item_iter)) {
+                return item;
+            }
+            if (next_url == requested) {
+                return nullptr;
+            }
+        }
+        return nullptr;
+    }
+
+private:
+    void FreeDoc() {
+        if (current_doc) {
+            duckdb_yyjson::yyjson_doc_free(current_doc);
+            current_doc = nullptr;
         }
     }
 };
