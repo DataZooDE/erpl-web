@@ -322,10 +322,15 @@ protected:
         // link check it too, but this is the single point every OData request passes
         // through, and a request line is written verbatim on this path (url_encode = false),
         // so a CR/LF here becomes an injected header on a credentialed request.
-        if (!IsWireSafeUrl(modified_url.ToString())) {
+        // The CALLER's URL reaches here, so this checks control characters only - not
+        // spaces. Our own predicate pushdown decodes query values and re-emits them
+        // unencoded, so a user's "%20" arrives as a literal space; refusing that turned a
+        // long-standing mangling into a hard failure on URLs that had always worked.
+        // Service-supplied links are held to the stricter IsWireSafeUrl at their own seams.
+        if (!HasNoControlCharacters(modified_url.ToPathQuery())) {
             throw duckdb::IOException(
-                "Refusing to request a URL containing characters that cannot be sent in a "
-                "request line.");
+                "Refusing to request a URL containing control characters: '%s'.",
+                modified_url.ToPathQuery());
         }
 
         // Credentials go only to the origin this client was pointed at. Server-driven
@@ -393,11 +398,13 @@ protected:
         metadata_request.headers["Connection"] = "close";
         
         // The SERVICE chooses this URL, through @odata.context, so it must clear the same
-        // wire-safety bar as a nextLink before it is sent: the fragment is not stripped by
-        // the sanitizer, so "…/$metadata#x\r\nX-Injected: 1" would otherwise reach the
-        // request line intact. This path was missed once already when the ORIGIN guard was
-        // added below; that is why the check is here and not only at the caller.
-        if (!IsWireSafeUrl(metadata_request.url.ToString())) {
+        // wire-safety bar as a nextLink before it is sent. The check is on the bytes that
+        // actually go out - ToPathQuery(), what the request line carries - not ToString(),
+        // which appends a fragment that is never sent. The sanitizer only removes a query
+        // after /$metadata, so a hostile PATH survives it. This seam was missed once
+        // already when the ORIGIN guard was added below; that is why the check lives in the
+        // function rather than only at its caller.
+        if (!IsWireSafeUrl(metadata_request.url.ToPathQuery())) {
             throw duckdb::IOException(
                 "The OData service named a metadata URL containing characters that cannot be "
                 "sent in a request.");

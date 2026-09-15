@@ -194,12 +194,65 @@ TEST_CASE("an OData next link with control characters is refused, not followed",
 
     auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + server.Url("/svc/Airlines") + "')");
     REQUIRE(result->HasError());
-    INFO("error was: " << result->GetError());
-    REQUIRE(result->GetError().find("cannot be sent") != std::string::npos);
 
-    // And no request ever carried the smuggled bytes.
+    const auto error = result->GetError();
+    INFO("error was: " << error);
+    // Wording only the NEXT-LINK guard produces. Asserting the generic "cannot be sent"
+    // matched the choke-point guard too, so reverting the next-link guard alone left this
+    // green - it did not pin the seam it ships with.
+    REQUIRE(error.find("next link containing characters") != std::string::npos);
+
+    // Page one must actually have been fetched, or the assertions below are vacuous.
+    REQUIRE_FALSE(server.RequestsFor("/svc/Airlines").empty());
+
+    // No request carried the smuggled header. Asserting over `target` could not fail:
+    // httplib's request-line parser truncates it at the first CRLF, so the bytes would
+    // never appear there even when they were sent.
     for (const auto &request : server.Requests()) {
         INFO("target: " << request.target);
-        REQUIRE(request.target.find("X-Injected") == std::string::npos);
+        REQUIRE_FALSE(request.HasHeader("X-Injected"));
+        REQUIRE(request.target.find("skiptoken") == std::string::npos);
     }
+}
+
+// The choke-point guard sees the CALLER's URL, and must not refuse it for a raw space,
+// because a raw space there is OUR doing: the predicate pushdown decodes query values on
+// parse and re-emits them unencoded, so a user's "%20" arrives as a literal space.
+//
+// What this pins is the guard's scope, not that the URL works. It does not: the mangled
+// space goes out in the request line and the service rejects it - that is a separate,
+// pre-existing bug, and the guard must not be what disguises it. Asserting success here
+// would assert behaviour that has never existed.
+TEST_CASE("the choke-point guard does not refuse a user URL over a mangled space",
+          "[odata_origin][security]") {
+    ODataTestServer server;
+
+    const std::string context = server.Url("/svc/$metadata") + "#Airlines";
+    server.ServeMetadataFixture("/svc/$metadata", "edm_trippin.xml");
+    server.OnPath("/svc/Airlines", CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + server.Url("/svc/Airlines") +
+                            "?$orderby=Name%20desc')");
+    REQUIRE(result->HasError());
+
+    const auto error = result->GetError();
+    INFO("error was: " << error);
+    // NOT refused by the guard - it reached the wire and the service answered. If this ever
+    // reads "control characters", the guard has started rejecting the caller's own URLs.
+    REQUIRE(error.find("control characters") == std::string::npos);
+    REQUIRE_FALSE(server.RequestsFor("/svc/Airlines").empty());
+
+    // The caller's own encoding survives the first request untouched.
+    const auto requests = server.RequestsFor("/svc/Airlines");
+    INFO("first target: " << requests.front().target);
+    REQUIRE(requests.front().target.find("%20") != std::string::npos);
+
+    // The read still fails, and not because of this guard: the pushdown rebuilds the query
+    // for the follow-up request with the value DECODED and re-emitted raw, so that request
+    // line carries a literal space and never arrives intact. That mangling is a separate,
+    // pre-existing bug - what matters here is that the guard is not what disguises it.
 }
