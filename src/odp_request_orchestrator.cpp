@@ -145,7 +145,17 @@ OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteDeltaFet
 
 OdpRequestOrchestrator::OdpRequestResult OdpRequestOrchestrator::ExecuteNextPage(const std::string& next_url) {
     ERPL_TRACE_INFO("ODP_ORCHESTRATOR", "Executing next page request for URL: " + next_url);
-    
+
+    // Same check the 202 Location follow below makes, for the same reason: this link comes
+    // from the service and goes into a request line written verbatim. The guard was added
+    // to that sibling and not to this one - which is how the comment down there came to
+    // claim coverage this function did not have.
+    if (!IsWireSafeUrl(next_url)) {
+        throw duckdb::IOException(
+            "ODP service returned a next link containing characters that cannot be sent in a "
+            "request.");
+    }
+
     // Create simple GET request for next page (no special ODP headers needed)
     HttpRequest request(HttpMethod::GET, next_url);
 
@@ -504,8 +514,9 @@ std::unique_ptr<HttpResponse> OdpRequestOrchestrator::SendRequestHandlingAccepte
         if (location_header != http_response->headers.end() && !location_header->second.empty()) {
             // The Location comes from the service and goes into the request line, which is
             // written verbatim - so CR/LF in it would inject a header on a credentialed
-            // request. Checked with the same predicate every other follower of a
-            // service-supplied link uses.
+            // request. Uses IsWireSafeUrl, as ExecuteNextPage above does. (This comment
+            // previously claimed every follower used it; ExecuteNextPage did not, which is
+            // the sibling gap the claim was meant to rule out.)
             if (!IsWireSafeUrl(location_header->second)) {
                 throw duckdb::IOException(
                     "ODP " + operation_type + " received an HTTP 202 whose Location header "

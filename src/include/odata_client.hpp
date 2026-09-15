@@ -1,5 +1,6 @@
 #pragma once
 #include "cpptrace/cpptrace.hpp"
+#include "odata_url_helpers.hpp"
 #include "yyjson.hpp"
 #include <chrono>
 #include <cstdint>
@@ -317,6 +318,16 @@ protected:
                 "odata.maxpagesize=" + std::to_string(max_page_size_.value());
         }
         
+        // Last line of defence before the socket. Callers that resolve a service-supplied
+        // link check it too, but this is the single point every OData request passes
+        // through, and a request line is written verbatim on this path (url_encode = false),
+        // so a CR/LF here becomes an injected header on a credentialed request.
+        if (!IsWireSafeUrl(modified_url.ToString())) {
+            throw duckdb::IOException(
+                "Refusing to request a URL containing characters that cannot be sent in a "
+                "request line.");
+        }
+
         // Credentials go only to the origin this client was pointed at. Server-driven
         // paging follows whatever URL the service puts in @odata.nextLink / __next, so
         // without this check a compromised or hostile endpoint could redirect the client -
@@ -381,6 +392,17 @@ protected:
         metadata_request.headers["Accept"] = "application/xml";
         metadata_request.headers["Connection"] = "close";
         
+        // The SERVICE chooses this URL, through @odata.context, so it must clear the same
+        // wire-safety bar as a nextLink before it is sent: the fragment is not stripped by
+        // the sanitizer, so "…/$metadata#x\r\nX-Injected: 1" would otherwise reach the
+        // request line intact. This path was missed once already when the ORIGIN guard was
+        // added below; that is why the check is here and not only at the caller.
+        if (!IsWireSafeUrl(metadata_request.url.ToString())) {
+            throw duckdb::IOException(
+                "The OData service named a metadata URL containing characters that cannot be "
+                "sent in a request.");
+        }
+
         // The SERVICE chooses this URL, through @odata.context, so it is attacker-controlled
         // input in exactly the way a nextLink is. Credentials go only to the origin this
         // client was opened against; otherwise a service could name any host and be handed

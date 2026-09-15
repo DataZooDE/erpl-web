@@ -149,11 +149,14 @@ std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std:
     // without credentials: sending an unparseable or unresolvable link to the network is
     // not a safer fallback, it is just a different unknown. The one guarantee is that no
     // path out of here attaches credentials to a URL whose origin was not established.
-    // Enforced HERE, not at the call sites: a URL carrying CR/LF or a space is injected
-    // into the request line, which httplib writes without validating. Every follower of a
-    // service-supplied link goes through this function, so checking here is what makes it
-    // impossible for one of them to forget (GitHub: the same guard was added to the Excel
-    // reader alone and missed four siblings).
+    // Enforced HERE, not at the Graph call sites: a URL carrying CR/LF or a space is
+    // injected into the request line, which httplib writes without validating.
+    //
+    // Every GRAPH follower of a service-supplied link goes through this function. It is NOT
+    // the only such seam in the extension - the OData client, its metadata path and the two
+    // ODP followers each have their own, and each carries the same check. An earlier version
+    // of this comment claimed universal coverage and was wrong: the OData seams were
+    // unguarded while it said otherwise. Scope a claim to what the function actually sees.
     if (!IsWireSafeUrl(url)) {
         throw duckdb::IOException(
             "Microsoft Graph returned a link containing characters that cannot be sent in a "

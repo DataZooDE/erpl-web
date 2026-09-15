@@ -163,3 +163,43 @@ TEST_CASE("the trusted origin survives a client rebuilt after paging",
         REQUIRE(request.Header("Authorization").empty());
     }
 }
+
+// A service-supplied next link goes into the REQUEST LINE, and every OData request sets
+// url_encode = false - which installs the verbatim target writer, so httplib's own escaping
+// does not apply. A link carrying CR/LF keeps its host (HttpUrl's parser matches both inside
+// path and query), passes the same-origin check, and would inject a header onto a request
+// carrying the caller's credentials.
+//
+// The guard was first placed only in the Graph seam; these paths were missed. The test is
+// per-seam deliberately: a shared predicate does not help a caller that never invokes it.
+TEST_CASE("an OData next link with control characters is refused, not followed",
+          "[odata_origin][security]") {
+    ODataTestServer server;
+
+    const std::string context = server.Url("/svc/$metadata") + "#Airlines";
+    server.ServeMetadataFixture("/svc/$metadata", "edm_trippin.xml");
+
+    // Page one points at a link on the SAME origin that smuggles a header break.
+    // JSON-escaped, not raw: a literal CR/LF inside a JSON string is invalid and the body
+    // would fail to parse before the link was ever reached - which is how the first version
+    // of this test "passed" on an unrelated error.
+    const std::string hostile =
+        server.Url("/svc/Airlines") + "?$skiptoken=2\\r\\nX-Injected: 1";
+    server.OnPath("/svc/Airlines",
+                  CannedResponse::Json(MakeV4Page(context, {AIRLINE_AA}, hostile)));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + server.Url("/svc/Airlines") + "')");
+    REQUIRE(result->HasError());
+    INFO("error was: " << result->GetError());
+    REQUIRE(result->GetError().find("cannot be sent") != std::string::npos);
+
+    // And no request ever carried the smuggled bytes.
+    for (const auto &request : server.Requests()) {
+        INFO("target: " << request.target);
+        REQUIRE(request.target.find("X-Injected") == std::string::npos);
+    }
+}
