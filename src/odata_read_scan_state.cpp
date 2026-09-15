@@ -712,8 +712,10 @@ void ODataReadScan(ClientContext &context, TableFunctionInput &data,
                    DataChunk &output) {
   // Scan state lives on the per-execution clone owned by the global state, so a
   // bound plan can be executed more than once (GitHub #75). ResolveScanState
-  // falls back to the bind data for callers that still supply a bare
-  // GlobalTableFunctionState.
+  // THROWS for a caller that supplies a bare GlobalTableFunctionState - the old
+  // fallback to the bind data was removed, because falling back silently restored
+  // the very defect this state exists to prevent. This comment still described the
+  // fallback long after it was gone.
   auto &scan_state =
       ResolveScanState(data.bind_data.get(), data.global_state.get());
 

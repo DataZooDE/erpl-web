@@ -277,3 +277,35 @@ TEST_CASE("a percent-encoded CRLF in a caller's URL is not refused",
         "http://host/svc/Airlines?$filter=A%0d%0aX-Injected:%201"));
     REQUIRE_FALSE(erpl_web::HasNoControlCharacters("http://host/svc/Airlines?$filter=A\r\nX: 1"));
 }
+
+// #228 narrowed both OData guards from ToString() to ToPathQuery() to exclude the fragment,
+// and in doing so stopped checking scheme, host and port as well. The host matters here:
+// it is service-chosen through @odata.context, HttpUrl's parser accepts control characters
+// inside it, and httplib composes the Host header from it. The guards now cover everything
+// except the fragment.
+TEST_CASE("the wire-safety check covers the host, not just the path and query",
+          "[odata_origin][security]") {
+    // A control character in the HOST is refused...
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl("https://ho\rst.example/svc/Airlines"));
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://ho\nst.example/svc/Airlines"));
+    // ...as it is in the path and query.
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl("https://host.example/svc/A\rirlines"));
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl("https://host.example/svc?x=a\nb"));
+
+    // A clean URL passes whichever part it exercises.
+    REQUIRE(erpl_web::IsWireSafeUrl("https://host.example:8080/svc/Airlines?$top=1"));
+}
+
+// The message must not hand the control characters it just refused to whatever reads the
+// log or the terminal.
+TEST_CASE("a refused URL is sanitized before it reaches a message",
+          "[odata_origin][security]") {
+    const auto summary = erpl_web::SummariseUrlForMessage("https://host/x\r\nX-Injected: 1");
+    REQUIRE(summary.find('\r') == std::string::npos);
+    REQUIRE(summary.find('\n') == std::string::npos);
+    REQUIRE(summary.find("X-Injected") != std::string::npos);  // still legible
+
+    // And it is capped, so a pathological URL cannot flood a log line.
+    const auto long_summary = erpl_web::SummariseUrlForMessage(std::string(500, 'a'));
+    REQUIRE(long_summary.size() < 200);
+}

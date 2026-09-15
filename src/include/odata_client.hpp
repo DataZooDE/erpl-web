@@ -333,10 +333,14 @@ protected:
         // unencoded, so a user's "%20" arrives as a literal space; refusing that turned a
         // long-standing mangling into a hard failure on URLs that had always worked.
         // Service-supplied links are held to the stricter IsWireSafeUrl at their own seams.
-        if (!HasNoControlCharacters(modified_url.ToPathQuery())) {
+        if (!HasNoControlCharacters(modified_url.ToSchemeHostAndPort() + modified_url.ToPathQuery())) {
+            // The URL is echoed only through the sanitizer: it is service-influenced on the
+            // paging path, and putting its raw bytes in an exception string puts them into
+            // logs and terminals that interpret control characters.
             throw duckdb::IOException(
                 "Refusing to request a URL containing control characters: '%s'.",
-                modified_url.ToPathQuery());
+                SummariseUrlForMessage(modified_url.ToSchemeHostAndPort() +
+                                       modified_url.ToPathQuery()));
         }
 
         // Credentials go only to the origin this client was pointed at. Server-driven
@@ -404,13 +408,16 @@ protected:
         metadata_request.headers["Connection"] = "close";
         
         // The SERVICE chooses this URL, through @odata.context, so it must clear the same
-        // wire-safety bar as a nextLink before it is sent. The check is on the bytes that
-        // actually go out - ToPathQuery(), what the request line carries - not ToString(),
-        // which appends a fragment that is never sent. The sanitizer only removes a query
+        // wire-safety bar as a nextLink before it is sent. The check covers everything
+        // except the fragment - scheme, host, port, path and query. Checking ToPathQuery()
+        // alone left the HOST unchecked, and the host is service-chosen here through
+        // @odata.context: HttpUrl's parser accepts CR/LF inside it, and httplib composes
+        // the Host header from it. The fragment is excluded because it is never sent. The sanitizer only removes a query
         // after /$metadata, so a hostile PATH survives it. This seam was missed once
         // already when the ORIGIN guard was added below; that is why the check lives in the
         // function rather than only at its caller.
-        if (!IsWireSafeUrl(metadata_request.url.ToPathQuery())) {
+        if (!IsWireSafeUrl(metadata_request.url.ToSchemeHostAndPort() +
+                           metadata_request.url.ToPathQuery())) {
             throw duckdb::IOException(
                 "The OData service named a metadata URL containing characters that cannot be "
                 "sent in a request.");
@@ -531,7 +538,8 @@ protected:
             // clears the same bar as the first. Nothing reachable constructs a hostile URL
             // here - PopPath only removes segments and the initial merge was checked - but
             // leaving the sibling unguarded is the precise pattern this guard exists to end.
-            if (!IsWireSafeUrl(metadata_request.url.ToPathQuery())) {
+            if (!IsWireSafeUrl(metadata_request.url.ToSchemeHostAndPort() +
+                               metadata_request.url.ToPathQuery())) {
                 throw duckdb::IOException(
                     "The OData service named a metadata URL containing characters that cannot "
                     "be sent in a request.");

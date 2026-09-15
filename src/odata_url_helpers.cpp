@@ -78,6 +78,19 @@ bool IsWireSafeUrl(const std::string &url)
     return HasNoControlCharacters(url) && url.find(' ') == std::string::npos;
 }
 
+std::string SummariseUrlForMessage(const std::string &url)
+{
+    constexpr std::size_t MAX_LENGTH = 120;
+    std::string summary;
+    for (const char c : url.substr(0, MAX_LENGTH)) {
+        summary.push_back((static_cast<unsigned char>(c) < 0x20 || c == 0x7f) ? '?' : c);
+    }
+    if (url.size() > MAX_LENGTH) {
+        summary += "...";
+    }
+    return summary;
+}
+
 bool HasNoControlCharacters(const std::string &url)
 {
     return std::none_of(url.begin(), url.end(), [](unsigned char c) {
