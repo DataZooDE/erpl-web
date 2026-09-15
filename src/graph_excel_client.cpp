@@ -514,6 +514,17 @@ static std::string CreateWorkbookSession(GraphClient &graph_client, const std::s
         }
     }
 
+    if (is_async && monitor_url.empty()) {
+        // A 202 says the session is being created asynchronously, so its body describes the
+        // OPERATION, not the session. With no monitor to poll there is nothing to wait on
+        // and nothing in that body to use - falling through to the synchronous branch would
+        // read the operation's "id" as a workbook-session-id, which is the defect this
+        // whole path has been fixed for three times over.
+        throw duckdb::IOException(
+            "Microsoft Graph accepted the workbook session request as long-running (202) but "
+            "returned no status monitor to poll, for: " + file_path);
+    }
+
     if (monitor_url.empty()) {
         // Immediate (201): the body IS the session - read through the SAME predicate as a
         // polled body, never with a second inline "id" lookup (GitHub #217).

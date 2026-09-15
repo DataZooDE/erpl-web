@@ -241,8 +241,14 @@ TEST_CASE("a session that becomes ready after several polls is returned",
     REQUIRE(clock.slept.size() == 2);
 }
 
-// GitHub #222 follow-up: the branch that decides WHERE a credentialed request goes was the
-// one part of the async fix with no test. ReadOperationOutcome is what selects it.
+// GitHub #222 follow-up: ReadOperationOutcome is what tells CreateWorkbookSession whether
+// an operation finished and which resource to fetch next.
+//
+// These cover that function's own decisions. They do NOT cover CreateWorkbookSession end to
+// end - selecting the async branch, following Location, origin-gating the resource and
+// fetching it all need a Graph endpoint, and GraphClient::BaseUrl() is hardcoded with no
+// loopback override. An earlier comment here claimed coverage of "the branch that decides
+// where a credentialed request goes", which overstated what these assert.
 TEST_CASE("a succeeded operation surfaces the resource to fetch", "[graph_excel][poll]") {
     const std::string body =
         std::string(R"({"id":"op-1","status":"succeeded","resourceLocation":)") +
@@ -275,4 +281,21 @@ TEST_CASE("a non-string resourceLocation is ignored rather than dereferenced",
                 R"({"status":"succeeded","resourceLocation":null})").resource_location.empty());
     REQUIRE(erpl_web::ReadOperationOutcome(
                 R"({"status":"succeeded","resourceLocation":42})").resource_location.empty());
+}
+
+// A 202 says "being created asynchronously", so its body describes the OPERATION. With no
+// monitor there is nothing to poll and nothing in that body to use - reading its "id" as a
+// session id is the defect this path has been fixed for three times. The predicate is what
+// stops it: a 202 body carrying a status yields nothing, whatever id sits beside it.
+TEST_CASE("an operation body never yields a session id, whatever id it carries",
+          "[graph_excel][poll]") {
+    // The shape a 202 returns when it also describes the operation inline.
+    REQUIRE(erpl_web::ExtractWorkbookSessionId(
+                R"({"id":"op-42","status":"notStarted","createdDateTime":"2026-01-01T00:00:00Z"})")
+                .empty());
+
+    // And the outcome reader agrees it is not finished, so nothing downstream fetches.
+    const auto outcome = erpl_web::ReadOperationOutcome(R"({"id":"op-42","status":"notStarted"})");
+    REQUIRE_FALSE(outcome.is_terminal_success);
+    REQUIRE(outcome.resource_location.empty());
 }
