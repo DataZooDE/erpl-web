@@ -153,10 +153,16 @@ std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std:
     // injected into the request line, which httplib writes without validating.
     //
     // Every GRAPH follower of a service-supplied link goes through this function. It is NOT
-    // the only such seam in the extension - the OData client, its metadata path and the two
-    // ODP followers each have their own, and each carries the same check. An earlier version
-    // of this comment claimed universal coverage and was wrong: the OData seams were
-    // unguarded while it said otherwise. Scope a claim to what the function actually sees.
+    // the only such seam in the extension. The others, each carrying its own check:
+    // ODataClient::Get (next link), ODataClient::DoHttpGet (choke point),
+    // DoMetadataHttpGet (@odata.context, first request and 404 retry),
+    // ODataClientFactory::ProbeUrl (bind-time probe),
+    // OdpRequestOrchestrator::ExecuteNextPage (__next) and its 202 Location follow, and
+    // the Datasphere credential gate.
+    //
+    // An earlier version of this comment claimed universal coverage and was wrong twice
+    // over - first while the OData seams were entirely unguarded, then while it named only
+    // some of them. A claim about coverage is worth only as much as the list behind it.
     if (!IsWireSafeUrl(url)) {
         throw duckdb::IOException(
             "Microsoft Graph returned a link containing characters that cannot be sent in a "

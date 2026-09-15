@@ -820,6 +820,16 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     // Ensure JSON format is present (idempotent)
     ODataUrlCodec::ensureJsonFormat(normalized_url);
     
+    // This request is built here and never goes through ODataClient::DoHttpGet, so it
+    // needs its own check - the claim that DoHttpGet is "the single point every OData
+    // request passes through" was false for exactly this function. The URL is the
+    // CALLER's, so control characters only, matching that choke point.
+    if (!HasNoControlCharacters(normalized_url.ToPathQuery())) {
+        throw duckdb::IOException(
+            "Refusing to probe a URL containing control characters: '%s'.",
+            normalized_url.ToPathQuery());
+    }
+
     // Make a single HTTP request to probe the content
     auto http_request = HttpRequest(HttpMethod::GET, normalized_url);
     

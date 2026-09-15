@@ -18,6 +18,7 @@
 #include "duckdb.hpp"
 
 #include "odata_test_server.hpp"
+#include "odata_url_helpers.hpp"
 
 #include <string>
 
@@ -255,4 +256,24 @@ TEST_CASE("the choke-point guard does not refuse a user URL over a mangled space
     // for the follow-up request with the value DECODED and re-emitted raw, so that request
     // line carries a literal space and never arrives intact. That mangling is a separate,
     // pre-existing bug - what matters here is that the guard is not what disguises it.
+}
+
+// ODataClientFactory::ProbeUrl builds its own request and never enters DoHttpGet, which is
+// why the claim that DoHttpGet was "the single point every OData request passes through"
+// was false. It now carries its own check.
+//
+// That check is DEFENCE IN DEPTH and is not driven end to end here, deliberately: HttpUrl's
+// parser truncates a caller URL at a raw CR before ToPathQuery() ever sees it, so the guard
+// cannot observe the input it exists to refuse. An end-to-end case would assert a
+// connection error and look like coverage without being any. What is testable, and what
+// makes the guard safe to apply to a caller's URL at all, is the predicate itself.
+
+// The corollary, stated because it is what makes the guard safe to apply to a caller's URL:
+// a properly percent-encoded CRLF is not refused. It reaches the wire encoded, where it is
+// six ordinary characters and cannot split anything.
+TEST_CASE("a percent-encoded CRLF in a caller's URL is not refused",
+          "[odata_origin][security]") {
+    REQUIRE(erpl_web::HasNoControlCharacters(
+        "http://host/svc/Airlines?$filter=A%0d%0aX-Injected:%201"));
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("http://host/svc/Airlines?$filter=A\r\nX: 1"));
 }

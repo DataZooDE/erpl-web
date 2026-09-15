@@ -318,10 +318,16 @@ protected:
                 "odata.maxpagesize=" + std::to_string(max_page_size_.value());
         }
         
-        // Last line of defence before the socket. Callers that resolve a service-supplied
-        // link check it too, but this is the single point every OData request passes
-        // through, and a request line is written verbatim on this path (url_encode = false),
-        // so a CR/LF here becomes an injected header on a credentialed request.
+        // Last line of defence before the socket for requests built by THIS client.
+        // Callers that resolve a service-supplied link check it too.
+        //
+        // Not every OData request passes through here: ODataClientFactory::ProbeUrl builds
+        // its own request for the bind-time probe and carries its own check. An earlier
+        // version of this comment claimed universal coverage, which is the overclaim this
+        // guard's own commit set out to delete.
+        //
+        // A request line is written verbatim on this path (url_encode = false), so a CR/LF
+        // here becomes an injected header on a credentialed request.
         // The CALLER's URL reaches here, so this checks control characters only - not
         // spaces. Our own predicate pushdown decodes query values and re-emits them
         // unencoded, so a user's "%20" arrives as a literal space; refusing that turned a
@@ -521,6 +527,15 @@ protected:
             // Pop one level and retry toward service-root $metadata
             current_svc_url = current_svc_url.PopPath();
             metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, sanitized_raw));
+            // The rebuilt request is what SendRequest receives on attempts 2 and 3, so it
+            // clears the same bar as the first. Nothing reachable constructs a hostile URL
+            // here - PopPath only removes segments and the initial merge was checked - but
+            // leaving the sibling unguarded is the precise pattern this guard exists to end.
+            if (!IsWireSafeUrl(metadata_request.url.ToPathQuery())) {
+                throw duckdb::IOException(
+                    "The OData service named a metadata URL containing characters that cannot "
+                    "be sent in a request.");
+            }
             // Re-apply essential headers on each retry
             metadata_request.headers["Accept"] = "application/xml";
             metadata_request.headers["Connection"] = "close";
