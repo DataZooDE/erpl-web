@@ -445,6 +445,12 @@ std::shared_ptr<HttpAuthParams> CredentialsForServiceSuppliedUrl(
     if (!auth_params) {
         return nullptr;
     }
+    if (!IsWireSafeUrl(url)) {
+        ERPL_TRACE_WARN("DATASPHERE_CATALOG",
+                        "A metadata URL from the catalog response contains characters that cannot "
+                        "be sent in a request; refusing to use it with credentials");
+        return nullptr;
+    }
     try {
         if (!service_origin.empty() && HttpUrl(url).IsSameOrigin(HttpUrl(service_origin))) {
             return auth_params;

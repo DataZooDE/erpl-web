@@ -17,6 +17,7 @@
 #include "datasphere_catalog.hpp"
 #include "datasphere_client.hpp"
 #include "graph_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "odata_test_server.hpp"
 
 #include <memory>
@@ -160,4 +161,46 @@ TEST_CASE("Datasphere credentials follow a metadata URL only on the configured o
         REQUIRE(credentials_for("not a url at all") == nullptr);
         REQUIRE(credentials_for("") == nullptr);
     }
+}
+
+// A service-supplied URL goes into the REQUEST LINE, which httplib writes verbatim - unlike
+// header values, which it validates. HttpUrl's parser matches CR and LF inside the path and
+// query, so ".../x\r\nX-Foo: bar" parses cleanly, keeps its host (so the same-origin check
+// passes), and would then inject a header onto a request carrying the bearer token.
+//
+// The check lives INSIDE the shared entry points rather than at their call sites. A
+// call-site version was added to the Excel reader alone and missed four siblings - the
+// fourth time in this codebase a per-call-site guard was forgotten somewhere. These cases
+// pin it at the seam every follower goes through.
+TEST_CASE("a server-supplied link with control characters is refused, not sent",
+          "[graph_origin][security]") {
+    const std::string origin = "https://graph.microsoft.com/v1.0/users";
+
+    for (const auto &hostile : {"https://graph.microsoft.com/v1.0/x\r\nX-Injected: 1",
+                                "https://graph.microsoft.com/v1.0/x\nX-Injected: 1",
+                                "https://graph.microsoft.com/v1.0/x y",
+                                "https://graph.microsoft.com/v1.0/x\tz"}) {
+        INFO("link: " << hostile);
+        // Not trusted - so it can never carry credentials...
+        REQUIRE_FALSE(erpl_web::GraphClient::IsServerSuppliedUrlTrusted(hostile, origin));
+        // ...and the shared predicate refuses it outright.
+        REQUIRE_FALSE(erpl_web::IsWireSafeUrl(hostile));
+    }
+
+    // A legitimate link is unaffected.
+    REQUIRE(erpl_web::IsWireSafeUrl("https://graph.microsoft.com/v1.0/users?$skiptoken=X--"));
+    REQUIRE(erpl_web::GraphClient::IsServerSuppliedUrlTrusted(
+        "https://graph.microsoft.com/v1.0/users?$skiptoken=X--", origin));
+}
+
+TEST_CASE("fetching a server-supplied link with control characters throws rather than sends",
+          "[graph_origin][security]") {
+    ODataTestServer trusted;
+    erpl_web::GraphClient client(BearerToken("tenant-access-token"), "GRAPH_TEST");
+
+    REQUIRE_THROWS_AS(client.GetServerSuppliedUrl(trusted.Url("/v1.0/x") + "\r\nX-Injected: 1",
+                                                  trusted.Url("/v1.0/users")),
+                      duckdb::IOException);
+    // Nothing reached the server.
+    REQUIRE(trusted.Requests().empty());
 }

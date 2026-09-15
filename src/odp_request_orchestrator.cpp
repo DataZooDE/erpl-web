@@ -502,6 +502,15 @@ std::unique_ptr<HttpResponse> OdpRequestOrchestrator::SendRequestHandlingAccepte
         // redirect to the same origin, consistent with the rest of the ODP request path.
         auto location_header = http_response->headers.find("location");
         if (location_header != http_response->headers.end() && !location_header->second.empty()) {
+            // The Location comes from the service and goes into the request line, which is
+            // written verbatim - so CR/LF in it would inject a header on a credentialed
+            // request. Checked with the same predicate every other follower of a
+            // service-supplied link uses.
+            if (!IsWireSafeUrl(location_header->second)) {
+                throw duckdb::IOException(
+                    "ODP " + operation_type + " received an HTTP 202 whose Location header "
+                    "contains characters that cannot be sent in a request.");
+            }
             HttpUrl poll_url =
                 HttpUrl::MergeWithBaseUrlIfRelative(current_request.url, location_header->second);
             if (!poll_url.IsSameOrigin(current_request.url)) {

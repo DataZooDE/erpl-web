@@ -54,6 +54,21 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value);
 // to assume "not https, therefore http" and chop seven characters off whatever they were
 // given, which silently mangles an uppercase scheme or a bare name into a wrong host.
 // Shares its scheme test with LooksLikeAbsoluteHttpUrl so predicate and strip cannot drift.
+// True when `url` can be put on the wire as-is.
+//
+// A URL goes into the REQUEST LINE, which httplib writes verbatim: `s += path` then
+// `" HTTP/1.1\r\n"`, with no validation - unlike header values, which it does validate.
+// HttpUrl's parser captures path and query as [^?#]* and \?[^#]*, both of which match CR
+// and LF, so a service-supplied link like ".../x\r\nX-Foo: bar" parses cleanly, keeps its
+// host (so any same-origin check passes), and then injects a header. Space is rejected for
+// the same reason: it terminates the path in the request line.
+//
+// This is deliberately enforced INSIDE the functions that follow service-supplied links,
+// not at their call sites. The call-site version of this check was added to one reader and
+// missed every sibling - the fourth time in this codebase that a guard applied per-call-site
+// was forgotten somewhere.
+bool IsWireSafeUrl(const std::string &url);
+
 std::string StripHttpScheme(const std::string &value);
 
 // The host of an absolute http(s) URL, without scheme, port-path or trailing path. Throws
