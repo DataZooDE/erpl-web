@@ -69,6 +69,16 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value);
 // was forgotten somewhere.
 bool IsWireSafeUrl(const std::string &url);
 
+// Control characters only - no space check.
+//
+// For a URL the CALLER supplied. A raw space there is our own doing: the predicate
+// pushdown decodes query values on parse and re-emits them unencoded, so a user's
+// "%20" arrives here as a literal space. Refusing it turned a long-standing mangling
+// into a hard failure on URLs that had always worked. Control characters are a
+// different matter - they are an injection vector, never a legitimate value - so
+// those are still refused.
+bool HasNoControlCharacters(const std::string &url);
+
 std::string StripHttpScheme(const std::string &value);
 
 // The host of an absolute http(s) URL, without scheme, port-path or trailing path. Throws

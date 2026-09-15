@@ -73,8 +73,15 @@ bool LooksLikeAbsoluteHttpUrl(const std::string &value)
 
 bool IsWireSafeUrl(const std::string &url)
 {
+    // Space included: a URL the SERVICE supplied has no legitimate reason to carry a raw
+    // one, and it terminates the target in the request line.
+    return HasNoControlCharacters(url) && url.find(' ') == std::string::npos;
+}
+
+bool HasNoControlCharacters(const std::string &url)
+{
     return std::none_of(url.begin(), url.end(), [](unsigned char c) {
-        return c < 0x20 || c == 0x7f || c == ' ';
+        return c < 0x20 || c == 0x7f;
     });
 }
 
