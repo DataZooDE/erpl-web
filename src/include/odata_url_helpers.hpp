@@ -79,6 +79,11 @@ bool IsWireSafeUrl(const std::string &url);
 // those are still refused.
 bool HasNoControlCharacters(const std::string &url);
 
+// A URL rendered safe to put in an exception message, a trace or a terminal: control
+// characters replaced, length capped. Service-supplied URLs reach messages and logs, and
+// echoing their raw bytes hands control characters to whatever reads them.
+std::string SummariseUrlForMessage(const std::string &url);
+
 std::string StripHttpScheme(const std::string &value);
 
 // The host of an absolute http(s) URL, without scheme, port-path or trailing path. Throws
