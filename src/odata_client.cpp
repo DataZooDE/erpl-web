@@ -251,6 +251,18 @@ std::shared_ptr<ODataEntitySetResponse> ODataEntitySetClient::Get(bool get_next)
         // this loop issue the identical request forever, uninterruptibly. Stop
         // with an error instead: neither terminating nor reporting is worse than
         // failing. See GitHub #78.
+        // The next link is chosen by the SERVICE and goes into the request line, which is
+        // written verbatim on this path - every OData request sets url_encode = false, which
+        // installs the verbatim target writer, so httplib's own escaping does not apply. A
+        // link carrying CR/LF keeps its host (HttpUrl's parser matches both inside the path
+        // and query), passes the same-origin check, and would inject a header onto a request
+        // carrying the caller's credentials.
+        if (!IsWireSafeUrl(next_url.value())) {
+            throw duckdb::IOException(
+                "OData service returned a next link containing characters that cannot be sent "
+                "in a request.");
+        }
+
         const auto previous_url = url.ToString();
         auto resolved_next_url = HttpUrl::MergeWithBaseUrlIfRelative(url, next_url.value());
         if (resolved_next_url.ToString() == previous_url) {
