@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datazoo/oauth2/http_client.hpp"
+#include "graph_client.hpp"
 
 #include <memory>
 #include <string>
@@ -61,7 +62,7 @@ public:
     std::string ResolveChannelId(const std::string &team_id, const std::string &name_or_id);
 
 private:
-    std::string DoGraphGet(const std::string &url);
+    std::string DoGraphGet(const ExtensionBuiltUrl &url);
 
     std::shared_ptr<HttpAuthParams> auth_params;
 };

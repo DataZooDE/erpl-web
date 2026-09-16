@@ -47,48 +47,48 @@ GraphEntraClient::GraphEntraClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
 }
 
-std::string GraphEntraClient::DoGraphGet(const std::string &url) {
+std::string GraphEntraClient::DoGraphGet(const ExtensionBuiltUrl &url) {
     return GraphClient(auth_params, "GRAPH_ENTRA").Get(url);
 }
 
 std::string GraphEntraClient::GetUsers() {
     auto url = GraphEntraUrlBuilder::BuildUsersUrl();
-    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetUser(const std::string &user_id) {
     auto url = GraphEntraUrlBuilder::BuildUserUrl(user_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetGroups() {
     auto url = GraphEntraUrlBuilder::BuildGroupsUrl();
-    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetGroup(const std::string &group_id) {
     auto url = GraphEntraUrlBuilder::BuildGroupUrl(group_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetGroupMembers(const std::string &group_id) {
     auto url = GraphEntraUrlBuilder::BuildGroupMembersUrl(group_id);
-    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetDevices() {
     auto url = GraphEntraUrlBuilder::BuildDevicesUrl();
-    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetDevice(const std::string &device_id) {
     auto url = GraphEntraUrlBuilder::BuildDeviceUrl(device_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphEntraClient::GetSignInLogs() {
     auto url = GraphEntraUrlBuilder::BuildSignInLogsUrl();
-    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_ENTRA").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 } // namespace erpl_web

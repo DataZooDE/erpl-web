@@ -93,54 +93,54 @@ GraphSharePointClient::GraphSharePointClient(std::shared_ptr<HttpAuthParams> aut
     : auth_params(auth_params) {
 }
 
-std::string GraphSharePointClient::DoGraphGet(const std::string &url) {
+std::string GraphSharePointClient::DoGraphGet(const ExtensionBuiltUrl &url) {
     return GraphClient(auth_params, "GRAPH_SHAREPOINT").Get(url);
 }
 
 std::string GraphSharePointClient::SearchSites(const std::string &search_query) {
     auto url = GraphSharePointUrlBuilder::BuildSitesSearchUrl(search_query);
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetFollowedSites() {
     auto url = GraphSharePointUrlBuilder::BuildFollowedSitesUrl();
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetSite(const std::string &site_id) {
     auto url = GraphSharePointUrlBuilder::BuildSiteUrl(site_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetSiteByPath(const std::string &hostname, const std::string &site_path) {
     auto url = GraphSharePointUrlBuilder::BuildSiteByPathUrl(hostname, site_path);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::ListDrives(const std::string &site_id) {
     auto url = GraphSharePointUrlBuilder::BuildSiteDrivesUrl(site_id);
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::ListLists(const std::string &site_id) {
     auto url = GraphSharePointUrlBuilder::BuildSiteListsUrl(site_id);
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetList(const std::string &site_id, const std::string &list_id) {
     auto url = GraphSharePointUrlBuilder::BuildListUrl(site_id, list_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetListColumns(const std::string &site_id, const std::string &list_id) {
     auto url = GraphSharePointUrlBuilder::BuildListColumnsUrl(site_id, list_id);
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::GetListItems(const std::string &site_id, const std::string &list_id,
                                                  const std::string &select, int top) {
     auto url = GraphSharePointUrlBuilder::BuildListItemsWithSelectUrl(site_id, list_id, select, top);
-    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_SHAREPOINT").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphSharePointClient::CreateListItem(const std::string &site_id, const std::string &list_id,

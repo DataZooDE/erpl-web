@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datazoo/oauth2/http_client.hpp"
+#include "graph_client.hpp"
 #include <chrono>
 #include <functional>
 #include <string>
@@ -215,7 +216,7 @@ public:
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
 
-    std::string DoGraphGet(const std::string &url);
+    std::string DoGraphGet(const ExtensionBuiltUrl &url);
 
     // Resolve a file path to a WAC-compatible workbook item URL via the site's default drive.
     // When drive_id is provided, resolves the site coordinates from /drives/{id}?$select=sharePointIds.

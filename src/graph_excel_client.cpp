@@ -133,7 +133,7 @@ GraphExcelClient::GraphExcelClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
 }
 
-std::string GraphExcelClient::DoGraphGet(const std::string &url) {
+std::string GraphExcelClient::DoGraphGet(const ExtensionBuiltUrl &url) {
     return GraphClient(auth_params, "GRAPH_EXCEL").Get(url);
 }
 
@@ -149,7 +149,7 @@ std::string GraphExcelClient::ResolveWorkbookItemUrl(const std::string &file_pat
     const std::string metadata_url = GraphExcelUrlBuilder::GetBaseUrl()
         + "/drives/" + drive_id + "?$select=id,sharePointIds";
 
-    const std::string json_body = DoGraphGet(metadata_url);
+    const std::string json_body = DoGraphGet(ExtensionBuiltUrl{metadata_url});
 
     duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json_body.c_str(), json_body.size(), 0);
     if (!doc) {
@@ -210,82 +210,82 @@ std::string GraphExcelClient::ListDriveFiles(const std::string &folder_path, con
     } else {
         url = GraphExcelUrlBuilder::BuildDriveFolderChildrenUrl(folder_path);
     }
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphExcelClient::ListSiteFiles(const std::string &site_id, const std::string &folder_path) {
     std::string url = GraphExcelUrlBuilder::BuildSiteDriveRootChildrenUrl(site_id);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphExcelClient::GetTableRows(const std::string &item_id, const std::string &table_name) {
     auto item_url = GraphExcelUrlBuilder::BuildDriveItemUrl(item_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(workbook_url, table_name);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(rows_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{rows_url});
 }
 
 std::string GraphExcelClient::GetTableRowsByPath(const std::string &file_path, const std::string &table_name, const std::string &drive_id) {
     auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(workbook_url, table_name);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(rows_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{rows_url});
 }
 
 std::string GraphExcelClient::GetUsedRange(const std::string &item_id, const std::string &sheet_name) {
     auto item_url = GraphExcelUrlBuilder::BuildDriveItemUrl(item_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildUsedRangeUrl(workbook_url, sheet_name);
-    return DoGraphGet(range_url);
+    return DoGraphGet(ExtensionBuiltUrl{range_url});
 }
 
 std::string GraphExcelClient::GetUsedRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &drive_id) {
     auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildUsedRangeUrl(workbook_url, sheet_name);
-    return DoGraphGet(range_url);
+    return DoGraphGet(ExtensionBuiltUrl{range_url});
 }
 
 std::string GraphExcelClient::GetRange(const std::string &item_id, const std::string &sheet_name, const std::string &range) {
     auto item_url = GraphExcelUrlBuilder::BuildDriveItemUrl(item_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildRangeUrl(workbook_url, sheet_name, range);
-    return DoGraphGet(range_url);
+    return DoGraphGet(ExtensionBuiltUrl{range_url});
 }
 
 std::string GraphExcelClient::GetRangeByPath(const std::string &file_path, const std::string &sheet_name, const std::string &range, const std::string &drive_id) {
     auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto range_url = GraphExcelUrlBuilder::BuildRangeUrl(workbook_url, sheet_name, range);
-    return DoGraphGet(range_url);
+    return DoGraphGet(ExtensionBuiltUrl{range_url});
 }
 
 std::string GraphExcelClient::ListTables(const std::string &item_id) {
     auto item_url = GraphExcelUrlBuilder::BuildDriveItemUrl(item_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto tables_url = GraphExcelUrlBuilder::BuildTablesUrl(workbook_url);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(tables_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{tables_url});
 }
 
 std::string GraphExcelClient::ListTablesByPath(const std::string &file_path, const std::string &drive_id) {
     auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto tables_url = GraphExcelUrlBuilder::BuildTablesUrl(workbook_url);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(tables_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{tables_url});
 }
 
 std::string GraphExcelClient::ListWorksheets(const std::string &item_id) {
     auto item_url = GraphExcelUrlBuilder::BuildDriveItemUrl(item_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(worksheets_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{worksheets_url});
 }
 
 std::string GraphExcelClient::ListWorksheetsByPath(const std::string &file_path, const std::string &drive_id) {
     auto item_url = ResolveWorkbookItemUrl(file_path, drive_id);
     auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     auto worksheets_url = GraphExcelUrlBuilder::BuildWorksheetsUrl(workbook_url);
-    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(worksheets_url);
+    return GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{worksheets_url});
 }
 
 std::vector<std::string> GraphExcelClient::GetTableColumnsByPath(const std::string &file_path,
@@ -295,7 +295,7 @@ std::vector<std::string> GraphExcelClient::GetTableColumnsByPath(const std::stri
     const auto item_url    = ResolveWorkbookItemUrl(file_path, drive_id);
     const auto workbook_url = GraphExcelUrlBuilder::BuildWorkbookUrl(item_url);
     const auto cols_url    = GraphExcelUrlBuilder::BuildTableColumnsUrl(workbook_url, table_name);
-    const std::string json = GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(cols_url);
+    const std::string json = GraphClient(auth_params, "GRAPH_EXCEL").GetAllPagesMerged(ExtensionBuiltUrl{cols_url});
 
     std::vector<std::string> names;
     duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(json.c_str(), json.size(), 0);
@@ -692,7 +692,7 @@ idx_t GraphExcelClient::DeleteTableRowsMatchingColumn(const std::string &file_pa
 
     // Fetch all rows to find matching indices (no $top → follow nextLink pages)
     const std::string rows_url = GraphExcelUrlBuilder::BuildTableRowsUrl(wb_url, table_name, 0);
-    const std::string rows_json = graph_client.GetAllPagesMerged(rows_url);
+    const std::string rows_json = graph_client.GetAllPagesMerged(ExtensionBuiltUrl{rows_url});
 
     std::vector<idx_t> matching_indices;
     {

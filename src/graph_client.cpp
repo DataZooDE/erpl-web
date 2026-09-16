@@ -196,8 +196,14 @@ std::string GraphClient::GetServerSuppliedUrl(const std::string &url, const std:
 // through GetServerSuppliedUrl instead, which decides on origin. Three review rounds
 // missed src/graph_excel_client.cpp's status-monitor poll because only @odata.nextLink was
 // thought of as "server-supplied"; the rule is about where the URL came from, not what it
-// is called. To audit: grep for yyjson_get_str results reaching any entry point here.
-std::string GraphClient::Get(const std::string &url) {
+// is called.
+//
+// The ExtensionBuiltUrl parameter is what enforces that now. A service-supplied URL is
+// always a std::string, and the explicit constructor refuses to convert one, so this
+// function cannot be reached by accident - only by a call site that names the type and
+// thereby states where its URL came from. test_graph_url_provenance.cpp asserts it.
+std::string GraphClient::Get(const ExtensionBuiltUrl &built_url) {
+    const std::string &url = built_url.Value();
     ERPL_TRACE_DEBUG(trace_component, "GET request to: " + url);
 
     HttpUrl http_url(url);
@@ -322,7 +328,8 @@ std::optional<std::string> GraphClient::ExtractNextLink(const std::string &json_
     return std::nullopt;
 }
 
-std::string GraphClient::GetAllPagesMerged(const std::string &url) {
+std::string GraphClient::GetAllPagesMerged(const ExtensionBuiltUrl &built_url) {
+    const std::string &url = built_url.Value();
     std::vector<std::string> pages;
     pages.reserve(1);
 
@@ -339,7 +346,7 @@ std::string GraphClient::GetAllPagesMerged(const std::string &url) {
         if (page_count >= MAX_GRAPH_PAGES) {
             throw duckdb::IOException("Microsoft Graph pagination exceeded safety limit");
         }
-        auto body = (page_count == 0) ? Get(next_url)
+        auto body = (page_count == 0) ? Get(built_url)
                                       : GetServerSuppliedUrl(next_url, trusted_origin);
         auto next_link = ExtractNextLink(body);
         pages.push_back(std::move(body));

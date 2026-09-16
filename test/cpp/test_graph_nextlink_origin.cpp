@@ -59,7 +59,7 @@ TEST_CASE("a cross-origin Graph next link never receives the bearer token",
     foreign.OnPath("/steal/users", CannedResponse::Json(PageWithNext("2", "")));
 
     erpl_web::GraphClient client(BearerToken("tenant-access-token"), "GRAPH_TEST");
-    const auto merged = client.GetAllPagesMerged(trusted.Url("/v1.0/users"));
+    const auto merged = client.GetAllPagesMerged(erpl_web::ExtensionBuiltUrl{trusted.Url("/v1.0/users")});
 
     // The read must actually have spanned both pages. Without this the assertions below
     // would also pass if paging had simply stopped at page one.
@@ -86,7 +86,7 @@ TEST_CASE("a same-origin Graph next link still receives the bearer token",
     trusted.OnPath("/v1.0/users2", CannedResponse::Json(PageWithNext("2", "")));
 
     erpl_web::GraphClient client(BearerToken("tenant-access-token"), "GRAPH_TEST");
-    const auto merged = client.GetAllPagesMerged(trusted.Url("/v1.0/users"));
+    const auto merged = client.GetAllPagesMerged(erpl_web::ExtensionBuiltUrl{trusted.Url("/v1.0/users")});
     REQUIRE(merged.find("\"2\"") != std::string::npos);
 
     const auto second_page = trusted.RequestsFor("/v1.0/users2");
@@ -106,7 +106,7 @@ TEST_CASE("a Graph next link on another port is treated as cross-origin",
     other_port.OnPath("/v1.0/users2", CannedResponse::Json(PageWithNext("2", "")));
 
     erpl_web::GraphClient client(BearerToken("tenant-access-token"), "GRAPH_TEST");
-    (void)client.GetAllPagesMerged(trusted.Url("/v1.0/users"));
+    (void)client.GetAllPagesMerged(erpl_web::ExtensionBuiltUrl{trusted.Url("/v1.0/users")});
 
     const auto requests = other_port.RequestsFor("/v1.0/users2");
     REQUIRE(requests.size() == 1);
