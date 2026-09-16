@@ -168,19 +168,26 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
         // scan there, handing back a partial extraction presented as complete and then
         // committing the delta token over rows that were never delivered.
         //
-        // The page count is bounded so a service that answers with an endless run of empty
-        // pages fails loudly instead of spinning; a genuinely long run of empty pages is
-        // still resumed on the next call, because HasMoreResults() stays true while a next
-        // page is pending.
+        // The page count is bounded so a service answering with an endless run of empty
+        // pages fails loudly instead of spinning.
+        //
+        // It must FAIL, not yield. Breaking out with zero rows while a next page is still
+        // pending does not "resume on the next call" - a zero-row chunk is how a DuckDB
+        // table function says end-of-scan, and OdpODataReadScan reads that zero as the end
+        // and calls FinalizeScan(), which COMMITS THE STAGED DELTA TOKEN. That is precisely
+        // the outcome the loop above exists to prevent: a partial extraction presented as
+        // complete, with the token advanced over rows never delivered. The old comment
+        // claimed the opposite of what the code did.
         constexpr unsigned int MAX_EMPTY_PAGES_PER_CALL = 64;
         unsigned int rows_fetched = odata_bind_data_->FetchNextResult(output);
         unsigned int empty_pages = 0;
         while (rows_fetched == 0 && !pending_next_url_.empty()) {
             if (++empty_pages > MAX_EMPTY_PAGES_PER_CALL) {
-                ERPL_TRACE_WARN("ODP_BIND_DATA",
-                                "Yielding after " + std::to_string(MAX_EMPTY_PAGES_PER_CALL) +
-                                " consecutive empty ODP pages; the scan resumes on the next call");
-                break;
+                throw duckdb::IOException(
+                    "The ODP service returned " + std::to_string(MAX_EMPTY_PAGES_PER_CALL) +
+                    " consecutive empty pages while still advertising another page. Aborting "
+                    "rather than reporting a partial extraction as complete; the delta token "
+                    "has not been advanced, so the extraction can be retried.");
             }
             FetchAndLoadNextPage();
             rows_fetched = odata_bind_data_->FetchNextResult(output);
