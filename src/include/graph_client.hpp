@@ -10,11 +10,34 @@
 
 namespace erpl_web {
 
+// A URL THIS EXTENSION constructed, as opposed to one that came out of a service response.
+//
+// GraphClient::Get attaches the caller's credentials unconditionally, which is right for a
+// URL we built from the hardcoded Graph base and wrong for anything a service handed us.
+// Keeping those apart has been a matter of remembering, and it was forgotten eight times in
+// this codebase: @odata.nextLink, statusMonitorResource, resourceLocation, @odata.context,
+// the ODP __next and its 202 Location, the ODP __delta link, and the redirect follower.
+//
+// So the distinction is in the type system now. The constructor is explicit, so a plain
+// std::string - which is what every response-derived URL is - will not convert, and
+// `Get(monitor_url)` stops compiling. Writing ExtensionBuiltUrl{...} is a deliberate claim
+// about where the URL came from, made at the moment it matters.
+class ExtensionBuiltUrl {
+public:
+    explicit ExtensionBuiltUrl(std::string url) : value(std::move(url)) {}
+    const std::string &Value() const { return value; }
+
+private:
+    std::string value;
+};
+
 class GraphClient {
 public:
     GraphClient(std::shared_ptr<HttpAuthParams> auth_params, std::string trace_component);
 
-    std::string Get(const std::string &url);
+    // Only for a URL this extension built - see ExtensionBuiltUrl. A service-supplied link
+    // goes through GetServerSuppliedUrl, which decides on origin and sendability.
+    std::string Get(const ExtensionBuiltUrl &url);
 
     // Same as Get(), but for a URL the SERVICE supplied (an @odata.nextLink). The bearer
     // token is attached only when the link names the same origin as `origin`; anything
@@ -29,7 +52,7 @@ public:
     // it is public so a caller that would otherwise repeat a pointless unauthenticated
     // request - polling a foreign status monitor, say - can decide once up front.
     static bool IsServerSuppliedUrlTrusted(const std::string &url, const std::string &origin);
-    std::string GetAllPagesMerged(const std::string &url);
+    std::string GetAllPagesMerged(const ExtensionBuiltUrl &url);
 
     std::string Post(const std::string &url, const std::string &body);
     std::string PostWithHeaders(const std::string &url, const std::string &body,

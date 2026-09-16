@@ -39,38 +39,38 @@ GraphTeamsClient::GraphTeamsClient(std::shared_ptr<HttpAuthParams> auth_params)
     : auth_params(auth_params) {
 }
 
-std::string GraphTeamsClient::DoGraphGet(const std::string &url) {
+std::string GraphTeamsClient::DoGraphGet(const ExtensionBuiltUrl &url) {
     return GraphClient(auth_params, "GRAPH_TEAMS").Get(url);
 }
 
 std::string GraphTeamsClient::GetMyTeams(const std::string &user) {
     auto url = GraphTeamsUrlBuilder::BuildMyTeamsUrl(user);
-    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphTeamsClient::GetTeam(const std::string &team_id) {
     auto url = GraphTeamsUrlBuilder::BuildTeamUrl(team_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphTeamsClient::GetTeamChannels(const std::string &team_id) {
     auto url = GraphTeamsUrlBuilder::BuildTeamChannelsUrl(team_id);
-    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphTeamsClient::GetChannel(const std::string &team_id, const std::string &channel_id) {
     auto url = GraphTeamsUrlBuilder::BuildChannelUrl(team_id, channel_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphTeamsClient::GetTeamMembers(const std::string &team_id) {
     auto url = GraphTeamsUrlBuilder::BuildTeamMembersUrl(team_id);
-    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphTeamsClient::GetChannelMessages(const std::string &team_id, const std::string &channel_id) {
     auto url = GraphTeamsUrlBuilder::BuildChannelMessagesUrl(team_id, channel_id);
-    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_TEAMS").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 // =============================================================================

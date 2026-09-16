@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datazoo/oauth2/http_client.hpp"
+#include "graph_client.hpp"
 #include <string>
 #include <memory>
 #include <vector>
@@ -111,7 +112,7 @@ public:
 private:
     std::shared_ptr<HttpAuthParams> auth_params;
 
-    std::string DoGraphGet(const std::string &url);
+    std::string DoGraphGet(const ExtensionBuiltUrl &url);
 };
 
 } // namespace erpl_web

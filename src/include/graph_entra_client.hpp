@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "datazoo/oauth2/http_client.hpp"
+#include "graph_client.hpp"
 
 #include <memory>
 #include <string>
@@ -52,7 +53,7 @@ public:
     std::string GetSignInLogs();
 
 private:
-    std::string DoGraphGet(const std::string &url);
+    std::string DoGraphGet(const ExtensionBuiltUrl &url);
 
     std::shared_ptr<HttpAuthParams> auth_params;
 };

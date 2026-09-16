@@ -65,53 +65,53 @@ GraphPlannerClient::GraphPlannerClient(std::shared_ptr<HttpAuthParams> auth_para
     : auth_params(auth_params) {
 }
 
-std::string GraphPlannerClient::DoGraphGet(const std::string &url) {
+std::string GraphPlannerClient::DoGraphGet(const ExtensionBuiltUrl &url) {
     return GraphClient(auth_params, "GRAPH_PLANNER").Get(url);
 }
 
 std::string GraphPlannerClient::GetGroupPlans(const std::string &group_id) {
     auto url = GraphPlannerUrlBuilder::BuildGroupPlansUrl(group_id);
-    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetPlan(const std::string &plan_id) {
     auto url = GraphPlannerUrlBuilder::BuildPlanUrl(plan_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetPlanBuckets(const std::string &plan_id) {
     auto url = GraphPlannerUrlBuilder::BuildPlanBucketsUrl(plan_id);
-    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetBucket(const std::string &bucket_id) {
     auto url = GraphPlannerUrlBuilder::BuildBucketUrl(bucket_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetPlanTasks(const std::string &plan_id) {
     auto url = GraphPlannerUrlBuilder::BuildPlanTasksUrl(plan_id);
-    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetBucketTasks(const std::string &bucket_id) {
     auto url = GraphPlannerUrlBuilder::BuildBucketTasksUrl(bucket_id);
-    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetTask(const std::string &task_id) {
     auto url = GraphPlannerUrlBuilder::BuildTaskUrl(task_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetTaskDetails(const std::string &task_id) {
     auto url = GraphPlannerUrlBuilder::BuildTaskDetailsUrl(task_id);
-    return DoGraphGet(url);
+    return DoGraphGet(ExtensionBuiltUrl{url});
 }
 
 std::string GraphPlannerClient::GetMyTasks() {
     auto url = GraphPlannerUrlBuilder::BuildMyTasksUrl();
-    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_PLANNER").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 static bool LooksLikePlannerGuid(const std::string &s) {

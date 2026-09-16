@@ -64,7 +64,7 @@ GraphOutlookClient::GraphOutlookClient(std::shared_ptr<HttpAuthParams> auth_para
 std::string GraphOutlookClient::GetEvents(const std::string &user_id) {
     auto url = GraphOutlookUrlBuilder::BuildEventsUrl(user_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetEvents: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetCalendarView(const std::string &user_id,
@@ -72,45 +72,45 @@ std::string GraphOutlookClient::GetCalendarView(const std::string &user_id,
                                                  const std::string &end_dt) {
     auto url = GraphOutlookUrlBuilder::BuildCalendarViewUrl(user_id, start_dt, end_dt);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetCalendarView: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetCalendars(const std::string &user_id) {
     auto url = GraphOutlookUrlBuilder::BuildCalendarsUrl(user_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetCalendars: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetCalendarEvents(const std::string &user_id,
                                                    const std::string &calendar_id) {
     auto url = GraphOutlookUrlBuilder::BuildCalendarEventsUrl(user_id, calendar_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetCalendarEvents: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetContacts(const std::string &user_id) {
     auto url = GraphOutlookUrlBuilder::BuildContactsUrl(user_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetContacts: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetMessages(const std::string &user_id) {
     auto url = GraphOutlookUrlBuilder::BuildMessagesUrl(user_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetMessages: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetMailFolders(const std::string &user_id) {
     auto url = GraphOutlookUrlBuilder::BuildMailFoldersUrl(user_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetMailFolders: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 std::string GraphOutlookClient::GetFolderMessages(const std::string &user_id,
                                                    const std::string &folder_id) {
     auto url = GraphOutlookUrlBuilder::BuildFolderMessagesUrl(user_id, folder_id);
     ERPL_TRACE_DEBUG("GRAPH_OUTLOOK", "GetFolderMessages: " + url);
-    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(url);
+    return GraphClient(auth_params, "GRAPH_OUTLOOK").GetAllPagesMerged(ExtensionBuiltUrl{url});
 }
 
 } // namespace erpl_web
