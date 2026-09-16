@@ -327,16 +327,15 @@ TEST_CASE("a refused URL is sanitized before it reaches a message",
 TEST_CASE("a transient metadata failure repeats the same request", "[odata_origin]") {
     ODataTestServer server;
 
-    // 503 first, then the real metadata at the SAME path. If the retry pops the path
-    // instead of repeating, the second request goes elsewhere and this never succeeds.
+    // 503 first, then the real metadata at the same path.
     std::vector<CannedResponse> metadata_responses;
     metadata_responses.push_back(CannedResponse::Error(503, R"({"error":"slow down"})"));
     metadata_responses.push_back(
         CannedResponse::Xml(erpl_web::test_support::ReadFixture("edm_trippin.xml")));
     server.OnPathSequence("/svc/$metadata", metadata_responses);
 
-    // A RELATIVE @odata.context is what makes this discriminating. With an absolute one,
-    // merging ignores the popped base, so popping is a no-op and the bug is invisible.
+    // A relative @odata.context, which is the shape the header comment discusses. It does
+    // not make the test discriminating - see there for why.
     server.OnPath("/svc/Airlines",
                   CannedResponse::Json(MakeV4Page("$metadata#Airlines", {AIRLINE_AA})));
 
@@ -363,4 +362,23 @@ TEST_CASE("the probe guard covers the host as well", "[odata_origin][security]")
     REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://ho\rst.example/svc"));
     REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://host.example:80\n80/svc"));
     REQUIRE(erpl_web::HasNoControlCharacters("https://host.example:8080/svc/Airlines?$top=1"));
+}
+
+// The ODP __delta link is server-supplied and becomes the next credentialed request, so it
+// gets both checks every sibling gets: same origin, and sendable at all. It was the last
+// follower holding only the origin half, and the new half had no test.
+//
+// Predicate-level: reaching HandleDeltaFetch needs a live ODP service with an open delta
+// queue. What is pinned here is the rule the adoption applies - a link carrying CR/LF or a
+// space is not adoptable, whatever its origin.
+TEST_CASE("an unsendable ODP delta link is not adoptable", "[odata_origin][security][odp]") {
+    const std::string service = "https://sap.example:44300/sap/opu/odata/sap/ZODP_SRV/Facts";
+
+    // Same origin, but unsendable: origin alone would have adopted these.
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl(service + "?!deltatoken=D2026\r\nX-Injected: 1"));
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl(service + "?!deltatoken=D 2026"));
+    REQUIRE_FALSE(erpl_web::IsWireSafeUrl(service + "?!deltatoken=D\t2026"));
+
+    // A real delta link is unaffected.
+    REQUIRE(erpl_web::IsWireSafeUrl(service + "?!deltatoken=D20260916093000_000123000"));
 }

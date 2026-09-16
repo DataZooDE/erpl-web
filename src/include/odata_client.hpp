@@ -382,6 +382,28 @@ protected:
     // committed EDMX fixtures. That covers the fixture use case the issue was
     // filed for while additionally exercising the HTTP client, the header set
     // and the EDMX parse -- all of which an in-process seam would stub out.
+    // One rule for a metadata URL, used by the first attempt and by every retry.
+    //
+    // The merged URL is built from two halves with different provenance, and they get
+    // different bars. The SERVICE-supplied half (@odata.context) is held to the strict rule
+    // - it has no legitimate reason to carry a raw space, and a space terminates the target
+    // in the request line. The MERGED url carries the CALLER's own URL too, where a raw
+    // space is our own mangling (GitHub #227); refusing that is the regression already
+    // fixed once at the choke point.
+    //
+    // The two sites used to disagree - the first attempt applied the strict rule to the
+    // merged URL while the retry's comment explained why that must not be done. One helper
+    // so they cannot drift apart again.
+    static void RequireSendableMetadataUrl(const HttpUrl &merged, const std::string &service_supplied) {
+        if (!IsWireSafeUrl(service_supplied) ||
+            !HasNoControlCharacters(merged.ToSchemeHostAndPort() + merged.ToPathQuery())) {
+            throw duckdb::IOException(
+                "The OData service named a metadata URL containing characters that cannot be "
+                "sent in a request: '%s'.",
+                SummariseUrlForMessage(merged.ToSchemeHostAndPort() + merged.ToPathQuery()));
+        }
+    }
+
     std::unique_ptr<HttpResponse> DoMetadataHttpGet(const std::string& metadata_url_raw)
     {
         // Sanitize: strip any query from a $metadata URL (e.g., remove "$format=json")
@@ -411,17 +433,12 @@ protected:
         // wire-safety bar as a nextLink before it is sent. The check covers everything
         // except the fragment - scheme, host, port, path and query. Checking ToPathQuery()
         // alone left the HOST unchecked, and the host is service-chosen here through
-        // @odata.context: HttpUrl's parser accepts CR/LF inside it, and httplib composes
-        // the Host header from it. The fragment is excluded because it is never sent. The sanitizer only removes a query
-        // after /$metadata, so a hostile PATH survives it. This seam was missed once
-        // already when the ORIGIN guard was added below; that is why the check lives in the
-        // function rather than only at its caller.
-        if (!IsWireSafeUrl(metadata_request.url.ToSchemeHostAndPort() +
-                           metadata_request.url.ToPathQuery())) {
-            throw duckdb::IOException(
-                "The OData service named a metadata URL containing characters that cannot be "
-                "sent in a request.");
-        }
+        // @odata.context: HttpUrl's parser accepts CR/LF inside it, and httplib composes the
+        // Host header from it. The sanitizer only removes a query after /$metadata, so a
+        // hostile PATH survives it. This seam was missed once when the ORIGIN guard was
+        // added below, which is why the check lives in the function and not at its caller.
+        // The rule itself is in RequireSendableMetadataUrl, shared with the retry.
+        RequireSendableMetadataUrl(metadata_request.url, sanitized_raw);
 
         // The SERVICE chooses this URL, through @odata.context, so it is attacker-controlled
         // input in exactly the way a nextLink is. Credentials go only to the origin this
@@ -548,13 +565,7 @@ protected:
             // strict rule; the merged URL carries the CALLER's own URL too, where a raw
             // space is our own mangling (GitHub #227) and refusing it would be the
             // regression fixed once already at the choke point.
-            if (!IsWireSafeUrl(sanitized_raw) ||
-                !HasNoControlCharacters(metadata_request.url.ToSchemeHostAndPort() +
-                                        metadata_request.url.ToPathQuery())) {
-                throw duckdb::IOException(
-                    "The OData service named a metadata URL containing characters that cannot "
-                    "be sent in a request.");
-            }
+            RequireSendableMetadataUrl(metadata_request.url, sanitized_raw);
             // Re-apply essential headers on each retry
             metadata_request.headers["Accept"] = "application/xml";
             metadata_request.headers["Connection"] = "close";
