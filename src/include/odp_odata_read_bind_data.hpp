@@ -42,8 +42,9 @@ unsigned int DrainEmptyOdpPages(FetchRows &&fetch_rows, HasNextPage &&has_next_p
                 "The ODP service returned " + std::to_string(max_empty_pages) +
                 " consecutive empty pages while still advertising another page. Aborting "
                 "rather than reporting a partial extraction as complete. No rows from this "
-                "run have been committed and the delta token was not advanced; the "
-                "subscription is left in error, so the next run re-extracts in full." +
+                "run have been committed and the delta token was not advanced, so the "
+                "subscription still points at the last position it completed and the next "
+                "run resumes from there." +
                 failure_detail);
         }
         fetch_next_page();
