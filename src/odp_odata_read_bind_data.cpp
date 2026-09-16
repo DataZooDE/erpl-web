@@ -441,12 +441,19 @@ bool OdpODataReadBindData::HandleDeltaFetch() {
             ERPL_TRACE_INFO("ODP_BIND_DATA", "Multi-page delta fetch — deferring state transition to last page");
         }
 
-        // The __delta link is server-supplied and becomes the URL the OData
-        // client requests next, with credentials attached. Only adopt it when it
-        // stays on the service's own origin (#101).
+        // The __delta link is server-supplied and becomes the URL the OData client requests
+        // next, with credentials attached. It gets BOTH checks every other follower of a
+        // server-supplied link gets: same origin (#101), and sendable at all - a link
+        // carrying CR/LF or a space would go into a request line that is written verbatim.
+        // This was the last follower holding only the origin half of that pair.
         std::string delta_url = OdpRequestOrchestrator::BuildDeltaUrl(entity_set_url_, current_token);
         if (!result.extracted_delta_url.empty()) {
-            if (OdpRequestOrchestrator::IsSameOrigin(entity_set_url_, result.extracted_delta_url)) {
+            if (!IsWireSafeUrl(result.extracted_delta_url)) {
+                ERPL_TRACE_WARN("ODP_BIND_DATA", duckdb::StringUtil::Format(
+                    "Ignoring server-supplied delta link containing characters that cannot be "
+                    "sent in a request (%s)",
+                    SummariseUrlForMessage(result.extracted_delta_url)));
+            } else if (OdpRequestOrchestrator::IsSameOrigin(entity_set_url_, result.extracted_delta_url)) {
                 delta_url = result.extracted_delta_url;
             } else {
                 ERPL_TRACE_WARN("ODP_BIND_DATA", duckdb::StringUtil::Format(
