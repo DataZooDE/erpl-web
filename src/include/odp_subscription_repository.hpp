@@ -60,7 +60,7 @@ class OdpSubscriptionRepository {
 public:
     // Layout version of the erpl_web ODP tables. Bumped whenever the columns
     // change so an older layout is detected rather than silently misread.
-    static constexpr int32_t SCHEMA_VERSION = 1;
+    static constexpr int32_t SCHEMA_VERSION = 2;
 
     // Upper bound on an error body persisted into the audit table. A full SAP
     // error body can carry request context and is not worth keeping verbatim.
@@ -92,7 +92,8 @@ public:
     // none. A query failure throws rather than being reported as "not found" --
     // reporting it as not-found triggers a silent full re-extraction (#96).
     std::optional<OdpSubscription> FindActiveSubscription(const std::string& service_url,
-                                                        const std::string& entity_set_name);
+                                                        const std::string& entity_set_name,
+                                                        const std::string& secret_name);
     std::vector<OdpSubscription> ListAllSubscriptions();
 
     // Compare-and-swap advance of the delta token. The update only applies when
@@ -116,8 +117,10 @@ public:
 
     // Utility methods
     static std::string GenerateSubscriptionId(const std::string& service_url,
-                                             const std::string& entity_set_name);
+                                             const std::string& entity_set_name,
+                                             const std::string& secret_name);
     static std::string CleanUrlForId(const std::string& url);
+    static std::string SubscriptionsTableBody();
     // True when the path of the URL looks like an ODP entity set (EntityOf*,
     // FactsOf*, AttrOf*). The query string is stripped before matching -- it
     // regularly carries $format/$select and made valid URLs fail the check.
@@ -137,6 +140,9 @@ private:
     void ResolveStateCatalog();
     std::string QualifiedTable(const std::string& table_name) const;
     void InitializeSchema();
+    // Rewrites a v1 table (keyed on service_url + entity_set_name) into the v2 layout,
+    // which adds secret_name to the unique key. Preserves delta tokens (#236).
+    void MigrateSubscriptionsToV2();
     void InitializeTables();
     void VerifySchemaVersion();
 

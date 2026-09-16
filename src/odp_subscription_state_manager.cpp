@@ -248,7 +248,7 @@ void OdpSubscriptionStateManager::InitializeSubscription() {
 void OdpSubscriptionStateManager::LoadExistingSubscription() {
     ERPL_TRACE_DEBUG("ODP_STATE_MANAGER", "Attempting to load existing subscription");
     
-    auto existing = repository_->FindActiveSubscription(service_url_, entity_set_name_);
+    auto existing = repository_->FindActiveSubscription(service_url_, entity_set_name_, secret_name_);
     if (existing.has_value()) {
         ERPL_TRACE_INFO("ODP_STATE_MANAGER", "Found existing subscription: " + existing->subscription_id);
         current_subscription_ = existing.value();
