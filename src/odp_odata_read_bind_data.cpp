@@ -782,9 +782,9 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
         staged_delta_token_.clear();
         throw duckdb::IOException(
             "ODP pagination failed: no response for next page '" + url_to_fetch +
-            "'. The extraction is incomplete and the delta token was not advanced. The "
-            "subscription is left in error, so re-running re-extracts in full rather than "
-            "resuming from this position.");
+            "'. The extraction is incomplete and the delta token was not advanced, so the "
+            "subscription still points at the last position it completed. Re-running resumes "
+            "from there rather than re-extracting in full.");
     }
 
     // Determine whether there is yet another page after this one.
