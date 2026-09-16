@@ -824,10 +824,18 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     // needs its own check - the claim that DoHttpGet is "the single point every OData
     // request passes through" was false for exactly this function. The URL is the
     // CALLER's, so control characters only, matching that choke point.
-    if (!HasNoControlCharacters(normalized_url.ToPathQuery())) {
+    // Scheme, host and port included, not just the path and query. #229 added this check
+    // with ToPathQuery() alone and #230 widened its two siblings without widening this one -
+    // the same narrowing, fixed at two of three sites. The host goes out in the Host header
+    // and, behind a proxy, in the request line.
+    //
+    // The URL is the CALLER's here, so control characters only: refusing a raw space would
+    // reject a URL mangled by our own decode-then-emit-raw (#227).
+    const auto probe_target = normalized_url.ToSchemeHostAndPort() + normalized_url.ToPathQuery();
+    if (!HasNoControlCharacters(probe_target)) {
         throw duckdb::IOException(
             "Refusing to probe a URL containing control characters: '%s'.",
-            normalized_url.ToPathQuery());
+            SummariseUrlForMessage(probe_target));
     }
 
     // Make a single HTTP request to probe the content

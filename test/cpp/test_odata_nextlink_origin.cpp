@@ -352,3 +352,15 @@ TEST_CASE("a transient metadata failure repeats the same request", "[odata_origi
     // The retry happened at all, and reached the same path.
     REQUIRE(server.RequestsFor("/svc/$metadata").size() >= 2);
 }
+
+// #229 added a wire-safety check to ProbeUrl using ToPathQuery(); #230 widened its two
+// siblings to include scheme, host and port and did not widen this one - the same narrowing
+// fixed at two of three sites. The host goes out in the Host header, and behind a proxy in
+// the request line.
+TEST_CASE("the probe guard covers the host as well", "[odata_origin][security]") {
+    // Predicate-level, because HttpUrl truncates a caller URL at a raw CR before the guard
+    // can see it - the same reachability limit recorded on the ProbeUrl guard itself.
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://ho\rst.example/svc"));
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://host.example:80\n80/svc"));
+    REQUIRE(erpl_web::HasNoControlCharacters("https://host.example:8080/svc/Airlines?$top=1"));
+}
