@@ -86,7 +86,8 @@ OdpSubscription::OdpSubscription(const std::string& service_url,
     , subscription_status("active")
     , preference_applied(false)
 {
-    subscription_id = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name);
+    subscription_id = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name,
+                                                                        this->secret_name);
 }
 
 // ============================================================================
@@ -202,6 +203,7 @@ void OdpSubscriptionRepository::EnsureTablesExist() {
     EnsureSchemaExists();
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Ensuring ODP tables exist");
 
+    MigrateSubscriptionsToV2();
     InitializeTables();
     VerifySchemaVersion();
     tables_initialized = true;
@@ -224,12 +226,16 @@ std::string OdpSubscriptionRepository::CreateSubscription(const std::string& ser
             "Service URL does not look like an ODP entity set (expected EntityOf*/FactsOf*/AttrOf*): " + service_url);
     }
 
-    // (service_url, entity_set_name) is unique, so a stale non-active row for
-    // the same pair is revived rather than duplicated.
+    // (service_url, entity_set_name, secret_name) is unique, so a stale non-active row
+    // for the same triple is revived rather than duplicated. Switching to a different
+    // secret finds no row here and creates a new subscription with no delta token, which
+    // is a full initial load -- the honest outcome, since the old position was
+    // established under credentials this caller is no longer using (#236).
+    const std::string effective_secret = secret_name.empty() ? "default" : secret_name;
     auto existing = Execute(
         "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
-        " WHERE service_url = ? AND entity_set_name = ?",
-        {duckdb::Value(service_url), duckdb::Value(entity_set_name)});
+        " WHERE service_url = ? AND entity_set_name = ? AND secret_name = ?",
+        {duckdb::Value(service_url), duckdb::Value(entity_set_name), duckdb::Value(effective_secret)});
 
     if (existing->RowCount() > 0) {
         auto subscription = RowToSubscription(*existing, 0);
@@ -242,7 +248,7 @@ std::string OdpSubscriptionRepository::CreateSubscription(const std::string& ser
         Execute("UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
                 " SET subscription_status = 'active', delta_token = '', preference_applied = FALSE, "
                 "secret_name = ?, last_updated = ? WHERE subscription_id = ?",
-                {duckdb::Value(secret_name.empty() ? "default" : secret_name),
+                {duckdb::Value(effective_secret),
                  TimePointToValue(std::chrono::system_clock::now()),
                  duckdb::Value(subscription.subscription_id)});
         return subscription.subscription_id;
@@ -285,10 +291,13 @@ std::optional<OdpSubscription> OdpSubscriptionRepository::GetSubscription(const 
 }
 
 std::optional<OdpSubscription> OdpSubscriptionRepository::FindActiveSubscription(
-    const std::string& service_url, const std::string& entity_set_name) {
+    const std::string& service_url, const std::string& entity_set_name, const std::string& secret_name) {
+
+    const std::string effective_secret = secret_name.empty() ? "default" : secret_name;
 
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", duckdb::StringUtil::Format(
-        "Finding active subscription for URL: %s, Entity: %s", service_url, entity_set_name));
+        "Finding active subscription for URL: %s, Entity: %s, Secret: %s",
+        service_url, entity_set_name, effective_secret));
 
     EnsureTablesExist();
 
@@ -297,9 +306,10 @@ std::optional<OdpSubscription> OdpSubscriptionRepository::FindActiveSubscription
     // extraction from scratch (#96).
     auto result = Execute(
         "SELECT " + std::string(SUBSCRIPTION_COLUMNS) + " FROM " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
-        " WHERE service_url = ? AND entity_set_name = ? AND subscription_status = 'active' "
+        " WHERE service_url = ? AND entity_set_name = ? AND secret_name = ? "
+        "AND subscription_status = 'active' "
         "ORDER BY created_at DESC LIMIT 1",
-        {duckdb::Value(service_url), duckdb::Value(entity_set_name)});
+        {duckdb::Value(service_url), duckdb::Value(entity_set_name), duckdb::Value(effective_secret)});
 
     if (result->RowCount() == 0) {
         return std::nullopt;
@@ -516,7 +526,8 @@ bool OdpSubscriptionRepository::UpdateAuditEntry(const OdpAuditEntry& entry) {
 // ============================================================================
 
 std::string OdpSubscriptionRepository::GenerateSubscriptionId(const std::string& service_url,
-                                                             const std::string& entity_set_name) {
+                                                             const std::string& entity_set_name,
+                                                             const std::string& secret_name) {
     // Generate timestamp prefix: YYYYMMDD_HHMMSS
     auto now = std::chrono::system_clock::now();
     auto now_time = std::chrono::system_clock::to_time_t(now);
@@ -528,7 +539,10 @@ std::string OdpSubscriptionRepository::GenerateSubscriptionId(const std::string&
     std::string cleaned_url = CleanUrlForId(service_url);
     std::string cleaned_entity = CleanUrlForId(entity_set_name);
 
-    std::string subscription_id = timestamp_stream.str() + "_" + cleaned_url + "_" + cleaned_entity;
+    std::string cleaned_secret = CleanUrlForId(secret_name.empty() ? "default" : secret_name);
+
+    std::string subscription_id =
+        timestamp_stream.str() + "_" + cleaned_url + "_" + cleaned_entity + "_" + cleaned_secret;
 
     ERPL_TRACE_DEBUG("ODP_REPOSITORY", "Generated subscription ID: " + subscription_id);
     return subscription_id;
@@ -601,21 +615,32 @@ void OdpSubscriptionRepository::InitializeSchema() {
     Execute("CREATE SCHEMA IF NOT EXISTS " + qualified_schema, {});
 }
 
+// The subscriptions table body, shared by the fresh create and by the v1 migration so the
+// two cannot drift into different layouts.
+std::string OdpSubscriptionRepository::SubscriptionsTableBody() {
+    return std::string("(")
+         + "subscription_id VARCHAR PRIMARY KEY, "
+           "service_url VARCHAR NOT NULL, "
+           "entity_set_name VARCHAR NOT NULL, "
+           "secret_name VARCHAR, "
+           "delta_token VARCHAR, "
+           "created_at TIMESTAMP DEFAULT NOW(), "
+           "last_updated TIMESTAMP DEFAULT NOW(), "
+           "subscription_status VARCHAR DEFAULT 'active', "
+           "preference_applied BOOLEAN DEFAULT FALSE, "
+           "schema_version INTEGER NOT NULL DEFAULT 1, "
+           // One subscription per source AND credential: without the uniqueness two
+           // sessions racing on the first read each insert their own row and split the
+           // delta stream. The secret belongs in the key because a delta position is
+           // only meaningful relative to the credential that established it -- two
+           // callers reading the same entity set with different secrets previously
+           // shared one cursor, so one silently advanced the other's position (#236).
+           "UNIQUE (service_url, entity_set_name, secret_name))";
+}
+
 void OdpSubscriptionRepository::InitializeTables() {
-    Execute("CREATE TABLE IF NOT EXISTS " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " ("
-            "subscription_id VARCHAR PRIMARY KEY, "
-            "service_url VARCHAR NOT NULL, "
-            "entity_set_name VARCHAR NOT NULL, "
-            "secret_name VARCHAR, "
-            "delta_token VARCHAR, "
-            "created_at TIMESTAMP DEFAULT NOW(), "
-            "last_updated TIMESTAMP DEFAULT NOW(), "
-            "subscription_status VARCHAR DEFAULT 'active', "
-            "preference_applied BOOLEAN DEFAULT FALSE, "
-            "schema_version INTEGER NOT NULL DEFAULT 1, "
-            // One subscription per source: without it two sessions racing on the
-            // first read each insert their own row and split the delta stream.
-            "UNIQUE (service_url, entity_set_name))", {});
+    Execute("CREATE TABLE IF NOT EXISTS " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " " +
+            SubscriptionsTableBody(), {});
 
     Execute("CREATE SEQUENCE IF NOT EXISTS " + qualified_schema + "." + QuoteIdentifier(AUDIT_SEQUENCE) +
             " START 1", {});
@@ -634,6 +659,70 @@ void OdpSubscriptionRepository::InitializeTables() {
             "delta_token_after VARCHAR, "
             "error_message VARCHAR, "
             "duration_ms BIGINT)", {});
+}
+
+// Rewrite a v1 subscriptions table -- keyed (service_url, entity_set_name) -- into the v2
+// layout, which adds secret_name to the unique key (#236).
+//
+// This has to migrate rather than refuse. The precedent for an unreadable old table is to
+// tell the operator to drop the schema (see VerifySchemaVersion), but that is the wrong
+// trade here: dropping the table discards every delta token, and a lost delta token means
+// a full re-extraction of an SAP source, which is exactly the expense this work exists to
+// avoid. Old rows are unique on the pair and therefore already unique on the triple, so
+// the copy cannot collide.
+void OdpSubscriptionRepository::MigrateSubscriptionsToV2() {
+    auto table_exists = Execute(
+        "SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND schema_name = ? "
+        "AND table_name = ?",
+        {duckdb::Value(state_catalog), duckdb::Value(SCHEMA_NAME), duckdb::Value(SUBSCRIPTIONS_TABLE)});
+    if (table_exists->RowCount() == 0 || table_exists->GetValue(0, 0).GetValue<int64_t>() == 0) {
+        return;  // fresh install; InitializeTables creates it at v2 directly
+    }
+
+    // A table that predates schema_version entirely is not ours to migrate: VerifySchemaVersion
+    // reports it with instructions, and guessing at its layout here would corrupt it.
+    auto has_version = Execute(
+        "SELECT count(*) FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? "
+        "AND table_name = ? AND column_name = 'schema_version'",
+        {duckdb::Value(state_catalog), duckdb::Value(SCHEMA_NAME), duckdb::Value(SUBSCRIPTIONS_TABLE)});
+    if (has_version->RowCount() == 0 || has_version->GetValue(0, 0).GetValue<int64_t>() == 0) {
+        return;
+    }
+
+    // The unique key is the thing that actually changed, so detect on it rather than on the
+    // stored schema_version: a table whose constraint already names secret_name is at v2
+    // however its rows are stamped.
+    auto already_v2 = Execute(
+        "SELECT count(*) FROM duckdb_constraints() WHERE database_name = ? AND schema_name = ? "
+        "AND table_name = ? AND constraint_type = 'UNIQUE' "
+        "AND list_contains(constraint_column_names, 'secret_name')",
+        {duckdb::Value(state_catalog), duckdb::Value(SCHEMA_NAME), duckdb::Value(SUBSCRIPTIONS_TABLE)});
+    if (already_v2->RowCount() > 0 && already_v2->GetValue(0, 0).GetValue<int64_t>() > 0) {
+        return;
+    }
+
+    ERPL_TRACE_INFO("ODP_REPOSITORY",
+                    "Migrating ODP subscriptions table to v2 (secret_name joins the unique key)");
+
+    const std::string legacy_table = std::string(SUBSCRIPTIONS_TABLE) + "_v1_migrating";
+    const std::string qualified_legacy = qualified_schema + "." + QuoteIdentifier(legacy_table);
+
+    // A leftover from a migration interrupted part-way would make the rename fail.
+    Execute("DROP TABLE IF EXISTS " + qualified_legacy, {});
+    Execute("ALTER TABLE " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " RENAME TO " +
+            QuoteIdentifier(legacy_table), {});
+    Execute("CREATE TABLE " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " " + SubscriptionsTableBody(), {});
+
+    // Rows written before secret_name was recorded hold NULL or ''; both mean the default
+    // lookup, which is the name the rest of the repository uses for it.
+    Execute("INSERT INTO " + QualifiedTable(SUBSCRIPTIONS_TABLE) + " (" + SUBSCRIPTION_COLUMNS + ") "
+            "SELECT subscription_id, service_url, entity_set_name, "
+            "COALESCE(NULLIF(secret_name, ''), 'default'), delta_token, created_at, last_updated, "
+            "subscription_status, preference_applied, ? FROM " + qualified_legacy,
+            {duckdb::Value::INTEGER(SCHEMA_VERSION)});
+
+    Execute("DROP TABLE " + qualified_legacy, {});
+    ERPL_TRACE_INFO("ODP_REPOSITORY", "ODP subscriptions table migrated to v2");
 }
 
 void OdpSubscriptionRepository::VerifySchemaVersion() {

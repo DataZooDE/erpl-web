@@ -57,14 +57,14 @@ TEST_CASE("OdpSubscriptionRepository - Basic Operations", "[odp_repository]") {
         std::string entity_set_name = "EntityOfTest2";
         
         // No subscription should exist initially
-        auto existing = repo.FindActiveSubscription(service_url, entity_set_name);
+        auto existing = repo.FindActiveSubscription(service_url, entity_set_name, "default");
         REQUIRE(!existing.has_value());
         
         // Create subscription
         std::string subscription_id = repo.CreateSubscription(service_url, entity_set_name);
         
         // Should find the active subscription
-        existing = repo.FindActiveSubscription(service_url, entity_set_name);
+        existing = repo.FindActiveSubscription(service_url, entity_set_name, "default");
         REQUIRE(existing.has_value());
         REQUIRE(existing->subscription_id == subscription_id);
     }
@@ -174,12 +174,12 @@ TEST_CASE("OdpSubscriptionRepository - Utility Methods", "[odp_repository_utils]
         std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfTest";
         std::string entity_set_name = "EntityOfTest";
         
-        std::string id1 = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name);
+        std::string id1 = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name, "default");
         
         // Wait a second to ensure different timestamp
         std::this_thread::sleep_for(std::chrono::seconds(1));
         
-        std::string id2 = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name);
+        std::string id2 = OdpSubscriptionRepository::GenerateSubscriptionId(service_url, entity_set_name, "default");
         
         // IDs should be different due to timestamp
         REQUIRE(id1 != id2);
@@ -292,7 +292,7 @@ TEST_CASE("OdpSubscriptionRepository - values containing SQL syntax round-trip",
 
         const std::string subscription_id = repo.CreateSubscription(service_url, entity_set_name, "sec'ret");
 
-        auto found = repo.FindActiveSubscription(service_url, entity_set_name);
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, "sec'ret");
         REQUIRE(found.has_value());
         REQUIRE(found->subscription_id == subscription_id);
         REQUIRE(found->service_url == service_url);
@@ -313,7 +313,7 @@ TEST_CASE("OdpSubscriptionRepository - values containing SQL syntax round-trip",
         REQUIRE(!surviving->HasError());
         REQUIRE(surviving->GetValue(0, 0).GetValue<int64_t>() == 1);
 
-        auto found = repo.FindActiveSubscription("https://test.com/EntityOfInjection", malicious);
+        auto found = repo.FindActiveSubscription("https://test.com/EntityOfInjection", malicious, "default");
         REQUIRE(found.has_value());
         REQUIRE(found->entity_set_name == malicious);
     }
@@ -408,8 +408,8 @@ TEST_CASE("OdpSubscriptionRepository - concurrent delta advance", "[odp_reposito
 
     SECTION("The second advance from a stale token fails loudly") {
         // Both sessions read the same starting token.
-        auto seen_by_a = session_a.FindActiveSubscription(url, entity);
-        auto seen_by_b = session_b.FindActiveSubscription(url, entity);
+        auto seen_by_a = session_a.FindActiveSubscription(url, entity, "default");
+        auto seen_by_b = session_b.FindActiveSubscription(url, entity, "default");
         REQUIRE(seen_by_a.has_value());
         REQUIRE(seen_by_b.has_value());
         REQUIRE(seen_by_a->delta_token == seen_by_b->delta_token);
@@ -474,7 +474,7 @@ TEST_CASE("OdpSubscriptionRepository - failures are distinguished from not-found
 
         // Pre-fix: the query error was caught and turned into nullopt, which the
         // caller read as "never subscribed" and answered with a full reload.
-        REQUIRE_THROWS(repo.FindActiveSubscription("https://test.com/EntityOfBroken", "EntityOfBroken"));
+        REQUIRE_THROWS(repo.FindActiveSubscription("https://test.com/EntityOfBroken", "EntityOfBroken", "default"));
     }
 
     SECTION("A state table written by an older version is detected") {
@@ -509,4 +509,166 @@ TEST_CASE("OdpSubscriptionRepository - audit error bodies are truncated", "[odp_
 
     const std::string small = "short error";
     REQUIRE(OdpSubscriptionRepository::TruncateForAudit(small) == small);
+}
+
+TEST_CASE("OdpSubscriptionRepository - the secret is part of subscription identity",
+          "[odp_repository][odp_secret_identity]") {
+    odp_test::TempDatabase temp_db;
+    OdpSubscriptionRepository repo(temp_db.Context());
+
+    const std::string service_url = "https://test.com/sap/opu/odata/sap/TEST_SRV/EntityOfShared";
+    const std::string entity_set_name = "EntityOfShared";
+
+    SECTION("two credentials on one entity set get their own subscription and their own cursor") {
+        // Before #236 the key was (service_url, entity_set_name), so these two callers shared
+        // one row. Alice's extraction advanced Bob's cursor, and Bob then received a delta
+        // relative to a position he never reached -- silently, with rows missing.
+        const std::string alice = repo.CreateSubscription(service_url, entity_set_name, "alice_secret");
+        const std::string bob = repo.CreateSubscription(service_url, entity_set_name, "bob_secret");
+
+        REQUIRE(alice != bob);
+
+        auto found_alice = repo.FindActiveSubscription(service_url, entity_set_name, "alice_secret");
+        auto found_bob = repo.FindActiveSubscription(service_url, entity_set_name, "bob_secret");
+        REQUIRE(found_alice.has_value());
+        REQUIRE(found_bob.has_value());
+        REQUIRE(found_alice->subscription_id == alice);
+        REQUIRE(found_bob->subscription_id == bob);
+
+        // The cursors must move independently: advancing Alice's leaves Bob's where it was.
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(alice, std::string(), "alice_token_1"));
+
+        auto alice_after = repo.FindActiveSubscription(service_url, entity_set_name, "alice_secret");
+        auto bob_after = repo.FindActiveSubscription(service_url, entity_set_name, "bob_secret");
+        REQUIRE(alice_after->delta_token == "alice_token_1");
+        REQUIRE(bob_after->delta_token.empty());
+    }
+
+    SECTION("a secret nobody subscribed under finds nothing rather than someone else's row") {
+        repo.CreateSubscription(service_url, entity_set_name, "alice_secret");
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, "carol_secret");
+        REQUIRE_FALSE(found.has_value());
+    }
+
+    SECTION("switching secrets starts a fresh subscription with no inherited delta position") {
+        // The old position was established under credentials the caller is no longer using,
+        // so resuming from it would be a claim we cannot support. A full load is the honest
+        // outcome, and it is what an empty delta token produces.
+        const std::string first = repo.CreateSubscription(service_url, entity_set_name, "old_secret");
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(first, std::string(), "token_from_old_credentials"));
+
+        const std::string second = repo.CreateSubscription(service_url, entity_set_name, "new_secret");
+        REQUIRE(second != first);
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, "new_secret");
+        REQUIRE(found.has_value());
+        REQUIRE(found->delta_token.empty());
+
+        // and the original is untouched, not reused or cleared
+        auto original = repo.FindActiveSubscription(service_url, entity_set_name, "old_secret");
+        REQUIRE(original.has_value());
+        REQUIRE(original->delta_token == "token_from_old_credentials");
+    }
+
+    SECTION("an unnamed secret is the 'default' one, consistently on both write and read") {
+        const std::string id = repo.CreateSubscription(service_url, entity_set_name, "");
+
+        REQUIRE(repo.FindActiveSubscription(service_url, entity_set_name, "").has_value());
+        REQUIRE(repo.FindActiveSubscription(service_url, entity_set_name, "default").has_value());
+        REQUIRE(repo.FindActiveSubscription(service_url, entity_set_name, "")->subscription_id == id);
+    }
+}
+
+TEST_CASE("OdpSubscriptionRepository - a v1 state table migrates without losing delta tokens",
+          "[odp_repository][odp_schema_migration]") {
+    odp_test::TempDatabase temp_db;
+    Connection& conn = temp_db.Conn();
+
+    // Build the v1 layout by hand: the pre-#236 unique key, and rows stamped schema_version 1.
+    REQUIRE_NOTHROW(conn.Query("CREATE SCHEMA IF NOT EXISTS erpl_web"));
+    auto create = conn.Query(
+        "CREATE TABLE erpl_web.odp_subscriptions ("
+        "subscription_id VARCHAR PRIMARY KEY, service_url VARCHAR NOT NULL, "
+        "entity_set_name VARCHAR NOT NULL, secret_name VARCHAR, delta_token VARCHAR, "
+        "created_at TIMESTAMP DEFAULT NOW(), last_updated TIMESTAMP DEFAULT NOW(), "
+        "subscription_status VARCHAR DEFAULT 'active', preference_applied BOOLEAN DEFAULT FALSE, "
+        "schema_version INTEGER NOT NULL DEFAULT 1, "
+        "UNIQUE (service_url, entity_set_name))");
+    REQUIRE_FALSE(create->HasError());
+
+    // Three shapes that exist in the wild: a named secret, an empty one, and a NULL one
+    // from before the column was written at all.
+    auto insert = conn.Query(
+        "INSERT INTO erpl_web.odp_subscriptions "
+        "(subscription_id, service_url, entity_set_name, secret_name, delta_token, "
+        " subscription_status, preference_applied, schema_version) VALUES "
+        "('id_named', 'https://sap.test/TEST_SRV/EntityOfA', 'EntityOfA', 'prod_secret', 'TOKEN_A', "
+        " 'active', TRUE, 1), "
+        "('id_empty', 'https://sap.test/TEST_SRV/EntityOfB', 'EntityOfB', '', 'TOKEN_B', "
+        " 'active', FALSE, 1), "
+        "('id_null',  'https://sap.test/TEST_SRV/EntityOfC', 'EntityOfC', NULL, 'TOKEN_C', "
+        " 'active', FALSE, 1)");
+    REQUIRE_FALSE(insert->HasError());
+
+    OdpSubscriptionRepository repo(temp_db.Context());
+    REQUIRE_NOTHROW(repo.EnsureTablesExist());
+
+    SECTION("every delta token survives the migration") {
+        // This is the whole point of migrating rather than telling the operator to drop the
+        // schema: a lost token means a full re-extraction of an SAP source.
+        auto named = repo.FindActiveSubscription("https://sap.test/TEST_SRV/EntityOfA", "EntityOfA",
+                                                 "prod_secret");
+        REQUIRE(named.has_value());
+        REQUIRE(named->delta_token == "TOKEN_A");
+        REQUIRE(named->subscription_id == "id_named");
+        REQUIRE(named->preference_applied == true);
+    }
+
+    SECTION("rows with an empty or NULL secret become the 'default' one") {
+        auto from_empty = repo.FindActiveSubscription("https://sap.test/TEST_SRV/EntityOfB",
+                                                      "EntityOfB", "default");
+        REQUIRE(from_empty.has_value());
+        REQUIRE(from_empty->delta_token == "TOKEN_B");
+
+        auto from_null = repo.FindActiveSubscription("https://sap.test/TEST_SRV/EntityOfC",
+                                                     "EntityOfC", "default");
+        REQUIRE(from_null.has_value());
+        REQUIRE(from_null->delta_token == "TOKEN_C");
+    }
+
+    SECTION("the migrated table carries the v2 unique key") {
+        auto constraints = conn.Query(
+            "SELECT count(*) FROM duckdb_constraints() WHERE schema_name = 'erpl_web' "
+            "AND table_name = 'odp_subscriptions' AND constraint_type = 'UNIQUE' "
+            "AND list_contains(constraint_column_names, 'secret_name')");
+        REQUIRE_FALSE(constraints->HasError());
+        REQUIRE(constraints->GetValue(0, 0).GetValue<int64_t>() > 0);
+
+        // and the new key is actually enforced: same pair, second secret, both rows kept
+        REQUIRE_NOTHROW(repo.CreateSubscription("https://sap.test/TEST_SRV/EntityOfA", "EntityOfA",
+                                                "other_secret"));
+        auto original = repo.FindActiveSubscription("https://sap.test/TEST_SRV/EntityOfA",
+                                                    "EntityOfA", "prod_secret");
+        REQUIRE(original.has_value());
+        REQUIRE(original->delta_token == "TOKEN_A");
+    }
+
+    SECTION("the scratch table used during the migration is cleaned up") {
+        auto leftovers = conn.Query(
+            "SELECT count(*) FROM duckdb_tables() WHERE schema_name = 'erpl_web' "
+            "AND table_name LIKE '%_v1_migrating'");
+        REQUIRE_FALSE(leftovers->HasError());
+        REQUIRE(leftovers->GetValue(0, 0).GetValue<int64_t>() == 0);
+    }
+
+    SECTION("migrating is idempotent - a second open leaves the table alone") {
+        OdpSubscriptionRepository reopened(temp_db.Context());
+        REQUIRE_NOTHROW(reopened.EnsureTablesExist());
+
+        auto still_there = reopened.FindActiveSubscription("https://sap.test/TEST_SRV/EntityOfA",
+                                                           "EntityOfA", "prod_secret");
+        REQUIRE(still_there.has_value());
+        REQUIRE(still_there->delta_token == "TOKEN_A");
+    }
 }
