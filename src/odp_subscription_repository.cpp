@@ -244,13 +244,41 @@ std::string OdpSubscriptionRepository::CreateSubscription(const std::string& ser
             return subscription.subscription_id;
         }
 
-        ERPL_TRACE_INFO("ODP_REPOSITORY", "Reactivating subscription: " + subscription.subscription_id);
-        Execute("UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
-                " SET subscription_status = 'active', delta_token = '', preference_applied = FALSE, "
-                "secret_name = ?, last_updated = ? WHERE subscription_id = ?",
-                {duckdb::Value(effective_secret),
-                 TimePointToValue(std::chrono::system_clock::now()),
-                 duckdb::Value(subscription.subscription_id)});
+        // Whether the delta position survives reactivation depends on why the subscription
+        // stopped being active (#236).
+        //
+        // 'error' means an extraction failed for a reason that does NOT invalidate the
+        // position. A failure that genuinely invalidates it -- a 410 on the delta link, or
+        // SAP reporting DELTATOKEN -- never reaches this status at all: the reader
+        // recognises it (OdpODataReadBindData::IsTokenError), clears the token itself and
+        // goes back to initial load. So the stored token here is one the service would
+        // still honour, and discarding it turns a transient network blip into a full
+        // re-extraction of an SAP source.
+        //
+        // 'terminated' is different and must still clear it: the ODQ queue behind the
+        // subscription is gone, so resuming from its token would silently skip rows.
+        const bool position_survives = subscription.subscription_status == "error";
+
+        ERPL_TRACE_INFO("ODP_REPOSITORY", duckdb::StringUtil::Format(
+            "Reactivating subscription %s (was '%s'); delta position is %s",
+            subscription.subscription_id, subscription.subscription_status,
+            position_survives ? "preserved" : "discarded"));
+
+        if (position_survives) {
+            Execute("UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+                    " SET subscription_status = 'active', secret_name = ?, last_updated = ? "
+                    "WHERE subscription_id = ?",
+                    {duckdb::Value(effective_secret),
+                     TimePointToValue(std::chrono::system_clock::now()),
+                     duckdb::Value(subscription.subscription_id)});
+        } else {
+            Execute("UPDATE " + QualifiedTable(SUBSCRIPTIONS_TABLE) +
+                    " SET subscription_status = 'active', delta_token = '', preference_applied = FALSE, "
+                    "secret_name = ?, last_updated = ? WHERE subscription_id = ?",
+                    {duckdb::Value(effective_secret),
+                     TimePointToValue(std::chrono::system_clock::now()),
+                     duckdb::Value(subscription.subscription_id)});
+        }
         return subscription.subscription_id;
     }
 

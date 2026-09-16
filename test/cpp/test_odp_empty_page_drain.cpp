@@ -65,19 +65,22 @@ TEST_CASE("the drain throws rather than yielding a false end-of-scan", "[odp][dr
     REQUIRE(pages_fetched == BUDGET);
 }
 
-TEST_CASE("the drain's failure says the next run re-extracts in full", "[odp][drain]") {
-    // The message is the only thing that tells a user what a retry costs, and it used to
-    // promise a resume that does not happen: the subscription is left in error and
-    // reactivating it clears the delta token.
+TEST_CASE("the drain's failure says the next run resumes from the last position", "[odp][drain]") {
+    // The message is the only thing that tells a user what a retry costs, so it has to track
+    // what reactivation actually does. It has now been wrong in both directions: it first
+    // promised a resume that did not happen (the delta token was cleared on reactivation),
+    // was corrected in #235 to promise a full re-extraction, and #236 then made the resume
+    // real -- an 'error' subscription keeps its delta position, because a failure that would
+    // invalidate the position never reaches that status.
     try {
         erpl_web::DrainEmptyOdpPages([] { return 0u; }, [] { return true; }, [] {}, BUDGET, "");
         FAIL("expected the drain to throw");
     } catch (const duckdb::IOException &e) {
         const std::string message = e.what();
         INFO(message);
-        REQUIRE(message.find("re-extracts in full") != std::string::npos);
+        REQUIRE(message.find("resumes from there") != std::string::npos);
         REQUIRE(message.find("not advanced") != std::string::npos);
-        // And it must not claim a resumable retry.
-        REQUIRE(message.find("retry from the same position") == std::string::npos);
+        // And it must not go back to promising the full re-extraction that no longer happens.
+        REQUIRE(message.find("re-extracts in full") == std::string::npos);
     }
 }

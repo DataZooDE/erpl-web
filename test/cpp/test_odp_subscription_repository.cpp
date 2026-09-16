@@ -672,3 +672,62 @@ TEST_CASE("OdpSubscriptionRepository - a v1 state table migrates without losing 
         REQUIRE(still_there->delta_token == "TOKEN_A");
     }
 }
+
+TEST_CASE("OdpSubscriptionRepository - reactivation keeps a resumable delta position",
+          "[odp_repository][odp_resumable]") {
+    odp_test::TempDatabase temp_db;
+    OdpSubscriptionRepository repo(temp_db.Context());
+
+    const std::string service_url = "https://sap.test/TEST_SRV/EntityOfResume";
+    const std::string entity_set_name = "EntityOfResume";
+    const std::string secret = "prod_secret";
+
+    SECTION("an errored subscription resumes from where it stopped") {
+        // 'error' means an extraction failed for a reason that does not invalidate the delta
+        // position. Clearing the token here turned a transient network blip into a full
+        // re-extraction of an SAP source, which is the expense #236 exists to avoid.
+        const std::string id = repo.CreateSubscription(service_url, entity_set_name, secret);
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(id, "", "POSITION_BEFORE_THE_BLIP"));
+        REQUIRE(repo.UpdateSubscriptionStatus(id, "error"));
+
+        const std::string reactivated = repo.CreateSubscription(service_url, entity_set_name, secret);
+        REQUIRE(reactivated == id);
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, secret);
+        REQUIRE(found.has_value());
+        REQUIRE(found->subscription_status == "active");
+        REQUIRE(found->delta_token == "POSITION_BEFORE_THE_BLIP");
+    }
+
+    SECTION("a terminated subscription does not - its queue is gone") {
+        // TerminateDeltasFor* drops the ODQ queue behind the subscription, so resuming from
+        // its token would silently skip rows. This one must still start over.
+        const std::string id = repo.CreateSubscription(service_url, entity_set_name, secret);
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(id, "", "TOKEN_FOR_A_DEAD_QUEUE"));
+        REQUIRE(repo.UpdateSubscriptionStatus(id, "terminated"));
+
+        const std::string reactivated = repo.CreateSubscription(service_url, entity_set_name, secret);
+        REQUIRE(reactivated == id);
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, secret);
+        REQUIRE(found.has_value());
+        REQUIRE(found->subscription_status == "active");
+        REQUIRE(found->delta_token.empty());
+        // preference_applied is reset with the position, since the new load re-establishes it
+        REQUIRE(found->preference_applied == false);
+    }
+
+    SECTION("resuming still advances from the preserved token, not from empty") {
+        // The advance is a compare-and-swap against the stored value, so a preserved token
+        // has to be the value the next advance expects -- otherwise resuming would throw.
+        const std::string id = repo.CreateSubscription(service_url, entity_set_name, secret);
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(id, "", "POSITION_1"));
+        REQUIRE(repo.UpdateSubscriptionStatus(id, "error"));
+        repo.CreateSubscription(service_url, entity_set_name, secret);
+
+        REQUIRE_NOTHROW(repo.AdvanceDeltaToken(id, "POSITION_1", "POSITION_2"));
+
+        auto found = repo.FindActiveSubscription(service_url, entity_set_name, secret);
+        REQUIRE(found->delta_token == "POSITION_2");
+    }
+}
