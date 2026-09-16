@@ -1,4 +1,5 @@
 #include "odp_odata_read_bind_data.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 #include "odata_url_helpers.hpp"
 #include "secret_functions.hpp"
 #include "tracing.hpp"
@@ -179,25 +180,11 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
         // complete, with the token advanced over rows never delivered. The old comment
         // claimed the opposite of what the code did.
         constexpr unsigned int MAX_EMPTY_PAGES_PER_CALL = 64;
-        unsigned int rows_fetched = odata_bind_data_->FetchNextResult(output);
-        unsigned int empty_pages = 0;
-        while (rows_fetched == 0 && !pending_next_url_.empty()) {
-            if (++empty_pages > MAX_EMPTY_PAGES_PER_CALL) {
-                // On what the retry costs: the staged token is not committed, but this
-                // error also marks the subscription in error, and reactivating one clears
-                // delta_token (odp_subscription_repository.cpp), so the next run performs a
-                // FULL extraction rather than resuming. Saying "can be retried" implied a
-                // cheap resume that does not happen.
-                throw duckdb::IOException(
-                    "The ODP service returned " + std::to_string(MAX_EMPTY_PAGES_PER_CALL) +
-                    " consecutive empty pages while still advertising another page. Aborting "
-                    "rather than reporting a partial extraction as complete. No rows from this "
-                    "run have been committed and the delta token was not advanced; the "
-                    "subscription is left in error, so the next run re-extracts in full.");
-            }
-            FetchAndLoadNextPage();
-            rows_fetched = odata_bind_data_->FetchNextResult(output);
-        }
+        const unsigned int rows_fetched = DrainEmptyOdpPages(
+            [&] { return odata_bind_data_->FetchNextResult(output); },
+            [&] { return !pending_next_url_.empty(); },
+            [&] { FetchAndLoadNextPage(); },
+            MAX_EMPTY_PAGES_PER_CALL, "");
 
         // Every row has now been handed to DuckDB and no further page is pending, so the
         // delta package has actually been delivered and its token may safely be advanced.
@@ -325,10 +312,59 @@ void OdpODataReadBindData::Initialize() {
     }
 }
 
+// Builds auth params from a secret the caller named, rather than from whatever secret
+// happens to match the URL.
+//
+// The named secret was logged and stored on the subscription and then never used to pick
+// credentials: SetupAuthentication looked the URL up instead. So `secret => 'a'` and
+// `secret => 'b'` against the same service both authenticated as whichever secret the URL
+// matched - silently, with no indication the requested one had been ignored.
+static std::shared_ptr<HttpAuthParams> AuthParamsFromNamedSecret(duckdb::ClientContext &context,
+                                                                 const std::string &secret_name) {
+    auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
+    auto &secret_manager = duckdb::SecretManager::Get(context);
+    auto secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
+
+    // Naming a secret that does not exist is an error, not a reason to fall back to the URL
+    // lookup: falling back is how the caller's choice got ignored in the first place.
+    if (!secret_entry) {
+        throw duckdb::InvalidInputException(
+            "Secret '%s' not found. Create it with CREATE SECRET, or omit the secret argument "
+            "to match one by URL.", secret_name.c_str());
+    }
+
+    const auto *kv_secret = dynamic_cast<const duckdb::KeyValueSecret *>(secret_entry->secret.get());
+    if (kv_secret == nullptr) {
+        throw duckdb::InvalidInputException("Secret '%s' is not a key-value secret.",
+                                            secret_name.c_str());
+    }
+
+    auto params = std::make_shared<HttpAuthParams>();
+    const auto &type = secret_entry->secret->GetType();
+    if (type == "http_basic") {
+        params->basic_credentials = std::make_tuple(
+            kv_secret->TryGetValue("username", true).ToString(),
+            kv_secret->TryGetValue("password", true).ToString());
+    } else if (type == "http_bearer") {
+        params->bearer_token = kv_secret->TryGetValue("token", true).ToString();
+    } else {
+        throw duckdb::InvalidInputException(
+            "Secret '%s' has type '%s'; ODP needs an http_basic or http_bearer secret.",
+            secret_name.c_str(), type.c_str());
+    }
+    return params;
+}
+
 void OdpODataReadBindData::SetupAuthentication() {
     ERPL_TRACE_DEBUG("ODP_BIND_DATA", "Setting up authentication with secret: " + secret_name_);
     
     try {
+        if (!secret_name_.empty() && secret_name_ != "default") {
+            auth_params_ = AuthParamsFromNamedSecret(context_, secret_name_);
+            ERPL_TRACE_INFO("ODP_BIND_DATA", "Authentication configured from secret '" + secret_name_ + "'");
+            return;
+        }
+
         auth_params_ = HttpAuthParams::FromDuckDbSecrets(context_, entity_set_url_);
         if (!auth_params_) {
             ERPL_TRACE_WARN("ODP_BIND_DATA", "No authentication parameters found for URL: " + entity_set_url_);

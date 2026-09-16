@@ -84,6 +84,12 @@ bool HasNoControlCharacters(const std::string &url);
 // echoing their raw bytes hands control characters to whatever reads them.
 std::string SummariseUrlForMessage(const std::string &url);
 
+// The bytes a request line carries for `url`: scheme, host, port, path and query - the
+// fragment excluded, because it is never sent. Guards check THIS rather than ToString(),
+// and having one definition of it stops a guard being narrowed to the path alone, which
+// happened twice and left the host unchecked.
+std::string WireTargetOf(const HttpUrl &url);
+
 std::string StripHttpScheme(const std::string &value);
 
 // The host of an absolute http(s) URL, without scheme, port-path or trailing path. Throws

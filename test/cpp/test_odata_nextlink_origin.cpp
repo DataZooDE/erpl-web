@@ -352,16 +352,37 @@ TEST_CASE("a transient metadata failure repeats the same request", "[odata_origi
     REQUIRE(server.RequestsFor("/svc/$metadata").size() >= 2);
 }
 
-// #229 added a wire-safety check to ProbeUrl using ToPathQuery(); #230 widened its two
-// siblings to include scheme, host and port and did not widen this one - the same narrowing
-// fixed at two of three sites. The host goes out in the Host header, and behind a proxy in
-// the request line.
-TEST_CASE("the probe guard covers the host as well", "[odata_origin][security]") {
-    // Predicate-level, because HttpUrl truncates a caller URL at a raw CR before the guard
-    // can see it - the same reachability limit recorded on the ProbeUrl guard itself.
+// Every guard checks the bytes a request line actually carries, and WireTargetOf is the one
+// definition of what those are. This exists because the composition was narrowed to the path
+// alone twice - #229 wrote the ProbeUrl check that way and #230 widened two siblings without
+// widening it - each time leaving the HOST unchecked, which is where a service-chosen
+// @odata.context puts its authority and where httplib reads the Host header from.
+//
+// WHAT THIS PINS: the composition, and that a control character anywhere in it is refused.
+// WHAT IT DOES NOT: that any particular guard calls it. HttpUrl truncates a caller URL at a
+// raw CR before ProbeUrl's guard can observe it, so ProbeUrl cannot be driven end to end;
+// routing every guard through this helper is what makes the composition hard to narrow
+// again, not this test.
+TEST_CASE("the wire target is scheme, host, port, path and query", "[odata_origin][security]") {
+    const erpl_web::HttpUrl url("https://host.example:8080/svc/Airlines?$top=1#frag");
+    const auto target = erpl_web::WireTargetOf(url);
+
+    REQUIRE(target.find("host.example") != std::string::npos);
+    REQUIRE(target.find("8080") != std::string::npos);
+    REQUIRE(target.find("/svc/Airlines") != std::string::npos);
+    REQUIRE(target.find("$top=1") != std::string::npos);
+    // The fragment is never sent, so it is not part of what a guard inspects.
+    REQUIRE(target.find("frag") == std::string::npos);
+}
+
+TEST_CASE("a control character anywhere in the wire target is refused",
+          "[odata_origin][security]") {
+    // Host, path and query in turn - narrowing the composition to any one of them would
+    // let the others through.
     REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://ho\rst.example/svc"));
-    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://host.example:80\n80/svc"));
-    REQUIRE(erpl_web::HasNoControlCharacters("https://host.example:8080/svc/Airlines?$top=1"));
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://host.example/sv\nc"));
+    REQUIRE_FALSE(erpl_web::HasNoControlCharacters("https://host.example/svc?x=a\rb"));
+    REQUIRE(erpl_web::HasNoControlCharacters("https://host.example:8080/svc?x=a%0db"));
 }
 
 // The ODP __delta link is server-supplied and becomes the next credentialed request, so it

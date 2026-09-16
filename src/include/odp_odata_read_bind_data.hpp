@@ -18,6 +18,40 @@ namespace erpl_web {
  * It coordinates between the state manager and request orchestrator to provide seamless
  * ODP delta replication capabilities.
  */
+// Drains empty pages until rows arrive or the budget is spent.
+//
+// Extracted so the FAILURE path can be tested at all. Reaching it through the reader needs
+// a live ODP service with an open delta queue, so nothing exercised the branch that decides
+// between "keep draining" and "abort"; with the loop inline, restoring the old break -
+// which yielded zero rows and let the caller commit the delta token over rows never
+// delivered - would have failed no test.
+//
+// `fetch_rows` returns the rows a fetch produced; `has_next_page` reports whether the
+// service is still advertising one; `fetch_next_page` advances. Throws IOException when the
+// budget is spent with a page still pending: zero rows is how a DuckDB table function says
+// end-of-scan, so yielding here would report a partial extraction as complete.
+template <class FetchRows, class HasNextPage, class FetchNextPage>
+unsigned int DrainEmptyOdpPages(FetchRows &&fetch_rows, HasNextPage &&has_next_page,
+                                FetchNextPage &&fetch_next_page, unsigned int max_empty_pages,
+                                const std::string &failure_detail) {
+    unsigned int rows_fetched = fetch_rows();
+    unsigned int empty_pages = 0;
+    while (rows_fetched == 0 && has_next_page()) {
+        if (++empty_pages > max_empty_pages) {
+            throw duckdb::IOException(
+                "The ODP service returned " + std::to_string(max_empty_pages) +
+                " consecutive empty pages while still advertising another page. Aborting "
+                "rather than reporting a partial extraction as complete. No rows from this "
+                "run have been committed and the delta token was not advanced; the "
+                "subscription is left in error, so the next run re-extracts in full." +
+                failure_detail);
+        }
+        fetch_next_page();
+        rows_fetched = fetch_rows();
+    }
+    return rows_fetched;
+}
+
 class OdpODataReadBindData : public duckdb::TableFunctionData {
 public:
     /**
