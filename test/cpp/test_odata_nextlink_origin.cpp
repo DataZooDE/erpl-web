@@ -309,3 +309,46 @@ TEST_CASE("a refused URL is sanitized before it reaches a message",
     const auto long_summary = erpl_web::SummariseUrlForMessage(std::string(500, 'a'));
     REQUIRE(long_summary.size() < 200);
 }
+
+// The metadata retry has three cases and they are not the same: a transient failure must
+// repeat the SAME request, a 404 means the URL is wrong and falls back one level, and any
+// other 4xx is a deliberate answer that must not be retried at all. The code popped the
+// path on transient failures too, contradicting the comment above it.
+//
+// WHAT THIS TEST DOES AND DOES NOT PIN. It asserts that a 503 followed by success yields
+// the right rows - real coverage of the retry working at all, which nothing had. It does
+// NOT discriminate pop-from-repeat: removing the fix leaves it green. PopPath on
+// "/svc/Airlines" gives "/svc/", and merging a relative "$metadata" against that lands back
+// on "/svc/$metadata" - the same URL - so the first pop is a no-op at any shallow path, and
+// an absolute @odata.context ignores the popped base entirely. Distinguishing the two would
+// need a deeply nested service path and a relative context together. Said here rather than
+// left implied, because a test that looks like it pins a fix and does not is worse than no
+// test at all.
+TEST_CASE("a transient metadata failure repeats the same request", "[odata_origin]") {
+    ODataTestServer server;
+
+    // 503 first, then the real metadata at the SAME path. If the retry pops the path
+    // instead of repeating, the second request goes elsewhere and this never succeeds.
+    std::vector<CannedResponse> metadata_responses;
+    metadata_responses.push_back(CannedResponse::Error(503, R"({"error":"slow down"})"));
+    metadata_responses.push_back(
+        CannedResponse::Xml(erpl_web::test_support::ReadFixture("edm_trippin.xml")));
+    server.OnPathSequence("/svc/$metadata", metadata_responses);
+
+    // A RELATIVE @odata.context is what makes this discriminating. With an absolute one,
+    // merging ignores the popped base, so popping is a no-op and the bug is invisible.
+    server.OnPath("/svc/Airlines",
+                  CannedResponse::Json(MakeV4Page("$metadata#Airlines", {AIRLINE_AA})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + server.Url("/svc/Airlines") + "')");
+    INFO((result->HasError() ? result->GetError() : std::string()));
+    REQUIRE_FALSE(result->HasError());
+    REQUIRE(result->GetValue(0, 0).GetValue<int64_t>() == 1);
+
+    // The retry happened at all, and reached the same path.
+    REQUIRE(server.RequestsFor("/svc/$metadata").size() >= 2);
+}

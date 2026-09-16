@@ -531,15 +531,26 @@ protected:
                 std::this_thread::sleep_for(std::chrono::milliseconds(METADATA_RETRY_BASE_WAIT_MS * attempt));
             }
 
-            // Pop one level and retry toward service-root $metadata
+            // A TRANSIENT failure repeats the same request - exactly what the comment above
+            // promises. Popping the path here as well turned a 429 or a 503 into a request
+            // for a DIFFERENT, shorter URL, so a momentary blip came back as a wrong-URL
+            // failure and the service never got the retry it asked for.
+            if (!can_pop_path) {
+                continue;  // same metadata_request, resent
+            }
+
+            // 404 only: the URL is wrong rather than the service unwell, so fall back one
+            // level toward the service-root $metadata.
             current_svc_url = current_svc_url.PopPath();
             metadata_request = HttpRequest(HttpMethod::GET, HttpUrl::MergeWithBaseUrlIfRelative(current_svc_url, sanitized_raw));
-            // The rebuilt request is what SendRequest receives on attempts 2 and 3, so it
-            // clears the same bar as the first. Nothing reachable constructs a hostile URL
-            // here - PopPath only removes segments and the initial merge was checked - but
-            // leaving the sibling unguarded is the precise pattern this guard exists to end.
-            if (!IsWireSafeUrl(metadata_request.url.ToSchemeHostAndPort() +
-                               metadata_request.url.ToPathQuery())) {
+            // The rebuilt request is what SendRequest receives on later attempts, so it
+            // clears the same bar as the first. The SERVICE-supplied half is held to the
+            // strict rule; the merged URL carries the CALLER's own URL too, where a raw
+            // space is our own mangling (GitHub #227) and refusing it would be the
+            // regression fixed once already at the choke point.
+            if (!IsWireSafeUrl(sanitized_raw) ||
+                !HasNoControlCharacters(metadata_request.url.ToSchemeHostAndPort() +
+                                        metadata_request.url.ToPathQuery())) {
                 throw duckdb::IOException(
                     "The OData service named a metadata URL containing characters that cannot "
                     "be sent in a request.");
