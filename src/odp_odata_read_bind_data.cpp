@@ -183,11 +183,17 @@ unsigned int OdpODataReadBindData::FetchNextResult(duckdb::DataChunk &output) {
         unsigned int empty_pages = 0;
         while (rows_fetched == 0 && !pending_next_url_.empty()) {
             if (++empty_pages > MAX_EMPTY_PAGES_PER_CALL) {
+                // On what the retry costs: the staged token is not committed, but this
+                // error also marks the subscription in error, and reactivating one clears
+                // delta_token (odp_subscription_repository.cpp), so the next run performs a
+                // FULL extraction rather than resuming. Saying "can be retried" implied a
+                // cheap resume that does not happen.
                 throw duckdb::IOException(
                     "The ODP service returned " + std::to_string(MAX_EMPTY_PAGES_PER_CALL) +
                     " consecutive empty pages while still advertising another page. Aborting "
-                    "rather than reporting a partial extraction as complete; the delta token "
-                    "has not been advanced, so the extraction can be retried.");
+                    "rather than reporting a partial extraction as complete. No rows from this "
+                    "run have been committed and the delta token was not advanced; the "
+                    "subscription is left in error, so the next run re-extracts in full.");
             }
             FetchAndLoadNextPage();
             rows_fetched = odata_bind_data_->FetchNextResult(output);
@@ -740,8 +746,9 @@ void OdpODataReadBindData::FetchAndLoadNextPage() {
         staged_delta_token_.clear();
         throw duckdb::IOException(
             "ODP pagination failed: no response for next page '" + url_to_fetch +
-            "'. The extraction is incomplete and the delta token has not been advanced, "
-            "so re-running the query will retry from the same position.");
+            "'. The extraction is incomplete and the delta token was not advanced. The "
+            "subscription is left in error, so re-running re-extracts in full rather than "
+            "resuming from this position.");
     }
 
     // Determine whether there is yet another page after this one.
