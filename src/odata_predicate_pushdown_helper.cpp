@@ -225,7 +225,11 @@ void ODataPredicatePushdownHelper::ConsumeOffset(duckdb::idx_t offset) {
 void ODataPredicatePushdownHelper::ConsumeExpand(const std::string& expand_clause) {
     if (!expand_clause.empty()) {
         ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Consuming expand clause: " + expand_clause);
-        auto normalized = ODataUrlCodec::normalizeAndSanitizeExpand(expand_clause);
+        // Structure only -- the nested option keys get their '$', and nothing is encoded.
+        // Encoding happens once, in EncodeQueryValueForOption, like every other value: a
+        // clause sanitized here as well would be sanitized twice and reach the wire as
+        // %2520, which is the same double-encoding #227 is about.
+        auto normalized = ODataUrlCodec::normalizeExpand(expand_clause);
         if (normalized != expand_clause) {
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Normalized expand clause: " + normalized);
         }
@@ -496,11 +500,6 @@ void ODataPredicatePushdownHelper::MergeParametersIntoQuery(std::map<std::string
         if (pos == std::string::npos || pos + 1 >= clause.size()) return;
         std::string key = clause.substr(0, pos);
         std::string value = clause.substr(pos + 1);
-        if (key == "$filter" && existing_params.find(key) != existing_params.end()) {
-            // Keep existing (likely already encoded by upstream service/redirect)
-            ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Keeping existing $filter from URL to avoid double-encoding");
-            return;
-        }
         if (overwrite_always || existing_params.find(key) == existing_params.end()) {
             existing_params[key] = value;
             ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", std::string("Set param '") + key + "' = '" + value + "'");
@@ -545,7 +544,7 @@ std::string ODataPredicatePushdownHelper::RebuildQueryString(const std::map<std:
     for (const auto &kv : existing_params) {
         if (!first) oss << "&";
         first = false;
-        oss << kv.first << "=" << kv.second;
+        oss << kv.first << "=" << ODataUrlCodec::encodeQueryValueForOption(kv.first, kv.second);
     }
     return oss.str();
 }
@@ -742,14 +741,11 @@ std::string ODataPredicatePushdownHelper::BuildFilterClause(duckdb::optional_ptr
     
     std::string result = filter_clause.str();
 
-    // result is "$filter=" + <expr>
-    const std::string prefix = "$filter=";
-    if (result.rfind(prefix, 0) == 0) {
-        std::string encoded = prefix + ODataUrlCodec::encodeFilterExpression(result.substr(prefix.size()));
-        ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Built filter clause (smart-encoded): " + encoded);
-        return encoded;
-    }
-
+    // Deliberately NOT encoded here. Every value in the parameter map is decoded
+    // plaintext, and RebuildQueryString encodes each one exactly once on the way out.
+    // Encoding in both places is what produced %2520 after a redirect, and the
+    // workarounds for that ("keep the existing $filter") then dropped pushed-down
+    // filters instead. See GitHub #227.
     ERPL_TRACE_DEBUG("PREDICATE_PUSHDOWN", "Built filter clause: " + result);
     return result;
 }

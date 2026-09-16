@@ -26,6 +26,8 @@
 // test_odata_predicate_pushdown_expand.cpp; this file is about the read path.
 
 #include "catch.hpp"
+
+#include "odata_url_helpers.hpp"
 #include "duckdb.hpp"
 
 #include "odata_client.hpp"
@@ -137,6 +139,17 @@ public:
 
     std::string ProductsUrl() const { return server.Url("/nw/Products"); }
     std::string SentExpand() const { return ExpandOnTheWire(server, "/nw/Products"); }
+    // The bytes as they actually went out, before any decoding - which is where a raw
+    // space would be visible, and a decoded value never is.
+    std::string SentExpandRaw() const
+    {
+        for (const auto &request : server.RequestsFor("/nw/Products")) {
+            if (request.HasQueryParam("$expand")) {
+                return request.QueryParam("$expand");
+            }
+        }
+        return std::string();
+    }
     std::string SentParam(const std::string &name) const
     {
         return QueryParamOnTheWire(server, "/nw/Products", name);
@@ -164,9 +177,21 @@ private:
     TestDatabase database;
 };
 
-// Asserts that `expand` survives the whole bind path unchanged and reaches the
-// service. Every "is this spelling of $expand mangled on the way out?" case below
-// is exactly this assertion with a different string.
+// Asserts that `expand` survives the whole bind path intact and reaches the service.
+// Every "is this spelling of $expand mangled on the way out?" case below is exactly this
+// assertion with a different string.
+//
+// "Intact" means semantically, not byte for byte. These clauses carry values containing
+// spaces and quotes - Supplier($filter=Country eq 'UK') - and a raw space in a request
+// line ends the target, so the value has to reach the wire percent-encoded. What must
+// survive is the STRUCTURE (the parentheses, commas and semicolons that separate nested
+// options) and the value itself once decoded.
+//
+// This used to assert byte equality with the input, which passed only because the
+// encoding applied by normalizeAndSanitizeExpand was silently undone: query values were
+// decoded when the query was parsed and re-emitted raw, so the clause went out with
+// literal spaces in it. That was GitHub #227, and asserting byte equality made the
+// mangling look like the contract.
 void RequireExpandReachesTheService(const std::string &expand)
 {
     NorthwindV4Service service;
@@ -176,7 +201,29 @@ void RequireExpandReachesTheService(const std::string &expand)
     INFO((result->HasError() ? result->GetError() : std::string()));
     REQUIRE_FALSE(result->HasError());
 
-    REQUIRE(service.SentExpand() == expand);
+    const std::string decoded = service.SentExpand();
+    const std::string raw = service.SentExpandRaw();
+    INFO("raw on the wire: " << raw);
+    INFO("decoded:         " << decoded);
+
+    // Guard against a vacuous pass: an empty raw value would satisfy the space check
+    // below without anything having been sent at all.
+    REQUIRE_FALSE(raw.empty());
+
+    // What the service ends up reading must be exactly what the caller wrote.
+    REQUIRE(decoded == expand);
+
+    // When the clause contains a space, the wire form must actually differ from it -
+    // otherwise the encoding is not happening and the check below proves nothing.
+    if (expand.find(' ') != std::string::npos) {
+        REQUIRE(raw != expand);
+        REQUIRE(raw.find("%20") != std::string::npos);
+    }
+
+    // And the bytes that carried it must not contain anything that ends the request
+    // target. Asserting this on the DECODED value would be vacuous - a decoded value
+    // has its spaces back by definition - so it has to be checked on the raw form.
+    REQUIRE(raw.find(' ') == std::string::npos);
 }
 
 }  // namespace

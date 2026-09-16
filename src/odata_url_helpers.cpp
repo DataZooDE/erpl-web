@@ -721,6 +721,64 @@ std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
 }
 
 // Normalize expand and percent-encode ONLY nested $filter values inside option sections
+// Percent-encode one query value on its way into the request line.
+//
+// Every value in the parameter map is decoded plaintext -- parsed values are decoded when
+// the query is read, and generated clauses are built unencoded -- so this is the single
+// place encoding happens. That is the point: values used to be encoded by whoever produced
+// them and then re-emitted raw here, so a caller's %20 came back out as a literal space.
+// On OData paths that splits the request line, because every OData request sets
+// url_encode = false and httplib writes the target verbatim (GitHub #227).
+//
+// The rules differ per option because OData puts structure inside some values:
+//
+//   $filter   - an expression. Encoded aggressively (everything but RFC 3986 unreserved),
+//               which is what strict services want for its spaces and quotes.
+//   $expand   - carries nested option sections like Products($filter=X eq null),Cat($select=N).
+//               Its parentheses, commas, equals signs and $ are structure, not data, so
+//               blanket-encoding it mangles the expression. normalizeAndSanitizeExpand
+//               already encodes the nested $filter VALUES; only the separating spaces are
+//               left to deal with here.
+//   others    - ordinary values ($select, $orderby, $top, ...). Only characters that cannot
+//               appear literally in a query component are escaped, so commas and colons in
+//               a $select or $orderby survive as themselves.
+std::string ODataUrlCodec::encodeQueryValueForOption(const std::string &key, const std::string &value) {
+    if (value.empty()) {
+        return value;
+    }
+
+    if (key == "$filter") {
+        return ODataUrlCodec::encodeFilterExpression(value);
+    }
+
+    if (key == "$expand") {
+        return ODataUrlCodec::normalizeAndSanitizeExpand(value);
+    }
+
+    // RFC 3986 allows sub-delims, ':', '@', '/' and '?' in a query component unencoded, and
+    // OData relies on that for the commas in $select and $orderby. What must still go are
+    // the characters that would change the shape of the request: a space (which ends the
+    // request target), '&' and '#' (which end this value), and '%' (which would otherwise
+    // read as the start of an escape this value does not contain, since it is plaintext).
+    std::string result;
+    result.reserve(value.size());
+    for (const auto c : value) {
+        const auto uc = static_cast<unsigned char>(c);
+        const bool is_unreserved = std::isalnum(uc) || uc == '-' || uc == '_' || uc == '.' || uc == '~';
+        const bool is_query_safe_delim = uc == '!' || uc == '$' || uc == '\'' || uc == '(' || uc == ')' ||
+                                         uc == '*' || uc == '+' || uc == ',' || uc == ';' || uc == '=' ||
+                                         uc == ':' || uc == '@' || uc == '/' || uc == '?';
+        if (is_unreserved || is_query_safe_delim) {
+            result += c;
+        } else {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%%%02X", uc);
+            result += hex;
+        }
+    }
+    return result;
+}
+
 std::string ODataUrlCodec::normalizeAndSanitizeExpand(const std::string &expand_value) {
     if (expand_value.empty()) return expand_value;
     // First normalize structure

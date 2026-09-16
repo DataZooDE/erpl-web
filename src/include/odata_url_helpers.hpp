@@ -179,6 +179,16 @@ public:
 
     // Normalize expand and percent-encode ONLY nested $filter values inside option sections
     static std::string normalizeAndSanitizeExpand(const std::string &expand_value);
+
+    // Percent-encode one query option's value on its way into a request line, per option.
+    //
+    // Both places that rebuild an OData query -- the predicate pushdown and
+    // ODataClientFactory::ProbeUrl -- decode values when they parse them, so both must
+    // encode on the way out. They used to re-emit raw, which turned a caller's %20 into a
+    // literal space; a space ends the request target, and OData paths set url_encode =
+    // false so httplib never re-encodes it. Sharing one function is what keeps the two
+    // sites from drifting, which is how one of them stayed broken. See GitHub #227.
+    static std::string encodeQueryValueForOption(const std::string &key, const std::string &value);
 };
 
 } // namespace erpl_web

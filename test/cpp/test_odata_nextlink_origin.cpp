@@ -216,15 +216,19 @@ TEST_CASE("an OData next link with control characters is refused, not followed",
     }
 }
 
-// The choke-point guard sees the CALLER's URL, and must not refuse it for a raw space,
-// because a raw space there is OUR doing: the predicate pushdown decodes query values on
-// parse and re-emits them unencoded, so a user's "%20" arrives as a literal space.
+// A caller's percent-encoded query value survives every request the read makes.
 //
-// What this pins is the guard's scope, not that the URL works. It does not: the mangled
-// space goes out in the request line and the service rejects it - that is a separate,
-// pre-existing bug, and the guard must not be what disguises it. Asserting success here
-// would assert behaviour that has never existed.
-TEST_CASE("the choke-point guard does not refuse a user URL over a mangled space",
+// This case used to assert the opposite half of the story. The predicate pushdown decoded
+// query values when it parsed them and re-emitted them raw, so a user's "%20" came back out
+// as a literal space in the REBUILT query - and a literal space ends the request target, so
+// the follow-up request never arrived intact. At the time this test pinned only the guard's
+// scope (that DoHttpGet was not what refused the URL), and said so, because asserting
+// success would have asserted behaviour that did not exist.
+//
+// GitHub #227 made the encoding survive: values are held as decoded plaintext and encoded
+// exactly once on the way out. So the assertion is now the one worth having - the read
+// succeeds, and every request carries the value encoded rather than split across a space.
+TEST_CASE("a caller's percent-encoded query value survives into every request",
           "[odata_origin][security]") {
     ODataTestServer server;
 
@@ -238,24 +242,20 @@ TEST_CASE("the choke-point guard does not refuse a user URL over a mangled space
 
     auto result = con.Query("SELECT COUNT(*) FROM odata_read('" + server.Url("/svc/Airlines") +
                             "?$orderby=Name%20desc')");
-    REQUIRE(result->HasError());
+    INFO("error was: " << (result->HasError() ? result->GetError() : std::string("<none>")));
+    REQUIRE_FALSE(result->HasError());
 
-    const auto error = result->GetError();
-    INFO("error was: " << error);
-    // NOT refused by the guard - it reached the wire and the service answered. If this ever
-    // reads "control characters", the guard has started rejecting the caller's own URLs.
-    REQUIRE(error.find("control characters") == std::string::npos);
-    REQUIRE_FALSE(server.RequestsFor("/svc/Airlines").empty());
-
-    // The caller's own encoding survives the first request untouched.
     const auto requests = server.RequestsFor("/svc/Airlines");
-    INFO("first target: " << requests.front().target);
-    REQUIRE(requests.front().target.find("%20") != std::string::npos);
+    REQUIRE_FALSE(requests.empty());
 
-    // The read still fails, and not because of this guard: the pushdown rebuilds the query
-    // for the follow-up request with the value DECODED and re-emitted raw, so that request
-    // line carries a literal space and never arrives intact. That mangling is a separate,
-    // pre-existing bug - what matters here is that the guard is not what disguises it.
+    // Every request - the first one built straight from the caller's URL, and any the
+    // pushdown rebuilt with $select added - carries the value encoded. A rebuilt request
+    // used to arrive here as "$orderby=Name desc", whose space ends the target.
+    for (const auto &request : requests) {
+        INFO("target: " << request.target);
+        REQUIRE(request.target.find("$orderby=Name%20desc") != std::string::npos);
+        REQUIRE(request.target.find("Name desc") == std::string::npos);
+    }
 }
 
 // ODataClientFactory::ProbeUrl builds its own request and never enters DoHttpGet, which is

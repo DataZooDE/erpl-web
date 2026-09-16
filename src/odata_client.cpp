@@ -789,12 +789,15 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
                     decoded_key = "$format";
                 }
 
-                // Decode value for inspection, and ensure $filter value is encoded as a single query value
+                // Decode the value, then re-encode it for the option it belongs to. Passing
+                // raw_value through was the same defect as in the predicate pushdown: the
+                // value has been decoded for inspection, and emitting the original bytes
+                // for everything except $filter meant a caller's %20 survived here but was
+                // mangled by whichever site rebuilt the query next. One encoder, both
+                // sites. See GitHub #227.
                 std::string decoded_value = ODataUrlCodec::decodeQueryValue(raw_value);
-                std::string final_value = raw_value;
-                if (decoded_key == "$filter" && !decoded_value.empty()) {
-                    final_value = ODataUrlCodec::encodeFilterExpression(decoded_value);
-                }
+                std::string final_value =
+                    ODataUrlCodec::encodeQueryValueForOption(decoded_key, decoded_value);
 
                 // If we failed to decode a meaningful key, keep the raw key to avoid losing information
                 std::string final_key = decoded_key.empty() ? raw_key : decoded_key;
@@ -829,8 +832,11 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     // the same narrowing, fixed at two of three sites. The host goes out in the Host header
     // and, behind a proxy, in the request line.
     //
-    // The URL is the CALLER's here, so control characters only: refusing a raw space would
-    // reject a URL mangled by our own decode-then-emit-raw (#227).
+    // The URL is the CALLER's here, so control characters only. A raw space is no longer
+    // something this code produces (#227 made both query rebuilds encode on the way out),
+    // but the check stays deliberately narrow: a caller's own URL is not the place to be
+    // strict about a character that cannot forge a header. Service-supplied links are held
+    // to IsWireSafeUrl, which refuses spaces too, at their own seams.
     const auto probe_target = WireTargetOf(normalized_url);
     if (!HasNoControlCharacters(probe_target)) {
         throw duckdb::IOException(
