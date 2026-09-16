@@ -831,7 +831,7 @@ ODataClientFactory::ProbeResult ODataClientFactory::ProbeUrl(const std::string& 
     //
     // The URL is the CALLER's here, so control characters only: refusing a raw space would
     // reject a URL mangled by our own decode-then-emit-raw (#227).
-    const auto probe_target = normalized_url.ToSchemeHostAndPort() + normalized_url.ToPathQuery();
+    const auto probe_target = WireTargetOf(normalized_url);
     if (!HasNoControlCharacters(probe_target)) {
         throw duckdb::IOException(
             "Refusing to probe a URL containing control characters: '%s'.",

@@ -333,14 +333,13 @@ protected:
         // unencoded, so a user's "%20" arrives as a literal space; refusing that turned a
         // long-standing mangling into a hard failure on URLs that had always worked.
         // Service-supplied links are held to the stricter IsWireSafeUrl at their own seams.
-        if (!HasNoControlCharacters(modified_url.ToSchemeHostAndPort() + modified_url.ToPathQuery())) {
+        if (!HasNoControlCharacters(WireTargetOf(modified_url))) {
             // The URL is echoed only through the sanitizer: it is service-influenced on the
             // paging path, and putting its raw bytes in an exception string puts them into
             // logs and terminals that interpret control characters.
             throw duckdb::IOException(
                 "Refusing to request a URL containing control characters: '%s'.",
-                SummariseUrlForMessage(modified_url.ToSchemeHostAndPort() +
-                                       modified_url.ToPathQuery()));
+                SummariseUrlForMessage(WireTargetOf(modified_url)));
         }
 
         // Credentials go only to the origin this client was pointed at. Server-driven
@@ -395,12 +394,11 @@ protected:
     // merged URL while the retry's comment explained why that must not be done. One helper
     // so they cannot drift apart again.
     static void RequireSendableMetadataUrl(const HttpUrl &merged, const std::string &service_supplied) {
-        if (!IsWireSafeUrl(service_supplied) ||
-            !HasNoControlCharacters(merged.ToSchemeHostAndPort() + merged.ToPathQuery())) {
+        if (!IsWireSafeUrl(service_supplied) || !HasNoControlCharacters(WireTargetOf(merged))) {
             throw duckdb::IOException(
                 "The OData service named a metadata URL containing characters that cannot be "
                 "sent in a request: '%s'.",
-                SummariseUrlForMessage(merged.ToSchemeHostAndPort() + merged.ToPathQuery()));
+                SummariseUrlForMessage(WireTargetOf(merged)));
         }
     }
 

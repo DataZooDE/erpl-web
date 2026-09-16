@@ -78,6 +78,11 @@ bool IsWireSafeUrl(const std::string &url)
     return HasNoControlCharacters(url) && url.find(' ') == std::string::npos;
 }
 
+std::string WireTargetOf(const HttpUrl &url)
+{
+    return url.ToSchemeHostAndPort() + url.ToPathQuery();
+}
+
 std::string SummariseUrlForMessage(const std::string &url)
 {
     constexpr std::size_t MAX_LENGTH = 120;
