@@ -112,20 +112,6 @@ static void GraphCheckResponse(const std::unique_ptr<HttpResponse> &response,
 }
 
 
-// Server-supplied text reaches messages and traces; keep it short and strip anything that
-// would corrupt a log line.
-static std::string SummariseUrlForMessage(const std::string &value) {
-    constexpr size_t MAX_LENGTH = 120;
-    std::string summary;
-    for (const char c : value.substr(0, MAX_LENGTH)) {
-        summary.push_back((static_cast<unsigned char>(c) < 0x20 || c == 0x7f) ? '?' : c);
-    }
-    if (value.size() > MAX_LENGTH) {
-        summary += "...";
-    }
-    return summary;
-}
-
 bool GraphClient::IsServerSuppliedUrlTrusted(const std::string &url, const std::string &origin) {
     if (origin.empty() || !IsWireSafeUrl(url)) {
         return false;
