@@ -133,6 +133,20 @@ the manual `ThreadFlush` call entirely.
 `config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true))` instead.
 The setting is now a generic DBConfig setting stored via `user_settings`.
 
+### C++ tests are compiled on Windows CI — write them portably
+
+`test/cpp/*.cpp` is globbed into the extension build, so **every** test file is compiled on
+the Windows leg. POSIX-only headers therefore break the build for everyone, and the failure
+appears ~20 minutes later in CI rather than locally:
+
+- `<unistd.h>` / `getpid()` — **not shipped by MSVC**. For a unique temp name use a
+  `static std::atomic` counter plus the object address, not the pid.
+- Prefer `<filesystem>`, `<chrono>`, `<thread>` over POSIX equivalents.
+
+This has now cost two round trips (`test_delta_share_scan_reexecution.cpp` documented it in
+a comment, and `test_credential_trace_redaction.cpp` then repeated it). A comment inside one
+test file is not where the next author looks — hence this entry.
+
 **SQL tests location:** `test/sql/` (various `.test` files organized by module)
 **C++ unit tests location:** `build/debug/extension/erpl_web/test/cpp/`
 
