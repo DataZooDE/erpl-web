@@ -29,26 +29,32 @@ OAuth2Config GetDatasphereOAuth2Config() {
 }
 
 // Centralized function to get or refresh OAuth2 token
-std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Config &config) {
+std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Config &config,
+                                        const std::string &secret_name) {
     std::string access_token;
 
-    // Read existing secret; do not inject hardcoded values
+    // The secret is named by the caller. This used to be hardcoded to "datasphere" while
+    // two binds parsed a `secret` named parameter that was never registered on any of these
+    // functions - so the parameter could not be passed at all (the binder rejected it), and
+    // the parsing code was unreachable. Every catalog function was locked to one secret,
+    // while the read path threaded the name correctly: the same guard-at-one-seam shape.
+    // See GitHub #245.
     auto &secret_manager = duckdb::SecretManager::Get(context);
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     std::unique_ptr<duckdb::SecretEntry> secret_entry;
     try {
-        secret_entry = secret_manager.GetSecretByName(transaction, "datasphere");
+        secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
     } catch (...) {
         secret_entry = nullptr;
     }
 
     if (!secret_entry) {
-        throw duckdb::InvalidInputException("Secret 'datasphere' not found. Please create it using CREATE SECRET datasphere (type 'datasphere', provider 'oauth2', client_id => '...', client_secret => '...', tenant_name => '...', data_center => '...', scope => 'default', redirect_uri => 'http://localhost:65000');");
+        throw duckdb::InvalidInputException("Secret '" + secret_name + "' not found. Please create it using CREATE SECRET " + secret_name + " (type 'datasphere', provider 'oauth2', client_id => '...', client_secret => '...', tenant_name => '...', data_center => '...', scope => 'default', redirect_uri => 'http://localhost:65000');");
     }
 
     auto kv_secret = dynamic_cast<const duckdb::KeyValueSecret*>(secret_entry->secret.get());
     if (!kv_secret) {
-        throw duckdb::InvalidInputException("Secret 'datasphere' is not a KeyValueSecret");
+        throw duckdb::InvalidInputException("Secret '" + secret_name + "' is not a KeyValueSecret");
     }
 
     // Always populate config fields from secret for downstream URL construction/debug
@@ -810,7 +816,7 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
     try {
         // Get OAuth2 token using centralized function
         erpl_web::OAuth2Config config = erpl_web::GetDatasphereOAuth2Config();
-        std::string access_token = erpl_web::GetOrRefreshDatasphereToken(context, config);
+        std::string access_token = erpl_web::GetOrRefreshDatasphereToken(context, config, secret_name);
         
         // Create HTTP client
         auto http_client = std::make_shared<erpl_web::HttpClient>();
@@ -1110,8 +1116,10 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     // Extract space_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     
-    // Extract optional secret from named parameters
-    std::string secret_name = "default";
+    // Extract optional secret from named parameters. The default is the secret name the
+    // catalog functions have always used; "default" was never right here, and the value was
+    // discarded anyway because the parameter was not registered (GitHub #245).
+    std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
     }
@@ -1122,7 +1130,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     
     // Get OAuth2 token using centralized function
     OAuth2Config config = GetDatasphereOAuth2Config();
-    std::string access_token = GetOrRefreshDatasphereToken(context, config);
+    std::string access_token = GetOrRefreshDatasphereToken(context, config, secret_name);
     
     // Create HTTP client and OData client for space endpoint
     auto http_client = std::make_shared<HttpClient>();
@@ -1157,8 +1165,10 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     auto space_id = input.inputs[0].GetValue<std::string>();
     auto asset_id = input.inputs[1].GetValue<std::string>();
     
-    // Extract optional secret from named parameters
-    std::string secret_name = "default";
+    // Extract optional secret from named parameters. The default is the secret name the
+    // catalog functions have always used; "default" was never right here, and the value was
+    // discarded anyway because the parameter was not registered (GitHub #245).
+    std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
     }
@@ -1179,7 +1189,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     
     // Get OAuth2 token using centralized function
     OAuth2Config config = GetDatasphereOAuth2Config();
-    std::string access_token = GetOrRefreshDatasphereToken(context, config);
+    std::string access_token = GetOrRefreshDatasphereToken(context, config, secret_name);
     
     // Create HTTP client and OData client for asset endpoint
     auto http_client = std::make_shared<HttpClient>();
@@ -1359,9 +1369,14 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name"};
 
-            // Auth via secret
+            // Auth via secret. The name is a named parameter now, registered below; these
+            // binds previously had no way to accept one at all (GitHub #245).
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg; // populated by helper
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
 
             // Build DWAAS spaces URL using centralized builder
             std::string url = DatasphereUrlBuilder::BuildDwaasCoreSpacesUrl(cfg.tenant_name, cfg.data_center);
@@ -1401,6 +1416,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
         }
     );
     scan_function.init_global = ScanRowCursorState::Init;
+    scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(scan_function);
 
     return function_set;
@@ -1434,8 +1450,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             auto space_id = input.inputs[0].GetValue<std::string>();
 
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg;
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
             
 
             auto http = std::make_shared<HttpClient>();
@@ -1572,6 +1592,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         }
     );
     scan_function.init_global = ScanRowCursorState::Init;
+    scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(scan_function);
 
     // Function 2: Show all assets from all accessible spaces (new functionality)
@@ -1597,8 +1618,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name", "space_name"};
 
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg;
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
 
             auto http = std::make_shared<HttpClient>();
             auto auth = std::make_shared<HttpAuthParams>();
@@ -1752,6 +1777,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         }
     );
     all_spaces_scan_function.init_global = ScanRowCursorState::Init;
+    all_spaces_scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(all_spaces_scan_function);
 
     return function_set;
@@ -1762,6 +1788,10 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     
     duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceBind));
     describe_space.init_global = ScanRowCursorState::Init;
+    // Registering the parameter is what makes it usable: the binder rejects any named
+    // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
+    // parameter" while two binds contained code to read it (GitHub #245).
+    describe_space.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1773,6 +1803,10 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
                                         DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetBind));
     describe_asset.init_global = ScanRowCursorState::Init;
+    // Registering the parameter is what makes it usable: the binder rejects any named
+    // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
+    // parameter" while two binds contained code to read it (GitHub #245).
+    describe_asset.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_asset);
     return function_set;

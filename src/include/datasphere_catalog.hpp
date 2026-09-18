@@ -68,6 +68,9 @@ public:
     std::string resource_type; // "space" or "asset"
     std::string resource_id;
     std::string space_id; // for assets only
+    // The secret the caller named. Carried here because LoadResourceDetails fetches a token
+    // of its own, and hardcoding the name there would ignore `secret :=` (GitHub #245).
+    std::string secret_name = "datasphere";
     
     // Load detailed resource information
     void LoadResourceDetails(duckdb::ClientContext &context);
