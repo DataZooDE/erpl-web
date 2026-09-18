@@ -36,6 +36,21 @@ SacCatalogService::SacCatalogService(
 SacCatalogService::~SacCatalogService() = default;
 
 std::vector<SacModel> SacCatalogService::ListModels() const {
+    // NOT IMPLEMENTED, and says so rather than answering.
+    //
+    // This returned an empty result, which DuckDB cannot distinguish from a genuine
+    // "this tenant has nothing" - a zero-row chunk IS end-of-scan. So against a live
+    // tenant full of models, sac_show_models() reported success and no rows.
+    //
+    // It is not implemented here because SAC's catalog wire format is not verifiable from
+    // this repository: there is no tenant, fixture or captured response to build a parser
+    // against, and a parser written to a guessed shape would look verified without being
+    // so. Throwing is the honest answer until a real response exists. See GitHub #244.
+    throw duckdb::NotImplementedException(
+        "SacCatalogService::ListModels is not implemented yet. SAC catalog discovery needs the tenant's OData service "
+        "document, which this build cannot parse. Use the Datasphere functions, or open an "
+        "issue with a captured SAC response if you need this.");
+
     std::vector<SacModel> models;
 
     try {
@@ -62,6 +77,21 @@ std::vector<SacModel> SacCatalogService::ListModels() const {
 }
 
 std::optional<SacModel> SacCatalogService::GetModel(const std::string& model_id) const {
+    // NOT IMPLEMENTED, and says so rather than answering.
+    //
+    // This returned an empty result, which DuckDB cannot distinguish from a genuine
+    // "this tenant has nothing" - a zero-row chunk IS end-of-scan. So against a live
+    // tenant full of models, sac_show_models() reported success and no rows.
+    //
+    // It is not implemented here because SAC's catalog wire format is not verifiable from
+    // this repository: there is no tenant, fixture or captured response to build a parser
+    // against, and a parser written to a guessed shape would look verified without being
+    // so. Throwing is the honest answer until a real response exists. See GitHub #244.
+    throw duckdb::NotImplementedException(
+        "SacCatalogService::GetModel is not implemented yet. SAC catalog discovery needs the tenant's OData service "
+        "document, which this build cannot parse. Use the Datasphere functions, or open an "
+        "issue with a captured SAC response if you need this.");
+
     try {
         // STUB IMPLEMENTATION: Returns nullopt (no data)
         // TODO: Implement full functionality to query specific planning model via OData
@@ -112,6 +142,13 @@ std::vector<std::string> SacCatalogService::GetModelMeasures(const std::string& 
 }
 
 std::vector<SacStory> SacCatalogService::ListStories() const {
+    // Same as ListModels: an empty result here is indistinguishable from a tenant with no
+    // stories, so it answered authoritatively without having asked anything. See GitHub #244.
+    throw duckdb::NotImplementedException(
+        "SacCatalogService::ListStories is not implemented yet. SAC catalog discovery needs the "
+        "tenant's OData service document, which this build cannot parse. Open an issue with a "
+        "captured SAC response if you need this.");
+
     std::vector<SacStory> stories;
 
     try {

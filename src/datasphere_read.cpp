@@ -37,43 +37,6 @@ namespace {
             }
         }
     }
-    // Helper function to extract input parameters from DuckDB MAP value
-    std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value& params_value) {
-        std::map<std::string, std::string> input_params;
-        
-        if (params_value.type().id() != duckdb::LogicalTypeId::MAP) {
-            ERPL_TRACE_ERROR("DATASPHERE_RELATIONAL_BIND", "Params parameter must be a MAP<VARCHAR, VARCHAR> type");
-            return input_params;
-        }
-        
-        auto map_entries = duckdb::MapValue::GetChildren(params_value);
-        ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Processing " + std::to_string(map_entries.size()) + " input parameters");
-        
-        // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
-        for (const auto& entry : map_entries) {
-            if (entry.type().id() == duckdb::LogicalTypeId::STRUCT) {
-                auto struct_entries = duckdb::StructValue::GetChildren(entry);
-                auto struct_types = duckdb::StructType::GetChildTypes(entry.type());
-                
-                std::string key, value;
-                for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
-                    if (struct_types[j].first == "key") {
-                        key = struct_entries[j].ToString();
-                    } else if (struct_types[j].first == "value") {
-                        value = struct_entries[j].ToString();
-                    }
-                }
-                
-                if (!key.empty() && !value.empty()) {
-                    input_params[key] = value;
-                    ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Added input parameter: " + key + " = " + value);
-                }
-            }
-        }
-        
-        return input_params;
-    }
-    
     // Helper function to build the analytical data URL
     std::string BuildAnalyticalDataUrl(const std::string& space_id, const std::string& asset_id, 
                                        const std::string& tenant, const std::string& data_center) {
@@ -157,7 +120,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duc
     
     // Extract and apply input parameters BEFORE metadata extraction
     if (input.named_parameters.find("params") != input.named_parameters.end()) {
-        auto input_params = ExtractInputParameters(input.named_parameters["params"]);
+        auto input_params = ExtractInputParameters(input.named_parameters["params"], "DATASPHERE_BIND");
         
         if (!input_params.empty()) {
             // Store parameters in bind data
@@ -331,7 +294,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duc
 
     // Extract and apply input parameters BEFORE metadata extraction
     if (input.named_parameters.find("params") != input.named_parameters.end()) {
-        auto input_params = ExtractInputParameters(input.named_parameters["params"]);
+        auto input_params = ExtractInputParameters(input.named_parameters["params"], "DATASPHERE_BIND");
         if (!input_params.empty()) {
             read_bind->SetInputParameters(input_params);
             auto odata_client = read_bind->GetODataClient();

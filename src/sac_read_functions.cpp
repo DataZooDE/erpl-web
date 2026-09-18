@@ -1,4 +1,5 @@
 #include "sac_read_functions.hpp"
+#include "duckdb_argument_helper.hpp"
 #include "sac_secret_helper.hpp"
 #include "sac_url_builder.hpp"
 #include "sac_client.hpp"
@@ -120,10 +121,12 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadAnalyticalBind(
     // For analytics models, build URL to analytics endpoint instead
     auto analytics_url = SacUrlBuilder::BuildModelServiceUrl(secret_data.tenant, secret_data.region, model_id);
 
-    // Create OData read bind data
-    auto read_bind = ODataReadBindData::FromEntitySetRoot(analytics_url, secret_data.auth_params);
-
-    // Handle dimension and measure filtering through $select parameter
+    // Build the projection BEFORE the bind, because that is what puts it on the URL.
+    //
+    // This used to run after FromEntitySetRoot and end in `if (!select_clause.empty()) { }`
+    // - a comment-only body - so `dimensions =>` and `measures =>` were accepted and
+    // silently dropped, and the reader returned every column of the model. Datasphere's
+    // analytical bind does exactly what is done here (GitHub #244).
     std::string select_clause;
 
     if (input.named_parameters.find("dimensions") != input.named_parameters.end()) {
@@ -141,8 +144,21 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadAnalyticalBind(
     }
 
     if (!select_clause.empty()) {
-        // Apply $select through OData metadata
-        // This is a simplified representation - actual implementation would use OData query construction
+        analytics_url += (analytics_url.find('?') == std::string::npos) ? "?" : "&";
+        analytics_url += "$select=" + select_clause;
+        ERPL_TRACE_INFO("SAC_READ", "Applied $select from dimensions/measures: " + select_clause);
+    }
+
+    // Create OData read bind data
+    auto read_bind = ODataReadBindData::FromEntitySetRoot(analytics_url, secret_data.auth_params);
+
+    // `params` was registered on all three SAC readers and read by none of them, so
+    // `params => MAP{...}` was accepted and dropped. Same plumbing as Datasphere.
+    if (input.named_parameters.find("params") != input.named_parameters.end()) {
+        auto input_params = ExtractInputParameters(input.named_parameters["params"], "SAC_READ");
+        if (!input_params.empty()) {
+            read_bind->SetInputParameters(input_params);
+        }
     }
 
     // Handle limit and offset

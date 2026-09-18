@@ -1,5 +1,8 @@
 #pragma once
 
+#include <map>
+#include <string>
+
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector.hpp"
@@ -56,4 +59,14 @@ namespace erpl_web
     // Utility: extract list of strings from a DuckDB Value of LIST(VARCHAR)
     std::vector<std::string> GetStringList(const duckdb::Value &val);
     
+
+// Converts a DuckDB MAP<VARCHAR, VARCHAR> argument into a plain map.
+//
+// Lived as a file-local helper in datasphere_read.cpp while sac_read_functions.cpp
+// registered the same `params` argument and never read it - so `params => MAP{...}` was
+// accepted and silently dropped by every SAC reader (GitHub #244). Shared so the two
+// cannot drift, and so the next reader that takes `params` has one obvious thing to call.
+std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value &params_value,
+                                                          const char *trace_component);
+
 } // namespace erpl_web
