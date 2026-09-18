@@ -1,3 +1,4 @@
+#include "odata_url_helpers.hpp"
 #include "datasphere_secret.hpp"
 #include "datazoo/oauth2/oauth2_flow_v2.hpp"
 #include "datazoo/oauth2/http_client.hpp"
@@ -361,6 +362,17 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
             OAuth2Config tmp_cfg; tmp_cfg.tenant_name = tenant_name_val->second.ToString(); tmp_cfg.data_center = data_center_val->second.ToString();
             token_url = tmp_cfg.GetTokenUrl();
         }
+
+        // This URL is about to receive the client secret in an Authorization: Basic header,
+        // so it gets the same gate as every other place a Datasphere credential is sent -
+        // the sibling seam BuildDataUrl (datasphere_read.cpp) already does exactly this.
+        //
+        // It matters most for the values we did not build: 'token_url' is taken from the
+        // secret, and the `config` provider copies every key=value line out of a file into
+        // the secret map, so a tampered config can supply a token_url the user never typed.
+        // Without the gate that POSTs a long-lived client secret, in cleartext, to whatever
+        // host the file named.
+        RequireGatedServiceUrl(token_url, "The Datasphere 'token_url'");
 
         // Build request body
         std::string body = "grant_type=client_credentials";
