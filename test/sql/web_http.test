@@ -168,55 +168,63 @@ CREATE SECRET test_auth_secret (
     SCOPE 'https://httpbin.org/'
 );
 
-# Test 2: Function parameter auth takes precedence over secrets
-# This should use the auth parameter and ignore the secret
-# Note: httpbin.org can return 502 if temporarily unavailable (normalize to 200 for test stability)
-query I
-SELECT CASE
-    WHEN status IN (200, 502) THEN 200
-    ELSE status
-END as normalized_status
-FROM http_get('https://httpbin.org/status/200',
+# These assert on what was actually SENT, by asking httpbin to echo the request headers
+# back. They used to call /status/200 - which returns 200 whatever you send - and assert
+# only on the status, so deleting the AuthHeadersFromParams call in web_functions.cpp left
+# every one of them green. A test that passes with the feature removed is not coverage.
+#
+# Note there is no 502 escape hatch here any more either: normalising 502 to 200 meant a
+# failed request also passed.
+
+# Test 2: the auth PARAMETER takes precedence over a registered secret.
+# Asserted both ways round - the parameter's credentials present, the secret's absent -
+# because checking only the first would pass if both were somehow sent.
+query TT
+SELECT content LIKE '%cGFyYW1fdXNlcjpwYXJhbV9wYXNz%',
+       content LIKE '%c2VjcmV0X3VzZXI6c2VjcmV0X3Bhc3M=%'
+FROM http_get('https://httpbin.org/headers',
               auth := 'param_user:param_pass') LIMIT 1;
 ----
-200
+true	false
 
-# Test 3: Function parameter auth with explicit auth_type
-# This should use the auth parameter with bearer token
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/status/200',
+# Test 3: an explicit BEARER auth_type sends the token as a bearer credential.
+# /bearer answers 401 unless a bearer token is actually present, so the status carries
+# information here - unlike /status/200.
+query IT
+SELECT status, content LIKE '%eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token%'
+FROM http_get('https://httpbin.org/bearer',
               auth := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token',
               auth_type := 'BEARER') LIMIT 1;
 ----
-200
+200	true
 
-# Test 4: Username only (password will be empty, defaults to BASIC)
-# This should use the auth parameter with empty password
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/status/200',
+# Test 4: a colonless value becomes username with an empty password.
+# base64("username_only:") - the trailing colon is the empty password, and its presence is
+# the whole point of the case.
+query T
+SELECT content LIKE '%dXNlcm5hbWVfb25seTo=%'
+FROM http_get('https://httpbin.org/headers',
               auth := 'username_only') LIMIT 1;
 ----
-200
+true
 
-# Test 5: Explicit BASIC authentication
-# This should use the auth parameter with explicit BASIC type
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/status/200',
+# Test 5: an explicit BASIC auth_type sends those credentials.
+query T
+SELECT content LIKE '%ZXhwbGljaXRfdXNlcjpleHBsaWNpdF9wYXNz%'
+FROM http_get('https://httpbin.org/headers',
               auth := 'explicit_user:explicit_pass',
               auth_type := 'BASIC') LIMIT 1;
 ----
-200
+true
 
-# Test 6: No auth parameter - should fall back to registered secret
-# This should use the secret since no auth parameter is provided
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/status/200') LIMIT 1;
+# Test 6: with NO auth parameter, the registered secret is used instead.
+# This is the other half of Test 2: there, the parameter won; here, with no parameter, the
+# secret must actually be sent. Asserting only one direction would not tell the two apart.
+query T
+SELECT content LIKE '%c2VjcmV0X3VzZXI6c2VjcmV0X3Bhc3M=%'
+FROM http_get('https://httpbin.org/headers') LIMIT 1;
 ----
-200
+true
 
 # Test 8: Clean up test secret
 statement ok
