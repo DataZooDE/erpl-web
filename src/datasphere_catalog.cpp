@@ -1,4 +1,6 @@
 #include "datasphere_catalog.hpp"
+#include <tuple>
+#include <set>
 #include "odata_url_helpers.hpp"
 #include "datasphere_client.hpp"
 #include "odata_client.hpp"
@@ -22,6 +24,39 @@ namespace erpl_web {
 using duckdb::PostHogTelemetry;
 
 // Centralized OAuth2 configuration holder (values will be populated from DuckDB secret)
+
+duckdb_yyjson::yyjson_val *RequireValidListingPage(const HttpResponse *response, const std::string &what,
+                                                   int skip,
+                                                   std::shared_ptr<duckdb_yyjson::yyjson_doc> &doc_out) {
+    if (response == nullptr) {
+        throw duckdb::IOException(
+            "Datasphere listing failed: no response for %s (page starting at %d). The listing is "
+            "incomplete.", what.c_str(), skip);
+    }
+    if (response->Code() != 200) {
+        throw duckdb::IOException(
+            "Datasphere listing failed: HTTP %d for %s (page starting at %d). The listing is "
+            "incomplete.", response->Code(), what.c_str(), skip);
+    }
+
+    const std::string &content = response->Content();
+    doc_out = std::shared_ptr<duckdb_yyjson::yyjson_doc>(
+        duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0), duckdb_yyjson::yyjson_doc_free);
+    if (!doc_out) {
+        throw duckdb::IOException(
+            "Datasphere listing returned a page that is not valid JSON for %s (page starting at %d). "
+            "The listing is incomplete.", what.c_str(), skip);
+    }
+
+    auto *root = duckdb_yyjson::yyjson_doc_get_root(doc_out.get());
+    if (!duckdb_yyjson::yyjson_is_arr(root)) {
+        throw duckdb::IOException(
+            "Datasphere listing returned a page whose root is not an array for %s (page starting at "
+            "%d). The listing is incomplete.", what.c_str(), skip);
+    }
+    return root;
+}
+
 OAuth2Config GetDatasphereOAuth2Config() {
     // Do not hardcode environment parameters; they will be supplied via DuckDB secret
     OAuth2Config config;
@@ -1470,13 +1505,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                     HttpRequest req(HttpMethod::GET, HttpUrl(url));
                     req.AuthHeadersFromParams(*auth);
                     auto resp = http->SendRequest(req);
-                    if (!(resp && resp->Code() == 200)) {
-                        break;
-                    }
-                    auto doc = std::shared_ptr<duckdb_yyjson::yyjson_doc>(duckdb_yyjson::yyjson_read(resp->Content().c_str(), resp->Content().size(), 0), duckdb_yyjson::yyjson_doc_free);
-                    if (!doc) break;
-                    auto root = duckdb_yyjson::yyjson_doc_get_root(doc.get());
-                    if (!duckdb_yyjson::yyjson_is_arr(root)) break;
+
+                    // A failure is NOT the end of the list. See RequireValidListingPage:
+                    // these checks used to `break`, the same exit the last page takes, so
+                    // an HTTP 500 on page two returned page one and reported success.
+                    std::shared_ptr<duckdb_yyjson::yyjson_doc> doc;
+                    auto root = RequireValidListingPage(resp.get(), "'" + url + "'", skip, doc);
                     size_t added = 0;
                     duckdb_yyjson::yyjson_val *val; duckdb_yyjson::yyjson_arr_iter it; duckdb_yyjson::yyjson_arr_iter_init(root, &it);
                     while ((val = duckdb_yyjson::yyjson_arr_iter_next(&it))) {
@@ -1652,16 +1686,25 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                         }
                     }
                 }
-            } catch (...) {
-                // If we can't get spaces, return empty result
-                auto bind = duckdb::make_uniq<DatasphereSpaceObjectsBindData>();
-                return std::move(bind);
+            } catch (const std::exception &e) {
+                // An I/O or parse failure is not "this tenant has no spaces". Returning an
+                // empty bind here made a network outage indistinguishable from an empty
+                // tenant, and every asset in every space silently vanished from the result.
+                throw duckdb::IOException(
+                    "Datasphere space listing failed, so the asset list cannot be built: %s",
+                    e.what());
             }
 
             auto bind = duckdb::make_uniq<DatasphereSpaceObjectsBindData>();
 
-            // Track seen technical names across all spaces to avoid duplicates
-            std::unordered_set<std::string> seen_technical_names;
+            // Keyed on (space, technical name, type), not the technical name alone.
+            //
+            // Keying on the name alone deduplicated ACROSS spaces: two spaces each holding
+            // a CUSTOMER table yielded one row, and the other space's asset was dropped
+            // without a word. Shared technical names across spaces are the normal case in
+            // Datasphere, and the row itself carries the space - so the key that decides
+            // whether a row is a duplicate has to carry it too. See GitHub #245.
+            std::set<std::tuple<std::string, std::string, std::string>> seen_assets;
 
             // Simple mapping function for known technical name to business name mappings
             auto get_business_name = [&](const std::string &technical_name) -> std::string {
@@ -1675,7 +1718,10 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             auto push_item = [&](const std::string &name, const std::string &technical, const std::string &type, const std::string &space) {
                 std::string tech_key = technical.empty() ? name : technical;
-                if (!tech_key.empty() && seen_technical_names.insert(tech_key).second) {
+                if (tech_key.empty()) {
+                    return;
+                }
+                if (seen_assets.insert(std::make_tuple(space, tech_key, type)).second) {
                     std::string business_name = get_business_name(tech_key);
                     bind->items.push_back({business_name, tech_key, type, space});
                 }
@@ -1691,13 +1737,10 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                         HttpRequest req(HttpMethod::GET, HttpUrl(url));
                         req.AuthHeadersFromParams(*auth);
                         auto resp = http->SendRequest(req);
-                        if (!(resp && resp->Code() == 200)) {
-                            break;
-                        }
-                        auto doc = std::shared_ptr<duckdb_yyjson::yyjson_doc>(duckdb_yyjson::yyjson_read(resp->Content().c_str(), resp->Content().size(), 0), duckdb_yyjson::yyjson_doc_free);
-                        if (!doc) break;
-                        auto root = duckdb_yyjson::yyjson_doc_get_root(doc.get());
-                        if (!duckdb_yyjson::yyjson_is_arr(root)) break;
+                        // Same rule, through the same seam, so the two cannot drift.
+                        std::shared_ptr<duckdb_yyjson::yyjson_doc> doc;
+                        auto root = RequireValidListingPage(
+                            resp.get(), "'" + url + "' in space '" + space_id + "'", skip, doc);
                         size_t added = 0;
                         duckdb_yyjson::yyjson_val *val; duckdb_yyjson::yyjson_arr_iter it; duckdb_yyjson::yyjson_arr_iter_init(root, &it);
                         while ((val = duckdb_yyjson::yyjson_arr_iter_next(&it))) {

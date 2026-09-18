@@ -121,4 +121,21 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction();
 duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction();
 duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction();
 
+
+// Validates one page of a Datasphere listing response and returns its parsed root.
+//
+// Extracted as a seam so the failure behaviour can be tested without a live tenant: the
+// catalog URLs are built as https://<tenant>.<data_center>.hcs.cloud.sap/... with no
+// loopback hatch, so the paginating callers cannot be pointed at a local server.
+//
+// Every rejection here used to be a `break`, which is the same exit the LAST page takes -
+// so an HTTP 500 on page two returned page one and reported success. Only a valid, short
+// page may end pagination; anything else throws, because an incomplete catalog presented
+// as complete is a silent wrong answer. See GitHub #245.
+//
+// `what` names the thing being listed for the message, e.g. "'…/tables' in space 'SALES'".
+duckdb_yyjson::yyjson_val *RequireValidListingPage(const HttpResponse *response, const std::string &what,
+                                                   int skip,
+                                                   std::shared_ptr<duckdb_yyjson::yyjson_doc> &doc_out);
+
 } // namespace erpl_web
