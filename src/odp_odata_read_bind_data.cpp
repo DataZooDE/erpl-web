@@ -1,4 +1,5 @@
 #include "odp_odata_read_bind_data.hpp"
+#include "duckdb_argument_helper.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "odata_url_helpers.hpp"
 #include "secret_functions.hpp"
@@ -342,11 +343,14 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromNamedSecret(duckdb::ClientC
     auto params = std::make_shared<HttpAuthParams>();
     const auto &type = secret_entry->secret->GetType();
     if (type == "http_basic") {
+        // A secret missing its username/password is bad input, not an invariant violation.
+        // TryGetValue with error_on_missing throws InternalException, which invalidates the
+        // database instance (GitHub #247).
         params->basic_credentials = std::make_tuple(
-            kv_secret->TryGetValue("username", true).ToString(),
-            kv_secret->TryGetValue("password", true).ToString());
+            RequireSecretValue(*kv_secret, "username", secret_name),
+            RequireSecretValue(*kv_secret, "password", secret_name));
     } else if (type == "http_bearer") {
-        params->bearer_token = kv_secret->TryGetValue("token", true).ToString();
+        params->bearer_token = RequireSecretValue(*kv_secret, "token", secret_name);
     } else {
         throw duckdb::InvalidInputException(
             "Secret '%s' has type '%s'; ODP needs an http_basic or http_bearer secret.",

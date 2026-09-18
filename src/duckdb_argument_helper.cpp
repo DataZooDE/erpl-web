@@ -411,3 +411,18 @@ std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value &p
 }
 
 } // namespace erpl_web
+
+namespace erpl_web {
+
+std::string RequireSecretValue(const duckdb::KeyValueSecret &secret, const std::string &key,
+                               const std::string &secret_name) {
+    auto value = secret.secret_map.find(key);
+    if (value == secret.secret_map.end() || value->second.IsNull()) {
+        throw duckdb::InvalidInputException(
+            "Secret '%s' is missing the required field '%s'. Add it to the CREATE SECRET "
+            "statement that defines this secret.", secret_name.c_str(), key.c_str());
+    }
+    return value->second.ToString();
+}
+
+} // namespace erpl_web

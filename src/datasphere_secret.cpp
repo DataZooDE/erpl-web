@@ -1,4 +1,5 @@
 #include "odata_url_helpers.hpp"
+#include "duckdb_argument_helper.hpp"
 #include "datasphere_secret.hpp"
 #include "datazoo/oauth2/oauth2_flow_v2.hpp"
 #include "datazoo/oauth2/http_client.hpp"
@@ -487,8 +488,11 @@ DatasphereAuthInfo ResolveDatasphereAuth(duckdb::ClientContext &context, const s
     const auto *kv_secret = kv_secret_up.get();
 
     // Resolve tenant and data center
-    auto tenant = kv_secret->TryGetValue("tenant_name", true).ToString();
-    auto data_center = kv_secret->TryGetValue("data_center", true).ToString();
+    // Missing keys are reported as bad input naming the secret and the field. TryGetValue
+    // with error_on_missing throws InternalException, which invalidates the database
+    // instance over a typo in a CREATE SECRET (GitHub #247).
+    auto tenant = RequireSecretValue(*kv_secret, "tenant_name", secret_name);
+    auto data_center = RequireSecretValue(*kv_secret, "data_center", secret_name);
 
     // Token: use the public GetToken method which handles caching and refresh automatically
     std::string access_token = DatasphereTokenManager::GetToken(context, kv_secret);
