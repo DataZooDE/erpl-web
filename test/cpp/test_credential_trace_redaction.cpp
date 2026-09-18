@@ -4,8 +4,7 @@
 #include "odata_test_server.hpp"
 #include "duckdb.hpp"
 
-#include <unistd.h>
-
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -48,8 +47,11 @@ private:
 class CapturedTrace {
 public:
     CapturedTrace()
+        // Portable unique name: getpid() needs unistd.h, which MSVC does not have. A
+        // process-local counter plus the object address is unique enough for a temp dir
+        // that is created and removed within one test.
         : directory(std::filesystem::temp_directory_path() /
-                    ("erpl_trace_test_" + std::to_string(::getpid()) + "_" +
+                    ("erpl_trace_test_" + std::to_string(NextId()) + "_" +
                      std::to_string(reinterpret_cast<uintptr_t>(this))))
     {
         std::filesystem::create_directories(directory);
@@ -87,6 +89,12 @@ public:
     }
 
 private:
+    static unsigned long NextId()
+    {
+        static std::atomic<unsigned long> counter{0};
+        return ++counter;
+    }
+
     std::filesystem::path directory;
     bool previously_enabled = false;
     std::string previous_mode;
