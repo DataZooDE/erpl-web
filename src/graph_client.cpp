@@ -72,16 +72,8 @@ std::string GraphClient::StripLeadingSlash(const std::string &value) {
 }
 
 std::string GraphClient::EscapeODataStringLiteral(const std::string &value) {
-    std::string result;
-    result.reserve(value.size());
-    for (char c : value) {
-        if (c == '\'') {
-            result += "''";
-        } else {
-            result += c;
-        }
-    }
-    return result;
+    // Delegates: the rule is OData's, not Graph's, and it lives in one place now.
+    return erpl_web::EscapeODataStringLiteral(value);
 }
 
 bool GraphClient::LooksLikeGuid(const std::string &value) {

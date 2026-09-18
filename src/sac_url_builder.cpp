@@ -1,4 +1,5 @@
 #include "sac_url_builder.hpp"
+#include "odata_url_helpers.hpp"
 #include "duckdb/common/string_util.hpp"
 #include <algorithm>
 
@@ -26,7 +27,9 @@ std::string SacUrlBuilder::BuildPlanningDataUrl(
     if (model_id.empty()) {
         return base + "v1/PlanningModels";
     }
-    return base + "v1/PlanningModels('" + model_id + "')";
+    // A key predicate is an OData string literal, so a quote in the id would end it early
+    // and the rest would parse as path syntax (GitHub #246).
+    return base + "v1/PlanningModels('" + EscapeODataStringLiteral(model_id) + "')";
 }
 
 std::string SacUrlBuilder::BuildStoryServiceUrl(
@@ -43,7 +46,7 @@ std::string SacUrlBuilder::BuildModelServiceUrl(
     if (model_id.empty()) {
         return base + "v1/Models";
     }
-    return base + "v1/Models('" + model_id + "')";
+    return base + "v1/Models('" + EscapeODataStringLiteral(model_id) + "')";
 }
 
 std::string SacUrlBuilder::BuildDataExportUrl(

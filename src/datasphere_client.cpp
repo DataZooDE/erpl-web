@@ -1,4 +1,5 @@
 #include "datasphere_client.hpp"
+#include "odata_url_helpers.hpp"
 #include "odata_client.hpp"
 #include "datazoo/oauth2/http_client.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -159,7 +160,12 @@ std::string DatasphereUrlBuilder::BuildCatalogAssetsFilteredUrl(const std::strin
                                                                const std::string& data_center, 
                                                                const std::string& space_id)
 {
-    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=spaceName eq '" + space_id + "'&$select=name,technicalName,assetAnalyticalMetadataUrl,assetRelationalMetadataUrl";
+    // The id goes inside an OData string literal, so its quotes must be doubled. Raw, a
+    // value containing a quote ends the literal early and the remainder is parsed as filter
+    // syntax - which returns a different result rather than an error (GitHub #246).
+    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=spaceName eq '" +
+           EscapeODataStringLiteral(space_id) +
+           "'&$select=name,technicalName,assetAnalyticalMetadataUrl,assetRelationalMetadataUrl";
 }
 
 std::string DatasphereUrlBuilder::BuildCatalogAssetFilteredUrl(const std::string& tenant_name, 
@@ -167,14 +173,19 @@ std::string DatasphereUrlBuilder::BuildCatalogAssetFilteredUrl(const std::string
                                                               const std::string& space_id, 
                                                               const std::string& asset_id)
 {
-    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=name eq '" + asset_id + "' and spaceName eq '" + space_id + "'";
+    // Both operands are caller-supplied; escaping only one of them would leave the other as
+    // the way in.
+    return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=name eq '" +
+           EscapeODataStringLiteral(asset_id) + "' and spaceName eq '" +
+           EscapeODataStringLiteral(space_id) + "'";
 }
 
 std::string DatasphereUrlBuilder::BuildSpaceFilteredUrl(const std::string& tenant_name, 
                                                         const std::string& data_center, 
                                                         const std::string& space_id)
 {
-    return BuildCatalogSpacesUrl(tenant_name, data_center) + "?$filter=name eq '" + space_id + "'";
+    return BuildCatalogSpacesUrl(tenant_name, data_center) + "?$filter=name eq '" +
+           EscapeODataStringLiteral(space_id) + "'";
 }
 
 // DatasphereAuthParams implementation

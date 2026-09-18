@@ -8,22 +8,6 @@ namespace erpl_web {
 
 namespace {
 
-// OData escapes a single quote inside a string literal by doubling it, in both
-// V2 and V4. See OData ABNF: SQUOTE-in-string = SQUOTE SQUOTE.
-std::string EscapeODataStringLiteral(const std::string &value)
-{
-    std::string escaped;
-    escaped.reserve(value.size() + 8);
-    for (const auto c : value) {
-        if (c == '\'') {
-            escaped += "''";
-        } else {
-            escaped += c;
-        }
-    }
-    return escaped;
-}
-
 // Renders a DuckDB constant as an OData literal for the given protocol version,
 // or nullopt when the type has no literal form we can emit safely.
 //

@@ -1,4 +1,5 @@
 #include "sac_read_functions.hpp"
+#include "odata_url_helpers.hpp"
 #include "duckdb_argument_helper.hpp"
 #include "sac_secret_helper.hpp"
 #include "sac_url_builder.hpp"
@@ -234,7 +235,9 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadStoryDataBind(
     // Query the story service endpoint
     auto story_url = SacUrlBuilder::BuildStoryServiceUrl(secret_data.tenant, secret_data.region);
     // Append story ID to get specific story data
-    story_url += "('" + story_id + "')";
+    // Same OData key-predicate rule as the model builders: sac_read_story_data('O''Brien')
+    // must address a story literally named O'Brien, not break out of the predicate.
+    story_url += "('" + EscapeODataStringLiteral(story_id) + "')";
 
     auto read_bind = ODataReadBindData::FromEntitySetRoot(story_url, secret_data.auth_params);
 
