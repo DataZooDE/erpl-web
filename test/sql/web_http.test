@@ -168,63 +168,20 @@ CREATE SECRET test_auth_secret (
     SCOPE 'https://httpbin.org/'
 );
 
-# These assert on what was actually SENT, by asking httpbin to echo the request headers
-# back. They used to call /status/200 - which returns 200 whatever you send - and assert
-# only on the status, so deleting the AuthHeadersFromParams call in web_functions.cpp left
-# every one of them green. A test that passes with the feature removed is not coverage.
+# The authentication cases that used to live here are now in
+# test/cpp/test_http_auth_headers.cpp.
 #
-# Note there is no 502 escape hatch here any more either: normalising 502 to 200 meant a
-# failed request also passed.
-
-# Test 2: the auth PARAMETER takes precedence over a registered secret.
-# Asserted both ways round - the parameter's credentials present, the secret's absent -
-# because checking only the first would pass if both were somehow sent.
-query TT
-SELECT content LIKE '%cGFyYW1fdXNlcjpwYXJhbV9wYXNz%',
-       content LIKE '%c2VjcmV0X3VzZXI6c2VjcmV0X3Bhc3M=%'
-FROM http_get('https://httpbin.org/headers',
-              auth := 'param_user:param_pass') LIMIT 1;
-----
-true	false
-
-# Test 3: an explicit BEARER auth_type sends the token as a bearer credential.
-# /bearer answers 401 unless a bearer token is actually present, so the status carries
-# information here - unlike /status/200.
-query IT
-SELECT status, content LIKE '%eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token%'
-FROM http_get('https://httpbin.org/bearer',
-              auth := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token',
-              auth_type := 'BEARER') LIMIT 1;
-----
-200	true
-
-# Test 4: a colonless value becomes username with an empty password.
-# base64("username_only:") - the trailing colon is the empty password, and its presence is
-# the whole point of the case.
-query T
-SELECT content LIKE '%dXNlcm5hbWVfb25seTo=%'
-FROM http_get('https://httpbin.org/headers',
-              auth := 'username_only') LIMIT 1;
-----
-true
-
-# Test 5: an explicit BASIC auth_type sends those credentials.
-query T
-SELECT content LIKE '%ZXhwbGljaXRfdXNlcjpleHBsaWNpdF9wYXNz%'
-FROM http_get('https://httpbin.org/headers',
-              auth := 'explicit_user:explicit_pass',
-              auth_type := 'BASIC') LIMIT 1;
-----
-true
-
-# Test 6: with NO auth parameter, the registered secret is used instead.
-# This is the other half of Test 2: there, the parameter won; here, with no parameter, the
-# secret must actually be sent. Asserting only one direction would not tell the two apart.
-query T
-SELECT content LIKE '%c2VjcmV0X3VzZXI6c2VjcmV0X3Bhc3M=%'
-FROM http_get('https://httpbin.org/headers') LIMIT 1;
-----
-true
+# They began as assertions against https://httpbin.org/status/200 - an endpoint that answers
+# 200 whatever you send - checking only the status, so deleting AuthHeadersFromParams() in
+# web_functions.cpp left every one of them green. Rewriting them against httpbin's echo
+# endpoints fixed that and cost five live requests per run; one of them then failed on the
+# musl CI leg while its siblings passed, which is the flakiness the original
+# `CASE WHEN status IN (200, 502)` wrapper had been hiding at the price of also passing when
+# a request failed outright.
+#
+# The local ODataTestServer records the request, so the Authorization header can be asserted
+# directly. That keeps what the rewrite gained - these fail when auth breaks - without
+# depending on a third party being up. See GitHub #243.
 
 # Test 8: Clean up test secret
 statement ok
