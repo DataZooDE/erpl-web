@@ -104,40 +104,23 @@ FROM http_post('https://httpbin.org/anything', 'key1=value1&key2=value2', 'appli
 # SECTION 4: Performance and Edge Cases
 # ============================================================================
 
-# Test timeout handling: default (max timeout ~30s) should succeed for delay/2
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/delay/2') LIMIT 1;
-----
-200
-
-# Timeout parameter is plumbed: call with small timeout still returns a response or errors depending on network; accept either by re-running a success check
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/delay/1', timeout := 5000) LIMIT 1;
-----
-200
-
-# url_encode named parameter coverage: query with special characters
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/get?param=test', url_encode := false) LIMIT 1;
-----
-200
-
-# Test binary content handling
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/bytes/100') LIMIT 1;
-----
-200
-
-# Test response with small request
-query I
-SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
-FROM http_get('https://httpbin.org/status/200') LIMIT 1;
-----
-200
+# Timeout, url_encode and body-integrity coverage now lives in
+# test/cpp/test_http_timeout_and_encoding.cpp.
+#
+# What stood here could not fail. The assertions were
+#
+#     SELECT CASE WHEN status IN (200, 502) THEN 200 ELSE status END
+#     FROM http_get('https://httpbin.org/delay/2') LIMIT 1;  ----> 200
+#
+# and /delay/2 answers 200 whatever the client does with timeouts, while normalising 502 to
+# 200 passed a failed request as well. Deleting the timeout assignment in web_functions.cpp
+# left the timeout cases green.
+#
+# A client timeout can only be tested against a server slower than the timeout, which needs a
+# controllable delay - so these moved to the local ODataTestServer, which now supports one.
+# The C++ cases assert what a status cannot show: that a short timeout FAILS while a long one
+# succeeds, that url_encode is visible in the recorded request target, and that a body
+# arrives at its full length. See GitHub #246.
 
 # ============================================================================
 # SECTION 5: HTTP Configuration

@@ -1,4 +1,5 @@
 #include "odata_test_server.hpp"
+#include <chrono>
 
 // Keep the OpenSSL flavour of the vendored httplib so that this translation unit
 // lands in the same duckdb_httplib_openssl namespace as the extension's HTTP
@@ -242,6 +243,12 @@ CannedResponse &CannedResponse::TruncatedAfter(std::size_t bytes)
     return *this;
 }
 
+CannedResponse &CannedResponse::DelayedBy(int milliseconds)
+{
+    delay_ms = milliseconds;
+    return *this;
+}
+
 // ----------------------------------------------------------------------
 // ODataTestServer
 
@@ -320,6 +327,14 @@ ODataTestServer::ODataTestServer() : impl(std::make_unique<Impl>())
                         std::string(R"({"error":{"code":"no_canned_response","message":")") +
                             JsonEscape(recorded.target) + R"("}})");
                 }
+            }
+
+            // Held before anything is written, so the client is waiting on the response
+            // rather than on the connection. The request has already been recorded, which
+            // matters: a timeout test wants to prove the request went OUT and the client
+            // gave up waiting, not that it was never sent.
+            if (canned.delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(canned.delay_ms));
             }
 
             response.status = canned.status;
