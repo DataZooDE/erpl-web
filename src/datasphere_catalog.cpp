@@ -1044,24 +1044,37 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                             ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Successfully got asset info from catalog API with all 15 fields");
                         } else {
                             ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Catalog API returned empty or invalid data");
-                            resource_data = {{"error", "Catalog API returned empty or invalid data"}};
+                            // Failure is not a row. This used to become {"error", "..."},
+                            // which then got resize(15)'d and emitted as an asset whose
+                            // name was literally "error" - a wrong answer dressed as data.
+                            // See GitHub #244.
+                            throw duckdb::IOException(
+                                "Datasphere catalog returned no usable data for %s '%s'%s.",
+                                resource_type, resource_id,
+                                space_id.empty() ? std::string() : (" in space '" + space_id + "'"));
                         }
                     } catch (const std::exception& e) {
                         ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to parse catalog response: " + std::string(e.what()));
-                        resource_data = {{"error", "Failed to parse catalog response: " + std::string(e.what())}};
+                        throw duckdb::IOException(
+                            "Could not parse the Datasphere catalog response for %s '%s': %s",
+                            resource_type, resource_id, e.what());
                     }
                 } else {
                     ERPL_TRACE_ERROR("DATASPHERE_CATALOG", "Failed to get catalog response");
-                    resource_data = {{"error", "Failed to get catalog response"}};
+                    throw duckdb::IOException(
+                        "No response from the Datasphere catalog for %s '%s'.", resource_type,
+                        resource_id);
                 }
             }
         }
         
-        // If no data found, provide fallback
+        // If nothing was found, say so. Returning an "error" row here made a missing asset
+        // indistinguishable from an asset named "error", and the caller had no way to tell
+        // the two apart (GitHub #244).
         if (resource_data.empty()) {
-            resource_data = {
-                {"error", "Error loading resource details: No data found"}
-            };
+            throw duckdb::InvalidInputException(
+                "No Datasphere %s found with ID '%s'%s.", resource_type, resource_id,
+                space_id.empty() ? std::string() : (" in space '" + space_id + "'"));
         }
         
         // For assets, populate extended metadata fields with actual data or fallbacks
@@ -1071,10 +1084,21 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
                 ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Fetching extended metadata for asset");
                 auto extended_data = FetchAssetExtendedMetadata(context, config, auth_params);
                 
-                // Ensure we have enough columns for all 15 fields
+                // Ensure we have enough columns for all 15 fields.
+                //
+                // resize() fills with a default-constructed Value - an untyped NULL - and
+                // column 10 is declared as a STRUCT (AnalyticalSchemaType). The catch branch
+                // below already filled it with MakeEmptyAnalyticalSchemaValue(); this branch
+                // did not, so the two disagreed about the same column. Same seam, guarded
+                // once. See GitHub #244.
                 if (resource_data[0].size() < 15) {
                     ERPL_TRACE_DEBUG("DATASPHERE_CATALOG", "Expanding resource data from " + std::to_string(resource_data[0].size()) + " to 15 columns");
+                    const auto previous_size = resource_data[0].size();
                     resource_data[0].resize(15);
+                    for (size_t i = previous_size; i < 15; ++i) {
+                        resource_data[0][i] = (i == 10) ? MakeEmptyAnalyticalSchemaValue()
+                                                        : duckdb::Value("Not available");
+                    }
                 }
                 
                 // Replace the extended fields with actual data
@@ -1101,10 +1125,19 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
         }
         
     } catch (const std::exception& e) {
-        // Log error and provide fallback data
-        resource_data = {
-            {"error", "Error loading resource details: " + std::string(e.what())}
-        };
+        // Propagate. This catch-all is the root of GitHub #244: it turned EVERY failure -
+        // a missing asset, an unreachable tenant, a parse error, and latterly the explicit
+        // throws added above - into the row {"error", "<message>"}. That row was then
+        // resize(15)'d and emitted, so `SELECT name FROM datasphere_describe_asset(...)`
+        // answered with the literal string "error" as the asset's name.
+        //
+        // A caller could not tell a missing asset from an asset called "error", nor a
+        // network outage from an empty tenant. Nothing in the result said anything had gone
+        // wrong, which is what makes this a wrong answer rather than an error.
+        ERPL_TRACE_ERROR("DATASPHERE_CATALOG",
+                         "Failed to load " + resource_type + " details for '" + resource_id +
+                             "': " + e.what());
+        throw;
     }
 }
 
@@ -1185,6 +1218,11 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     
     // Create bind data using the DatasphereDescribeBindData
     auto bind_data = duckdb::make_uniq<DatasphereDescribeBindData>(space_client, "space", space_id);
+    // Carried onto the bind data because LoadResourceDetails fetches a token of its own.
+    // Without this the field kept its "datasphere" default and `secret :=` was honoured by
+    // the bind but ignored by the load - which the swallowing catch-all then hid, so the
+    // test asserting the name was threaded passed without the code working (GitHub #244).
+    bind_data->secret_name = secret_name;
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Bound describe space function for space: " + space_id);
     
@@ -1244,6 +1282,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     
     // Create bind data using the DatasphereDescribeBindData
     auto bind_data = duckdb::make_uniq<DatasphereDescribeBindData>(asset_client, "asset", asset_id);
+    bind_data->secret_name = secret_name;
     bind_data->space_id = space_id; // Store space_id for later use
     
     ERPL_TRACE_INFO("DATASPHERE_CATALOG", "Bound describe asset function for asset: " + asset_id + " in space: " + space_id);
@@ -1293,9 +1332,13 @@ static void DatasphereDescribeSpaceFunction(duckdb::ClientContext &context,
         output.SetValue(0, 0, bind_data.resource_data[0][0]); // name
         output.SetValue(1, 0, bind_data.resource_data[0][1]); // label
     } else {
-        // Fallback to error values if data is malformed or no results found
-        output.SetValue(0, 0, duckdb::Value("Error: No space found with ID " + bind_data.resource_id));
-        output.SetValue(1, 0, duckdb::Value("Error: No space found"));
+        // Same as the asset path: a short row means LoadResourceDetails did not do its job,
+        // and reporting "Error: No space found" as the space's NAME is a wrong answer rather
+        // than an error (GitHub #244).
+        throw duckdb::InternalException(
+            "Datasphere space row for '%s' has %d columns, expected at least 2. "
+            "LoadResourceDetails should have thrown rather than produced a short row.",
+            bind_data.resource_id, static_cast<int>(bind_data.resource_data[0].size()));
     }
     
     // Mark that we've returned the data
@@ -1366,10 +1409,17 @@ static void DatasphereDescribeAssetFunction(duckdb::ClientContext &context,
         output.SetValue(13, 0, bind_data.resource_data[0][13]); // assetType
         output.SetValue(14, 0, bind_data.resource_data[0][14]); // odataMetadataEtag
     } else {
-        // Fallback to error values if data is malformed or no results found
-        for (int i = 0; i < 15; i++) {
-            output.SetValue(i, 0, duckdb::Value("Error: No asset found with ID " + bind_data.resource_id));
-        }
+        // Unreachable by construction now - LoadResourceDetails throws rather than returning
+        // a short row - but kept as a hard failure rather than a shape that writes strings
+        // into typed columns.
+        //
+        // What stood here wrote the same VARCHAR into all 15 columns, INCLUDING column 10,
+        // which is declared as a STRUCT (AnalyticalSchemaType). That is a cast error waiting
+        // for a caller, and it encoded failure as data besides. See GitHub #244.
+        throw duckdb::InternalException(
+            "Datasphere asset row for '%s' has %d columns, expected 15. LoadResourceDetails "
+            "should have thrown rather than produced a short row.",
+            bind_data.resource_id, static_cast<int>(bind_data.resource_data[0].size()));
     }
     
     // Mark that we've returned the data
