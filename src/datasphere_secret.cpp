@@ -1,3 +1,5 @@
+#include "odata_url_helpers.hpp"
+#include "duckdb_argument_helper.hpp"
 #include "datasphere_secret.hpp"
 #include "datazoo/oauth2/oauth2_flow_v2.hpp"
 #include "datazoo/oauth2/http_client.hpp"
@@ -362,6 +364,17 @@ OAuth2Tokens DatasphereTokenManager::PerformOAuth2Flow(duckdb::ClientContext &co
             token_url = tmp_cfg.GetTokenUrl();
         }
 
+        // This URL is about to receive the client secret in an Authorization: Basic header,
+        // so it gets the same gate as every other place a Datasphere credential is sent -
+        // the sibling seam BuildDataUrl (datasphere_read.cpp) already does exactly this.
+        //
+        // It matters most for the values we did not build: 'token_url' is taken from the
+        // secret, and the `config` provider copies every key=value line out of a file into
+        // the secret map, so a tampered config can supply a token_url the user never typed.
+        // Without the gate that POSTs a long-lived client secret, in cleartext, to whatever
+        // host the file named.
+        RequireGatedServiceUrl(token_url, "The Datasphere 'token_url'");
+
         // Build request body
         std::string body = "grant_type=client_credentials";
         // Determine effective scope: default to 'apiaccess' when missing or set to 'default'
@@ -475,8 +488,11 @@ DatasphereAuthInfo ResolveDatasphereAuth(duckdb::ClientContext &context, const s
     const auto *kv_secret = kv_secret_up.get();
 
     // Resolve tenant and data center
-    auto tenant = kv_secret->TryGetValue("tenant_name", true).ToString();
-    auto data_center = kv_secret->TryGetValue("data_center", true).ToString();
+    // Missing keys are reported as bad input naming the secret and the field. TryGetValue
+    // with error_on_missing throws InternalException, which invalidates the database
+    // instance over a typo in a CREATE SECRET (GitHub #243).
+    auto tenant = RequireSecretValue(*kv_secret, "tenant_name", secret_name);
+    auto data_center = RequireSecretValue(*kv_secret, "data_center", secret_name);
 
     // Token: use the public GetToken method which handles caching and refresh automatically
     std::string access_token = DatasphereTokenManager::GetToken(context, kv_secret);

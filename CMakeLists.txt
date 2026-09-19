@@ -148,6 +148,7 @@ set(EXTENSION_SOURCES
     src/sac_catalog_bind_helper.cpp
     src/sac_attach_functions.cpp
     src/sac_secret_helper.cpp
+    src/sac_secret.cpp
     src/sac_http_pool.cpp
     src/sac_read_functions.cpp
     src/delta_share_client.cpp

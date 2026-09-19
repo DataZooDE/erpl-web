@@ -69,6 +69,12 @@ struct CannedResponse {
     // body whole", which is every other response.
     std::size_t truncate_after_bytes = 0;
 
+    // Milliseconds to wait before responding at all. A client timeout can only be tested
+    // against a server that is slower than it: asserting that a FAST request succeeds
+    // cannot distinguish a working timeout from one that is ignored entirely. 0 means
+    // respond immediately, which is every other response. See GitHub #246.
+    int delay_ms = 0;
+
     static CannedResponse Json(std::string body, int status = 200);
     static CannedResponse Xml(std::string body, int status = 200);
     static CannedResponse Error(int status, std::string body = std::string());
@@ -77,6 +83,9 @@ struct CannedResponse {
 
     // Cut the body short after `bytes`, announcing the untruncated length.
     CannedResponse &TruncatedAfter(std::size_t bytes);
+
+    // Wait before responding, so a client-side timeout has something to trip over.
+    CannedResponse &DelayedBy(int milliseconds);
 };
 
 using RequestMatcher = std::function<bool(const RecordedRequest &)>;

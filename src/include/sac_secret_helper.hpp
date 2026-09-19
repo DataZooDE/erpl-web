@@ -11,6 +11,10 @@ namespace erpl_web {
 struct SacSecretData {
     std::string tenant;
     std::string region;
+    // When set, addresses the service directly instead of deriving a URL from
+    // tenant/region. This is the loopback hatch that makes SAC testable; it is gated with
+    // RequireGatedServiceUrl where it is read, so it cannot redirect a real tenant's token.
+    std::string base_url;
     std::shared_ptr<HttpAuthParams> auth_params;
 };
 

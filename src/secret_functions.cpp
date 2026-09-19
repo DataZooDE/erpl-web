@@ -53,7 +53,10 @@ unique_ptr<BaseSecret> CreateBasicSecretFunctions::CreateBasicSecretFromConfig(C
             ERPL_TRACE_DEBUG("SECRET_BASIC", "Set password parameter");
         } else {
             ERPL_TRACE_ERROR("SECRET_BASIC", "Unknown named parameter: " + lower_name);
-            throw InternalException("Unknown named parameter passed to CreateBasicSecretFromConfig: " + lower_name);
+            // InvalidInputException, not InternalException: an unrecognised parameter is
+            // something the USER typed, and INTERNAL invalidates the whole database
+            // instance (GitHub #243).
+            throw InvalidInputException("Unknown named parameter passed to CreateBasicSecretFromConfig: " + lower_name);
         }
     }
     
@@ -105,7 +108,7 @@ unique_ptr<BaseSecret> CreateBearerTokenSecretFunctions::CreateBearerSecretFromC
             ERPL_TRACE_DEBUG("SECRET_BEARER", "Set token parameter");
         } else {
             ERPL_TRACE_ERROR("SECRET_BEARER", "Unknown named parameter: " + lower_name);
-            throw InternalException("Unknown named parameter passed to CreateBearerSecretFromConfig: " + lower_name);
+            throw InvalidInputException("Unknown named parameter passed to CreateBearerSecretFromConfig: " + lower_name);
         }
     }   
     

@@ -207,14 +207,26 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
     // Check if auth parameter is provided - this takes precedence over secrets
     if (HasParam(named_params, "auth")) {
         auto auth_value = named_params["auth"].GetValue<std::string>();
-        ERPL_TRACE_DEBUG("HTTP_AUTH", "Using auth parameter: " + auth_value);
+        // Deliberately NOT the value. For auth_type BEARER this string IS the token, and
+        // for BASIC it is user:password - so tracing it wrote a live credential into the
+        // trace file, which is on disk whenever erpl_trace_output is 'file' or 'both'. The
+        // two redactions a few lines below ("password: ***", "token: ***") show the intent
+        // was already there; this line simply predated them. Length only: enough to tell
+        // "the parameter arrived" from "the parameter was empty", which is what the trace
+        // is for.
+        ERPL_TRACE_DEBUG("HTTP_AUTH", "Using auth parameter (" + std::to_string(auth_value.size()) +
+                                          " characters, value not traced)");
         
         auto auth_params = std::make_shared<HttpAuthParams>();
         
         // Check if auth_type is specified, default to BASIC if not provided
         std::string auth_type = "BASIC";
         if (HasParam(named_params, "auth_type")) {
-            auth_type = named_params["auth_type"].GetValue<std::string>();
+            // Upper-cased defensively. auth_type is a DuckDB ENUM (BASIC/DIGEST/BEARER),
+            // so the binder already rejects any other spelling before this runs - but the
+            // comparisons below are exact, and nothing guarantees the enum keeps its
+            // current casing.
+            auth_type = duckdb::StringUtil::Upper(named_params["auth_type"].GetValue<std::string>());
             ERPL_TRACE_DEBUG("HTTP_AUTH", "Using auth_type parameter: " + auth_type);
         } else {
             ERPL_TRACE_DEBUG("HTTP_AUTH", "No auth_type specified, defaulting to BASIC");
@@ -230,17 +242,32 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
                 auth_params->basic_credentials = std::make_tuple(username, password);
                 ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed basic auth from parameter - username: " + username + ", password: ***");
             } else {
-                // If no colon found, treat the entire string as username with empty password
+                // If no colon found, treat the entire string as username with empty password.
+                //
+                // The value is NOT traced here either, even though the branch calls it a
+                // username. auth_type defaults to BASIC, so `http_get(url, auth := 'eyJ...')`
+                // with no auth_type lands in exactly this branch with a bearer token as the
+                // "username" - and a colonless value is indistinguishable from a token.
                 auth_params->basic_credentials = std::make_tuple(auth_value, "");
-                ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed basic auth from parameter - username: " + auth_value + ", password: (empty)");
+                ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed basic auth from parameter - single-value form ("
+                                                  + std::to_string(auth_value.size()) +
+                                                  " characters, value not traced), password: (empty)");
             }
         } else if (auth_type == "BEARER") {
             // For bearer auth, the entire auth_value is the token
             auth_params->bearer_token = auth_value;
             ERPL_TRACE_DEBUG("HTTP_AUTH", "Parsed bearer auth from parameter - token: ***");
         } else {
-            ERPL_TRACE_ERROR("HTTP_AUTH", "Unsupported auth_type: " + auth_type + ", falling back to registered secrets");
-            return HttpAuthParams::FromDuckDbSecrets(context, url);
+            // Refused, not silently redirected.
+            //
+            // DIGEST is the reachable case: it is a declared value of the auth_type ENUM
+            // with no implementation behind it, so `auth_type := 'DIGEST'` used to land
+            // here and fall back to the registered secrets - the caller's explicit
+            // credentials dropped, the request sent as somebody else, and nothing said.
+            // See GitHub #243.
+            throw duckdb::InvalidInputException(
+                "Unsupported auth_type '%s'. Supported values are 'BASIC' and 'BEARER' "
+                "(case-insensitive).", auth_type.c_str());
         }
         
         return auth_params;

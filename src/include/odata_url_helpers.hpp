@@ -191,6 +191,20 @@ public:
     static std::string encodeQueryValueForOption(const std::string &key, const std::string &value);
 };
 
+
+// Escapes a value for use inside an OData string literal.
+//
+// OData escapes a single quote by doubling it, in both V2 and V4
+// (ABNF: SQUOTE-in-string = SQUOTE SQUOTE). Without it, a value containing a quote does not
+// fail - it ENDS the literal early and the rest is parsed as filter syntax, so
+// `name eq 'x'' or name ne ''zz'` returns a different asset than the one asked for. A wrong
+// answer, not an error.
+//
+// One definition, because there were three: GraphClient had a static, the predicate
+// pushdown had a file-local copy, and the Datasphere URL builders had none at all - which
+// is where GitHub #243 was found.
+std::string EscapeODataStringLiteral(const std::string &value);
+
 } // namespace erpl_web
 
 

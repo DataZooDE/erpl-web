@@ -742,6 +742,20 @@ std::string ODataUrlCodec::normalizeExpand(const std::string &expand_value) {
 //   others    - ordinary values ($select, $orderby, $top, ...). Only characters that cannot
 //               appear literally in a query component are escaped, so commas and colons in
 //               a $select or $orderby survive as themselves.
+std::string EscapeODataStringLiteral(const std::string &value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const auto c : value) {
+        if (c == '\'') {
+            escaped += "''";
+        } else {
+            escaped += c;
+        }
+    }
+    return escaped;
+}
+
 std::string ODataUrlCodec::encodeQueryValueForOption(const std::string &key, const std::string &value) {
     if (value.empty()) {
         return value;

@@ -1,4 +1,6 @@
 #include "datasphere_catalog.hpp"
+#include <tuple>
+#include <set>
 #include "odata_url_helpers.hpp"
 #include "datasphere_client.hpp"
 #include "odata_client.hpp"
@@ -22,6 +24,39 @@ namespace erpl_web {
 using duckdb::PostHogTelemetry;
 
 // Centralized OAuth2 configuration holder (values will be populated from DuckDB secret)
+
+duckdb_yyjson::yyjson_val *RequireValidListingPage(const HttpResponse *response, const std::string &what,
+                                                   int skip,
+                                                   std::shared_ptr<duckdb_yyjson::yyjson_doc> &doc_out) {
+    if (response == nullptr) {
+        throw duckdb::IOException(
+            "Datasphere listing failed: no response for %s (page starting at %d). The listing is "
+            "incomplete.", what.c_str(), skip);
+    }
+    if (response->Code() != 200) {
+        throw duckdb::IOException(
+            "Datasphere listing failed: HTTP %d for %s (page starting at %d). The listing is "
+            "incomplete.", response->Code(), what.c_str(), skip);
+    }
+
+    const std::string &content = response->Content();
+    doc_out = std::shared_ptr<duckdb_yyjson::yyjson_doc>(
+        duckdb_yyjson::yyjson_read(content.c_str(), content.size(), 0), duckdb_yyjson::yyjson_doc_free);
+    if (!doc_out) {
+        throw duckdb::IOException(
+            "Datasphere listing returned a page that is not valid JSON for %s (page starting at %d). "
+            "The listing is incomplete.", what.c_str(), skip);
+    }
+
+    auto *root = duckdb_yyjson::yyjson_doc_get_root(doc_out.get());
+    if (!duckdb_yyjson::yyjson_is_arr(root)) {
+        throw duckdb::IOException(
+            "Datasphere listing returned a page whose root is not an array for %s (page starting at "
+            "%d). The listing is incomplete.", what.c_str(), skip);
+    }
+    return root;
+}
+
 OAuth2Config GetDatasphereOAuth2Config() {
     // Do not hardcode environment parameters; they will be supplied via DuckDB secret
     OAuth2Config config;
@@ -29,26 +64,32 @@ OAuth2Config GetDatasphereOAuth2Config() {
 }
 
 // Centralized function to get or refresh OAuth2 token
-std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Config &config) {
+std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Config &config,
+                                        const std::string &secret_name) {
     std::string access_token;
 
-    // Read existing secret; do not inject hardcoded values
+    // The secret is named by the caller. This used to be hardcoded to "datasphere" while
+    // two binds parsed a `secret` named parameter that was never registered on any of these
+    // functions - so the parameter could not be passed at all (the binder rejected it), and
+    // the parsing code was unreachable. Every catalog function was locked to one secret,
+    // while the read path threaded the name correctly: the same guard-at-one-seam shape.
+    // See GitHub #243.
     auto &secret_manager = duckdb::SecretManager::Get(context);
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     std::unique_ptr<duckdb::SecretEntry> secret_entry;
     try {
-        secret_entry = secret_manager.GetSecretByName(transaction, "datasphere");
+        secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
     } catch (...) {
         secret_entry = nullptr;
     }
 
     if (!secret_entry) {
-        throw duckdb::InvalidInputException("Secret 'datasphere' not found. Please create it using CREATE SECRET datasphere (type 'datasphere', provider 'oauth2', client_id => '...', client_secret => '...', tenant_name => '...', data_center => '...', scope => 'default', redirect_uri => 'http://localhost:65000');");
+        throw duckdb::InvalidInputException("Secret '" + secret_name + "' not found. Please create it using CREATE SECRET " + secret_name + " (type 'datasphere', provider 'oauth2', client_id => '...', client_secret => '...', tenant_name => '...', data_center => '...', scope => 'default', redirect_uri => 'http://localhost:65000');");
     }
 
     auto kv_secret = dynamic_cast<const duckdb::KeyValueSecret*>(secret_entry->secret.get());
     if (!kv_secret) {
-        throw duckdb::InvalidInputException("Secret 'datasphere' is not a KeyValueSecret");
+        throw duckdb::InvalidInputException("Secret '" + secret_name + "' is not a KeyValueSecret");
     }
 
     // Always populate config fields from secret for downstream URL construction/debug
@@ -810,7 +851,7 @@ void erpl_web::DatasphereDescribeBindData::LoadResourceDetails(duckdb::ClientCon
     try {
         // Get OAuth2 token using centralized function
         erpl_web::OAuth2Config config = erpl_web::GetDatasphereOAuth2Config();
-        std::string access_token = erpl_web::GetOrRefreshDatasphereToken(context, config);
+        std::string access_token = erpl_web::GetOrRefreshDatasphereToken(context, config, secret_name);
         
         // Create HTTP client
         auto http_client = std::make_shared<erpl_web::HttpClient>();
@@ -1110,8 +1151,10 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     // Extract space_id from input
     auto space_id = input.inputs[0].GetValue<std::string>();
     
-    // Extract optional secret from named parameters
-    std::string secret_name = "default";
+    // Extract optional secret from named parameters. The default is the secret name the
+    // catalog functions have always used; "default" was never right here, and the value was
+    // discarded anyway because the parameter was not registered (GitHub #243).
+    std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
     }
@@ -1122,7 +1165,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     
     // Get OAuth2 token using centralized function
     OAuth2Config config = GetDatasphereOAuth2Config();
-    std::string access_token = GetOrRefreshDatasphereToken(context, config);
+    std::string access_token = GetOrRefreshDatasphereToken(context, config, secret_name);
     
     // Create HTTP client and OData client for space endpoint
     auto http_client = std::make_shared<HttpClient>();
@@ -1157,8 +1200,10 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     auto space_id = input.inputs[0].GetValue<std::string>();
     auto asset_id = input.inputs[1].GetValue<std::string>();
     
-    // Extract optional secret from named parameters
-    std::string secret_name = "default";
+    // Extract optional secret from named parameters. The default is the secret name the
+    // catalog functions have always used; "default" was never right here, and the value was
+    // discarded anyway because the parameter was not registered (GitHub #243).
+    std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
     }
@@ -1179,7 +1224,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     
     // Get OAuth2 token using centralized function
     OAuth2Config config = GetDatasphereOAuth2Config();
-    std::string access_token = GetOrRefreshDatasphereToken(context, config);
+    std::string access_token = GetOrRefreshDatasphereToken(context, config, secret_name);
     
     // Create HTTP client and OData client for asset endpoint
     auto http_client = std::make_shared<HttpClient>();
@@ -1359,9 +1404,14 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name"};
 
-            // Auth via secret
+            // Auth via secret. The name is a named parameter now, registered below; these
+            // binds previously had no way to accept one at all (GitHub #243).
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg; // populated by helper
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
 
             // Build DWAAS spaces URL using centralized builder
             std::string url = DatasphereUrlBuilder::BuildDwaasCoreSpacesUrl(cfg.tenant_name, cfg.data_center);
@@ -1401,6 +1451,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
         }
     );
     scan_function.init_global = ScanRowCursorState::Init;
+    scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(scan_function);
 
     return function_set;
@@ -1434,8 +1485,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             auto space_id = input.inputs[0].GetValue<std::string>();
 
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg;
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
             
 
             auto http = std::make_shared<HttpClient>();
@@ -1450,13 +1505,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                     HttpRequest req(HttpMethod::GET, HttpUrl(url));
                     req.AuthHeadersFromParams(*auth);
                     auto resp = http->SendRequest(req);
-                    if (!(resp && resp->Code() == 200)) {
-                        break;
-                    }
-                    auto doc = std::shared_ptr<duckdb_yyjson::yyjson_doc>(duckdb_yyjson::yyjson_read(resp->Content().c_str(), resp->Content().size(), 0), duckdb_yyjson::yyjson_doc_free);
-                    if (!doc) break;
-                    auto root = duckdb_yyjson::yyjson_doc_get_root(doc.get());
-                    if (!duckdb_yyjson::yyjson_is_arr(root)) break;
+
+                    // A failure is NOT the end of the list. See RequireValidListingPage:
+                    // these checks used to `break`, the same exit the last page takes, so
+                    // an HTTP 500 on page two returned page one and reported success.
+                    std::shared_ptr<duckdb_yyjson::yyjson_doc> doc;
+                    auto root = RequireValidListingPage(resp.get(), "'" + url + "'", skip, doc);
                     size_t added = 0;
                     duckdb_yyjson::yyjson_val *val; duckdb_yyjson::yyjson_arr_iter it; duckdb_yyjson::yyjson_arr_iter_init(root, &it);
                     while ((val = duckdb_yyjson::yyjson_arr_iter_next(&it))) {
@@ -1572,6 +1626,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         }
     );
     scan_function.init_global = ScanRowCursorState::Init;
+    scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(scan_function);
 
     // Function 2: Show all assets from all accessible spaces (new functionality)
@@ -1597,8 +1652,12 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             return_types = {duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
             names = {"name", "object_type", "technical_name", "space_name"};
 
+            std::string secret_name = "datasphere";
+            if (input.named_parameters.find("secret") != input.named_parameters.end()) {
+                secret_name = input.named_parameters["secret"].GetValue<std::string>();
+            }
             OAuth2Config cfg;
-            auto token = GetOrRefreshDatasphereToken(context, cfg);
+            auto token = GetOrRefreshDatasphereToken(context, cfg, secret_name);
 
             auto http = std::make_shared<HttpClient>();
             auto auth = std::make_shared<HttpAuthParams>();
@@ -1627,16 +1686,25 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                         }
                     }
                 }
-            } catch (...) {
-                // If we can't get spaces, return empty result
-                auto bind = duckdb::make_uniq<DatasphereSpaceObjectsBindData>();
-                return std::move(bind);
+            } catch (const std::exception &e) {
+                // An I/O or parse failure is not "this tenant has no spaces". Returning an
+                // empty bind here made a network outage indistinguishable from an empty
+                // tenant, and every asset in every space silently vanished from the result.
+                throw duckdb::IOException(
+                    "Datasphere space listing failed, so the asset list cannot be built: %s",
+                    e.what());
             }
 
             auto bind = duckdb::make_uniq<DatasphereSpaceObjectsBindData>();
 
-            // Track seen technical names across all spaces to avoid duplicates
-            std::unordered_set<std::string> seen_technical_names;
+            // Keyed on (space, technical name, type), not the technical name alone.
+            //
+            // Keying on the name alone deduplicated ACROSS spaces: two spaces each holding
+            // a CUSTOMER table yielded one row, and the other space's asset was dropped
+            // without a word. Shared technical names across spaces are the normal case in
+            // Datasphere, and the row itself carries the space - so the key that decides
+            // whether a row is a duplicate has to carry it too. See GitHub #243.
+            std::set<std::tuple<std::string, std::string, std::string>> seen_assets;
 
             // Simple mapping function for known technical name to business name mappings
             auto get_business_name = [&](const std::string &technical_name) -> std::string {
@@ -1650,7 +1718,10 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
 
             auto push_item = [&](const std::string &name, const std::string &technical, const std::string &type, const std::string &space) {
                 std::string tech_key = technical.empty() ? name : technical;
-                if (!tech_key.empty() && seen_technical_names.insert(tech_key).second) {
+                if (tech_key.empty()) {
+                    return;
+                }
+                if (seen_assets.insert(std::make_tuple(space, tech_key, type)).second) {
                     std::string business_name = get_business_name(tech_key);
                     bind->items.push_back({business_name, tech_key, type, space});
                 }
@@ -1666,13 +1737,10 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
                         HttpRequest req(HttpMethod::GET, HttpUrl(url));
                         req.AuthHeadersFromParams(*auth);
                         auto resp = http->SendRequest(req);
-                        if (!(resp && resp->Code() == 200)) {
-                            break;
-                        }
-                        auto doc = std::shared_ptr<duckdb_yyjson::yyjson_doc>(duckdb_yyjson::yyjson_read(resp->Content().c_str(), resp->Content().size(), 0), duckdb_yyjson::yyjson_doc_free);
-                        if (!doc) break;
-                        auto root = duckdb_yyjson::yyjson_doc_get_root(doc.get());
-                        if (!duckdb_yyjson::yyjson_is_arr(root)) break;
+                        // Same rule, through the same seam, so the two cannot drift.
+                        std::shared_ptr<duckdb_yyjson::yyjson_doc> doc;
+                        auto root = RequireValidListingPage(
+                            resp.get(), "'" + url + "' in space '" + space_id + "'", skip, doc);
                         size_t added = 0;
                         duckdb_yyjson::yyjson_val *val; duckdb_yyjson::yyjson_arr_iter it; duckdb_yyjson::yyjson_arr_iter_init(root, &it);
                         while ((val = duckdb_yyjson::yyjson_arr_iter_next(&it))) {
@@ -1752,6 +1820,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
         }
     );
     all_spaces_scan_function.init_global = ScanRowCursorState::Init;
+    all_spaces_scan_function.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     function_set.AddFunction(all_spaces_scan_function);
 
     return function_set;
@@ -1762,6 +1831,10 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     
     duckdb::TableFunction describe_space({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeSpaceBind));
     describe_space.init_global = ScanRowCursorState::Init;
+    // Registering the parameter is what makes it usable: the binder rejects any named
+    // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
+    // parameter" while two binds contained code to read it (GitHub #243).
+    describe_space.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_space);
     return function_set;
@@ -1773,6 +1846,10 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     duckdb::TableFunction describe_asset({duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)}, 
                                         DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetFunction), DATAZOO_GUARD(ERPL_WEB_BANNER, DatasphereDescribeAssetBind));
     describe_asset.init_global = ScanRowCursorState::Init;
+    // Registering the parameter is what makes it usable: the binder rejects any named
+    // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
+    // parameter" while two binds contained code to read it (GitHub #243).
+    describe_asset.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_asset);
     return function_set;

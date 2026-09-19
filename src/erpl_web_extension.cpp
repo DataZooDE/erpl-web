@@ -18,6 +18,7 @@
 #include "datasphere_catalog.hpp"
 #include "datasphere_read.hpp"
 #include "datasphere_secret.hpp"
+#include "sac_secret.hpp"
 #include "odata_odp_functions.hpp"
 #include "odp_odata_read_functions.hpp"
 #include "odp_pragma_functions.hpp"
@@ -720,6 +721,11 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
+
+    // The `sac` secret type. sac_secret_helper has always instructed users to create one,
+    // but it was never registered, so that CREATE SECRET statement could not parse and SAC
+    // was reachable only with a hand-built secret (GitHub #243).
+    erpl_web::CreateSacSecretFunctions::Register(loader);
 
     // Register SAC storage extension (handles ATTACH support)
 #ifdef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER

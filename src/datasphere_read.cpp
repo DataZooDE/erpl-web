@@ -17,63 +17,46 @@ using duckdb::PostHogTelemetry;
 
 namespace {
     // Small helper: ensure trailing asset segment and Datasphere double-segment pattern
-    static inline void EnsureAssetSegmentPattern(std::string &url, const std::string &asset_id) {
+    inline void EnsureAssetSegmentPatternImpl(std::string &url, const std::string &asset_id) {
         if (asset_id.empty()) {
             return;
         }
-        // If URL doesn't already end with asset_id, append it
-        const bool ends_with_asset = url.size() >= asset_id.size() && url.compare(url.size() - asset_id.size(), asset_id.size(), asset_id) == 0;
+
+        // Segments go on the PATH, not the end of the string.
+        //
+        // This appended blindly, so a URL that already carried a query came back corrupted:
+        // "https://host/path?$top=5" became "https://host/path?$top=5/A/A", with the
+        // segments buried inside the query value. Reachable through the documented
+        // absolute-URL hatch, which is exactly what the re-execution tests use.
+        // See GitHub #243.
+        const auto query_start = url.find_first_of("?#");
+        std::string path = (query_start == std::string::npos) ? url : url.substr(0, query_start);
+        const std::string tail = (query_start == std::string::npos) ? std::string() : url.substr(query_start);
+
+        // If the path doesn't already end with asset_id, append it
+        const bool ends_with_asset = path.size() >= asset_id.size() &&
+                                     path.compare(path.size() - asset_id.size(), asset_id.size(), asset_id) == 0;
         if (!ends_with_asset) {
-            if (!url.empty() && url.back() != '/') {
-                url += "/";
+            if (!path.empty() && path.back() != '/') {
+                path += "/";
             }
-            url += asset_id;
+            path += asset_id;
         }
         // Datasphere requires double asset segment (/{asset}/{asset}) for root collection without params
-        if (url.find("hcs.cloud.sap") != std::string::npos) {
+        if (path.find("hcs.cloud.sap") != std::string::npos) {
             const std::string suffix = "/" + asset_id;
-            if (url.size() < suffix.size() || url.compare(url.size() - suffix.size(), suffix.size(), suffix) != 0) {
-                url += suffix;
+            if (path.size() < suffix.size() ||
+                path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                path += suffix;
             }
         }
+
+        url = path + tail;
     }
-    // Helper function to extract input parameters from DuckDB MAP value
-    std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value& params_value) {
-        std::map<std::string, std::string> input_params;
-        
-        if (params_value.type().id() != duckdb::LogicalTypeId::MAP) {
-            ERPL_TRACE_ERROR("DATASPHERE_RELATIONAL_BIND", "Params parameter must be a MAP<VARCHAR, VARCHAR> type");
-            return input_params;
-        }
-        
-        auto map_entries = duckdb::MapValue::GetChildren(params_value);
-        ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Processing " + std::to_string(map_entries.size()) + " input parameters");
-        
-        // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
-        for (const auto& entry : map_entries) {
-            if (entry.type().id() == duckdb::LogicalTypeId::STRUCT) {
-                auto struct_entries = duckdb::StructValue::GetChildren(entry);
-                auto struct_types = duckdb::StructType::GetChildTypes(entry.type());
-                
-                std::string key, value;
-                for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
-                    if (struct_types[j].first == "key") {
-                        key = struct_entries[j].ToString();
-                    } else if (struct_types[j].first == "value") {
-                        value = struct_entries[j].ToString();
-                    }
-                }
-                
-                if (!key.empty() && !value.empty()) {
-                    input_params[key] = value;
-                    ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Added input parameter: " + key + " = " + value);
-                }
-            }
-        }
-        
-        return input_params;
-    }
-    
+    // Exposed for testing: see the declaration in datasphere_read.hpp.
+    // (Defined inside the same anonymous-namespace block would make it file-local again,
+    // so the public definition lives just below, after the block closes.)
+
     // Helper function to build the analytical data URL
     std::string BuildAnalyticalDataUrl(const std::string& space_id, const std::string& asset_id, 
                                        const std::string& tenant, const std::string& data_center) {
@@ -83,11 +66,11 @@ namespace {
             // allowed only for loopback.
             RequireGatedServiceUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
-            EnsureAssetSegmentPattern(data_url, asset_id);
+            EnsureAssetSegmentPatternImpl(data_url, asset_id);
             return data_url;
         }
         auto base = DatasphereUrlBuilder::BuildAnalyticalUrl(tenant, data_center, space_id, asset_id);
-        EnsureAssetSegmentPattern(base, asset_id);
+        EnsureAssetSegmentPatternImpl(base, asset_id);
         return base;
     }
     
@@ -97,11 +80,11 @@ namespace {
         if (LooksLikeAbsoluteHttpUrl(space_id)) {
             RequireGatedServiceUrl(space_id, "Datasphere 'space_id'");
             std::string data_url = space_id;
-            EnsureAssetSegmentPattern(data_url, asset_id);
+            EnsureAssetSegmentPatternImpl(data_url, asset_id);
             return data_url;
         }
         auto base = DatasphereUrlBuilder::BuildRelationalUrl(tenant, data_center, space_id, asset_id);
-        EnsureAssetSegmentPattern(base, asset_id);
+        EnsureAssetSegmentPatternImpl(base, asset_id);
         return base;
     }
     
@@ -121,6 +104,12 @@ namespace {
             ERPL_TRACE_DEBUG("DATASPHERE_RELATIONAL_BIND", "Set offset to: " + std::to_string(offset_value));
         }
     }
+}
+
+// Public wrapper over the file-local implementation, declared in datasphere_read.hpp so the
+// query-string behaviour can be tested directly (GitHub #243).
+void EnsureAssetSegmentPattern(std::string &url, const std::string &asset_id) {
+    EnsureAssetSegmentPatternImpl(url, asset_id);
 }
 
 static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duckdb::ClientContext &context,
@@ -157,7 +146,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadRelationalBind(duc
     
     // Extract and apply input parameters BEFORE metadata extraction
     if (input.named_parameters.find("params") != input.named_parameters.end()) {
-        auto input_params = ExtractInputParameters(input.named_parameters["params"]);
+        auto input_params = ExtractInputParameters(input.named_parameters["params"], "DATASPHERE_BIND");
         
         if (!input_params.empty()) {
             // Store parameters in bind data
@@ -331,7 +320,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereReadAnalyticalBind(duc
 
     // Extract and apply input parameters BEFORE metadata extraction
     if (input.named_parameters.find("params") != input.named_parameters.end()) {
-        auto input_params = ExtractInputParameters(input.named_parameters["params"]);
+        auto input_params = ExtractInputParameters(input.named_parameters["params"], "DATASPHERE_BIND");
         if (!input_params.empty()) {
             read_bind->SetInputParameters(input_params);
             auto odata_client = read_bind->GetODataClient();

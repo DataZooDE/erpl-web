@@ -1,4 +1,5 @@
 #include "duckdb_argument_helper.hpp"
+#include "tracing.hpp"
 
 using namespace duckdb;
 
@@ -366,5 +367,62 @@ namespace erpl_web
         }
         return out;
     }
+
+} // namespace erpl_web
+namespace erpl_web {
+
+std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value &params_value,
+                                                          const char *trace_component) {
+    std::map<std::string, std::string> input_params;
+
+    if (params_value.type().id() != duckdb::LogicalTypeId::MAP) {
+        ERPL_TRACE_ERROR(trace_component, "Params parameter must be a MAP<VARCHAR, VARCHAR> type");
+        return input_params;
+    }
+
+    auto map_entries = duckdb::MapValue::GetChildren(params_value);
+    ERPL_TRACE_DEBUG(trace_component,
+                     "Processing " + std::to_string(map_entries.size()) + " input parameters");
+
+    // DuckDB MAPs are stored as a list of structs with 'key' and 'value' fields
+    for (const auto &entry : map_entries) {
+        if (entry.type().id() != duckdb::LogicalTypeId::STRUCT) {
+            continue;
+        }
+        auto struct_entries = duckdb::StructValue::GetChildren(entry);
+        auto struct_types = duckdb::StructType::GetChildTypes(entry.type());
+
+        std::string key, value;
+        for (size_t j = 0; j < struct_types.size() && j < struct_entries.size(); j++) {
+            if (struct_types[j].first == "key") {
+                key = struct_entries[j].ToString();
+            } else if (struct_types[j].first == "value") {
+                value = struct_entries[j].ToString();
+            }
+        }
+
+        if (!key.empty() && !value.empty()) {
+            input_params[key] = value;
+            ERPL_TRACE_DEBUG(trace_component, "Added input parameter: " + key + " = " + value);
+        }
+    }
+
+    return input_params;
+}
+
+} // namespace erpl_web
+
+namespace erpl_web {
+
+std::string RequireSecretValue(const duckdb::KeyValueSecret &secret, const std::string &key,
+                               const std::string &secret_name) {
+    auto value = secret.secret_map.find(key);
+    if (value == secret.secret_map.end() || value->second.IsNull()) {
+        throw duckdb::InvalidInputException(
+            "Secret '%s' is missing the required field '%s'. Add it to the CREATE SECRET "
+            "statement that defines this secret.", secret_name.c_str(), key.c_str());
+    }
+    return value->second.ToString();
+}
 
 } // namespace erpl_web

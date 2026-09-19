@@ -89,6 +89,18 @@ make release    # Full reconfigure + release build
   The **delta** lifecycle is gated separately again, on `ERPL_SAP_ODP_DELTA_SERVICE` /
   `ERPL_SAP_ODP_DELTA_ENTITY_SET`, because being delta-capable is a property of the
   extractor and not of ODP — see the ODP provisioning section below.
+- `make test_oauth2` - Build and run **datazoo-oauth2's own Catch2 suite**, which no build of
+  this repo used to run. Its cmake target is guarded on the submodule being the *top-level*
+  project (`NOT DATAZOO_OAUTH2_HAS_PARENT`), and erpl-web `add_subdirectory()`s it - so the
+  guard was always false, the suite was never compiled, and the only coverage of
+  `OAuth2CallbackHandler::ValidateState` (the CSRF defence of the authorization_code flow),
+  the PKCE/state token generator and the callback error page's HTML escaping ran nowhere.
+  This target configures the submodule standalone in `build/datazoo-oauth2-tests`, which is
+  the configuration that guard already supports, so nothing in the submodule changes. It
+  needs **Catch2 3** on the system and fails loudly if the binary was not produced - a silent
+  skip is what hid this for so long. Wired into CI as the `oauth2-unit-tests` job, which is
+  deliberately NOT gated on the extension build so a broken CSRF check is reported in a
+  minute rather than behind a ~25-minute Windows leg. See GitHub #245.
 - `make test_build_guard` - Regression test for GitHub #45 (pure CMake, no build needed). Verifies the dev-only C++ test target stays gated on the in-tree `duckdb` submodule so consumers who statically link erpl_web (via `duckdb_extension_load`/FetchContent, where the submodule is absent) don't try to compile `test/cpp` and hit `catch.hpp file not found`. Run after touching the `add_subdirectory(test)` guard in `CMakeLists.txt`.
 - `make unittest` - Relink **only** `./build/debug/test/unittest`, the SQLLogicTest runner.
   `duckdb`, `unittest` and `erpl_web_tests` are **separate ninja targets**: building one
@@ -132,6 +144,20 @@ the manual `ThreadFlush` call entirely.
 **Note (DuckDB v1.5.1+):** `config.options.allocator_background_threads` was removed; use
 `config.SetOption("allocator_background_threads", duckdb::Value::BOOLEAN(true))` instead.
 The setting is now a generic DBConfig setting stored via `user_settings`.
+
+### C++ tests are compiled on Windows CI — write them portably
+
+`test/cpp/*.cpp` is globbed into the extension build, so **every** test file is compiled on
+the Windows leg. POSIX-only headers therefore break the build for everyone, and the failure
+appears ~20 minutes later in CI rather than locally:
+
+- `<unistd.h>` / `getpid()` — **not shipped by MSVC**. For a unique temp name use a
+  `static std::atomic` counter plus the object address, not the pid.
+- Prefer `<filesystem>`, `<chrono>`, `<thread>` over POSIX equivalents.
+
+This has now cost two round trips (`test_delta_share_scan_reexecution.cpp` documented it in
+a comment, and `test_credential_trace_redaction.cpp` then repeated it). A comment inside one
+test file is not where the next author looks — hence this entry.
 
 **SQL tests location:** `test/sql/` (various `.test` files organized by module)
 **C++ unit tests location:** `build/debug/extension/erpl_web/test/cpp/`
