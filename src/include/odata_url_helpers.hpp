@@ -202,7 +202,7 @@ public:
 //
 // One definition, because there were three: GraphClient had a static, the predicate
 // pushdown had a file-local copy, and the Datasphere URL builders had none at all - which
-// is where GitHub #246 was found.
+// is where GitHub #243 was found.
 std::string EscapeODataStringLiteral(const std::string &value);
 
 } // namespace erpl_web

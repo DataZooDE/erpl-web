@@ -69,7 +69,7 @@ public:
     std::string resource_id;
     std::string space_id; // for assets only
     // The secret the caller named. Carried here because LoadResourceDetails fetches a token
-    // of its own, and hardcoding the name there would ignore `secret :=` (GitHub #245).
+    // of its own, and hardcoding the name there would ignore `secret :=` (GitHub #243).
     std::string secret_name = "datasphere";
     
     // Load detailed resource information
@@ -131,7 +131,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction();
 // Every rejection here used to be a `break`, which is the same exit the LAST page takes -
 // so an HTTP 500 on page two returned page one and reported success. Only a valid, short
 // page may end pagination; anything else throws, because an incomplete catalog presented
-// as complete is a silent wrong answer. See GitHub #245.
+// as complete is a silent wrong answer. See GitHub #243.
 //
 // `what` names the thing being listed for the message, e.g. "'…/tables' in space 'SALES'".
 duckdb_yyjson::yyjson_val *RequireValidListingPage(const HttpResponse *response, const std::string &what,

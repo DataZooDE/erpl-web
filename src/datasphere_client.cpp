@@ -162,7 +162,7 @@ std::string DatasphereUrlBuilder::BuildCatalogAssetsFilteredUrl(const std::strin
 {
     // The id goes inside an OData string literal, so its quotes must be doubled. Raw, a
     // value containing a quote ends the literal early and the remainder is parsed as filter
-    // syntax - which returns a different result rather than an error (GitHub #246).
+    // syntax - which returns a different result rather than an error (GitHub #243).
     return BuildCatalogAssetsUrl(tenant_name, data_center) + "?$filter=spaceName eq '" +
            EscapeODataStringLiteral(space_id) +
            "'&$select=name,technicalName,assetAnalyticalMetadataUrl,assetRelationalMetadataUrl";

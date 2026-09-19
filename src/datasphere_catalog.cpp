@@ -73,7 +73,7 @@ std::string GetOrRefreshDatasphereToken(duckdb::ClientContext &context, OAuth2Co
     // functions - so the parameter could not be passed at all (the binder rejected it), and
     // the parsing code was unreachable. Every catalog function was locked to one secret,
     // while the read path threaded the name correctly: the same guard-at-one-seam shape.
-    // See GitHub #245.
+    // See GitHub #243.
     auto &secret_manager = duckdb::SecretManager::Get(context);
     auto transaction = duckdb::CatalogTransaction::GetSystemCatalogTransaction(context);
     std::unique_ptr<duckdb::SecretEntry> secret_entry;
@@ -1153,7 +1153,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeSpaceBind(duck
     
     // Extract optional secret from named parameters. The default is the secret name the
     // catalog functions have always used; "default" was never right here, and the value was
-    // discarded anyway because the parameter was not registered (GitHub #245).
+    // discarded anyway because the parameter was not registered (GitHub #243).
     std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
@@ -1202,7 +1202,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> DatasphereDescribeAssetBind(duck
     
     // Extract optional secret from named parameters. The default is the secret name the
     // catalog functions have always used; "default" was never right here, and the value was
-    // discarded anyway because the parameter was not registered (GitHub #245).
+    // discarded anyway because the parameter was not registered (GitHub #243).
     std::string secret_name = "datasphere";
     if (input.named_parameters.find("secret") != input.named_parameters.end()) {
         secret_name = input.named_parameters["secret"].GetValue<std::string>();
@@ -1405,7 +1405,7 @@ duckdb::TableFunctionSet CreateDatasphereShowSpacesFunction() {
             names = {"name"};
 
             // Auth via secret. The name is a named parameter now, registered below; these
-            // binds previously had no way to accept one at all (GitHub #245).
+            // binds previously had no way to accept one at all (GitHub #243).
             std::string secret_name = "datasphere";
             if (input.named_parameters.find("secret") != input.named_parameters.end()) {
                 secret_name = input.named_parameters["secret"].GetValue<std::string>();
@@ -1703,7 +1703,7 @@ duckdb::TableFunctionSet CreateDatasphereShowAssetsFunction() {
             // a CUSTOMER table yielded one row, and the other space's asset was dropped
             // without a word. Shared technical names across spaces are the normal case in
             // Datasphere, and the row itself carries the space - so the key that decides
-            // whether a row is a duplicate has to carry it too. See GitHub #245.
+            // whether a row is a duplicate has to carry it too. See GitHub #243.
             std::set<std::tuple<std::string, std::string, std::string>> seen_assets;
 
             // Simple mapping function for known technical name to business name mappings
@@ -1833,7 +1833,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeSpaceFunction() {
     describe_space.init_global = ScanRowCursorState::Init;
     // Registering the parameter is what makes it usable: the binder rejects any named
     // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
-    // parameter" while two binds contained code to read it (GitHub #245).
+    // parameter" while two binds contained code to read it (GitHub #243).
     describe_space.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_space);
@@ -1848,7 +1848,7 @@ duckdb::TableFunctionSet CreateDatasphereDescribeAssetFunction() {
     describe_asset.init_global = ScanRowCursorState::Init;
     // Registering the parameter is what makes it usable: the binder rejects any named
     // parameter a function does not declare, so `secret := 'x'` failed with "Invalid named
-    // parameter" while two binds contained code to read it (GitHub #245).
+    // parameter" while two binds contained code to read it (GitHub #243).
     describe_asset.named_parameters["secret"] = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     
     function_set.AddFunction(describe_asset);

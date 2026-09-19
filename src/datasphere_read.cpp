@@ -28,7 +28,7 @@ namespace {
         // "https://host/path?$top=5" became "https://host/path?$top=5/A/A", with the
         // segments buried inside the query value. Reachable through the documented
         // absolute-URL hatch, which is exactly what the re-execution tests use.
-        // See GitHub #247.
+        // See GitHub #243.
         const auto query_start = url.find_first_of("?#");
         std::string path = (query_start == std::string::npos) ? url : url.substr(0, query_start);
         const std::string tail = (query_start == std::string::npos) ? std::string() : url.substr(query_start);
@@ -107,7 +107,7 @@ namespace {
 }
 
 // Public wrapper over the file-local implementation, declared in datasphere_read.hpp so the
-// query-string behaviour can be tested directly (GitHub #247).
+// query-string behaviour can be tested directly (GitHub #243).
 void EnsureAssetSegmentPattern(std::string &url, const std::string &asset_id) {
     EnsureAssetSegmentPatternImpl(url, asset_id);
 }

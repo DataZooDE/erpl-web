@@ -23,7 +23,7 @@ using namespace erpl_web;
 //
 // The rule existed twice already (a GraphClient static and a file-local copy in the
 // predicate pushdown) and was missing at the Datasphere and SAC URL builders. There is one
-// definition now. See GitHub #246.
+// definition now. See GitHub #243.
 
 TEST_CASE("the escaper doubles quotes and leaves everything else alone",
           "[odata][literal_escaping]") {

@@ -490,7 +490,7 @@ DatasphereAuthInfo ResolveDatasphereAuth(duckdb::ClientContext &context, const s
     // Resolve tenant and data center
     // Missing keys are reported as bad input naming the secret and the field. TryGetValue
     // with error_on_missing throws InternalException, which invalidates the database
-    // instance over a typo in a CREATE SECRET (GitHub #247).
+    // instance over a typo in a CREATE SECRET (GitHub #243).
     auto tenant = RequireSecretValue(*kv_secret, "tenant_name", secret_name);
     auto data_center = RequireSecretValue(*kv_secret, "data_center", secret_name);
 

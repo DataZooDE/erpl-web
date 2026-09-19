@@ -28,7 +28,7 @@ std::string SacUrlBuilder::BuildPlanningDataUrl(
         return base + "v1/PlanningModels";
     }
     // A key predicate is an OData string literal, so a quote in the id would end it early
-    // and the rest would parse as path syntax (GitHub #246).
+    // and the rest would parse as path syntax (GitHub #243).
     return base + "v1/PlanningModels('" + EscapeODataStringLiteral(model_id) + "')";
 }
 

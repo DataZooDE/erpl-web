@@ -127,7 +127,7 @@ static duckdb::unique_ptr<duckdb::FunctionData> SacReadAnalyticalBind(
     // This used to run after FromEntitySetRoot and end in `if (!select_clause.empty()) { }`
     // - a comment-only body - so `dimensions =>` and `measures =>` were accepted and
     // silently dropped, and the reader returned every column of the model. Datasphere's
-    // analytical bind does exactly what is done here (GitHub #244).
+    // analytical bind does exactly what is done here (GitHub #243).
     std::string select_clause;
 
     if (input.named_parameters.find("dimensions") != input.named_parameters.end()) {

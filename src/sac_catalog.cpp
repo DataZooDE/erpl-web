@@ -45,7 +45,7 @@ std::vector<SacModel> SacCatalogService::ListModels() const {
     // It is not implemented here because SAC's catalog wire format is not verifiable from
     // this repository: there is no tenant, fixture or captured response to build a parser
     // against, and a parser written to a guessed shape would look verified without being
-    // so. Throwing is the honest answer until a real response exists. See GitHub #244.
+    // so. Throwing is the honest answer until a real response exists. See GitHub #243.
     throw duckdb::NotImplementedException(
         "SacCatalogService::ListModels is not implemented yet. SAC catalog discovery needs the tenant's OData service "
         "document, which this build cannot parse. Use the Datasphere functions, or open an "
@@ -86,7 +86,7 @@ std::optional<SacModel> SacCatalogService::GetModel(const std::string& model_id)
     // It is not implemented here because SAC's catalog wire format is not verifiable from
     // this repository: there is no tenant, fixture or captured response to build a parser
     // against, and a parser written to a guessed shape would look verified without being
-    // so. Throwing is the honest answer until a real response exists. See GitHub #244.
+    // so. Throwing is the honest answer until a real response exists. See GitHub #243.
     throw duckdb::NotImplementedException(
         "SacCatalogService::GetModel is not implemented yet. SAC catalog discovery needs the tenant's OData service "
         "document, which this build cannot parse. Use the Datasphere functions, or open an "
@@ -143,7 +143,7 @@ std::vector<std::string> SacCatalogService::GetModelMeasures(const std::string& 
 
 std::vector<SacStory> SacCatalogService::ListStories() const {
     // Same as ListModels: an empty result here is indistinguishable from a tenant with no
-    // stories, so it answered authoritatively without having asked anything. See GitHub #244.
+    // stories, so it answered authoritatively without having asked anything. See GitHub #243.
     throw duckdb::NotImplementedException(
         "SacCatalogService::ListStories is not implemented yet. SAC catalog discovery needs the "
         "tenant's OData service document, which this build cannot parse. Open an issue with a "

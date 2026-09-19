@@ -58,7 +58,7 @@ SacSecretData ResolveSacSecretData(duckdb::ClientContext& context, const std::st
     // The token is actually attached now. This block used to be an empty `if` body with the
     // comment "Token will be used if available", so auth_params went back with bearer_token
     // unset and every SAC request went out anonymous - a 401 that read like a permissions
-    // problem on the user's tenant. See GitHub #244.
+    // problem on the user's tenant. See GitHub #243.
     if (access_token_it == kv_secret->secret_map.end() || access_token_it->second.IsNull() ||
         access_token_it->second.ToString().empty()) {
         // Refusing here rather than sending an unauthenticated request: an anonymous GET to

@@ -345,7 +345,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromNamedSecret(duckdb::ClientC
     if (type == "http_basic") {
         // A secret missing its username/password is bad input, not an invariant violation.
         // TryGetValue with error_on_missing throws InternalException, which invalidates the
-        // database instance (GitHub #247).
+        // database instance (GitHub #243).
         params->basic_credentials = std::make_tuple(
             RequireSecretValue(*kv_secret, "username", secret_name),
             RequireSecretValue(*kv_secret, "password", secret_name));

@@ -15,7 +15,7 @@
 // runs. So `secret := 'x'` failed with "Invalid named parameter" and the reading code was
 // unreachable, while the datasphere_read_* path threaded the name correctly all along.
 //
-// See GitHub #245. Note the failure mode: this was never a silent cross-tenant read - it
+// See GitHub #243. Note the failure mode: this was never a silent cross-tenant read - it
 // was an outright rejection plus dead code. Worth stating, because a report of this defect
 // described it the other way round.
 

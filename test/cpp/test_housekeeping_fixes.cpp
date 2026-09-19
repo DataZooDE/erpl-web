@@ -10,7 +10,7 @@
 using namespace erpl_web::test_support;
 
 // A batch of small defects that each turned a user mistake into something worse than an
-// error message. See GitHub #247.
+// error message. See GitHub #243.
 
 namespace {
 

@@ -15,7 +15,7 @@ duckdb::TableFunctionSet CreateDatasphereReadAnalyticalFunction();
 //
 // Exported as a seam so the query-string case is testable: this appended to the end of the
 // whole string, so "https://host/path?$top=5" became "https://host/path?$top=5/A/A", with
-// the segments buried inside the query value. See GitHub #247.
+// the segments buried inside the query value. See GitHub #243.
 void EnsureAssetSegmentPattern(std::string &url, const std::string &asset_id);
 
 } // namespace erpl_web

@@ -66,7 +66,7 @@ namespace erpl_web
 //
 // Lived as a file-local helper in datasphere_read.cpp while sac_read_functions.cpp
 // registered the same `params` argument and never read it - so `params => MAP{...}` was
-// accepted and silently dropped by every SAC reader (GitHub #244). Shared so the two
+// accepted and silently dropped by every SAC reader (GitHub #243). Shared so the two
 // cannot drift, and so the next reader that takes `params` has one obvious thing to call.
 std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value &params_value,
                                                           const char *trace_component);
@@ -78,7 +78,7 @@ std::map<std::string, std::string> ExtractInputParameters(const duckdb::Value &p
 // reserved for invariant violations and INVALIDATES THE WHOLE DATABASE INSTANCE - so a
 // user who left `tenant_name` out of a CREATE SECRET took the database down and got
 // "INTERNAL Error: Failed to fetch key 'tenant_name' from secret" for their trouble. A
-// missing key in a secret the user wrote is ordinary bad input. See GitHub #247.
+// missing key in a secret the user wrote is ordinary bad input. See GitHub #243.
 std::string RequireSecretValue(const duckdb::KeyValueSecret &secret, const std::string &key,
                                const std::string &secret_name);
 

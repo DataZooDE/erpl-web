@@ -18,7 +18,7 @@ using namespace erpl_web::test_support;
 //   - the catalog service returned empty vectors, which DuckDB cannot tell apart from a
 //     tenant that genuinely has no models.
 //
-// See GitHub #244.
+// See GitHub #243.
 
 namespace {
 

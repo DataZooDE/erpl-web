@@ -724,7 +724,7 @@ static void RegisterSacFunctions(ExtensionLoader &loader)
 
     // The `sac` secret type. sac_secret_helper has always instructed users to create one,
     // but it was never registered, so that CREATE SECRET statement could not parse and SAC
-    // was reachable only with a hand-built secret (GitHub #244).
+    // was reachable only with a hand-built secret (GitHub #243).
     erpl_web::CreateSacSecretFunctions::Register(loader);
 
     // Register SAC storage extension (handles ATTACH support)

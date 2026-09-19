@@ -17,7 +17,7 @@ using namespace erpl_web;
 //
 // Tested through this seam rather than end to end because the catalog URLs are built as
 // https://<tenant>.<data_center>.hcs.cloud.sap/... with no loopback hatch, so the
-// paginating callers cannot be pointed at a local server. See GitHub #245.
+// paginating callers cannot be pointed at a local server. See GitHub #243.
 
 namespace {
 

@@ -55,7 +55,7 @@ unique_ptr<BaseSecret> CreateBasicSecretFunctions::CreateBasicSecretFromConfig(C
             ERPL_TRACE_ERROR("SECRET_BASIC", "Unknown named parameter: " + lower_name);
             // InvalidInputException, not InternalException: an unrecognised parameter is
             // something the USER typed, and INTERNAL invalidates the whole database
-            // instance (GitHub #247).
+            // instance (GitHub #243).
             throw InvalidInputException("Unknown named parameter passed to CreateBasicSecretFromConfig: " + lower_name);
         }
     }

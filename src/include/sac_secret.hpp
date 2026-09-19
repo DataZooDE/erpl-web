@@ -12,7 +12,7 @@ namespace erpl_web {
 //   CREATE SECRET <name> (type 'sac', provider 'oauth2', ...)
 // but no such type was ever registered, so that statement could not parse and every SAC
 // function was reachable only with a hand-built secret - which then went out with no
-// Authorization header at all. See GitHub #244.
+// Authorization header at all. See GitHub #243.
 class CreateSacSecretFunctions {
 public:
     static void Register(duckdb::ExtensionLoader &loader);

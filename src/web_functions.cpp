@@ -264,7 +264,7 @@ static std::shared_ptr<HttpAuthParams> AuthParamsFromInput(duckdb::ClientContext
             // with no implementation behind it, so `auth_type := 'DIGEST'` used to land
             // here and fall back to the registered secrets - the caller's explicit
             // credentials dropped, the request sent as somebody else, and nothing said.
-            // See GitHub #247.
+            // See GitHub #243.
             throw duckdb::InvalidInputException(
                 "Unsupported auth_type '%s'. Supported values are 'BASIC' and 'BEARER' "
                 "(case-insensitive).", auth_type.c_str());
