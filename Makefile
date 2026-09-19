@@ -113,6 +113,26 @@ test_debug_bc: unittest
 test_build_guard:
 	cmake -DREPO_DIR='${PROJ_DIR}' -P test/cmake/test_cpp_tests_guard.cmake
 
+# Build and run datazoo-oauth2's own Catch2 suite.
+#
+# That target is guarded on the submodule being the TOP-LEVEL cmake project, and erpl-web
+# add_subdirectory()s it - so the guard is false in every build this repo makes, and the
+# suite was never compiled, let alone run. It is the only coverage of
+# OAuth2CallbackHandler::ValidateState, the CSRF defence of the whole authorization_code
+# flow, and of the PKCE/state token generator and the callback error page's HTML escaping.
+#
+# Configured standalone in its own build directory rather than folded into erpl_web_tests:
+# standalone is the configuration the guard already supports, so nothing in the submodule
+# has to change. It needs Catch2 3 on the system; the target says so rather than silently
+# doing nothing, which is how this went unnoticed in the first place. See GitHub #245.
+OAUTH2_BUILD_DIR?=build/datazoo-oauth2-tests
+
+test_oauth2:
+	@cmake -S datazoo-oauth2 -B ${OAUTH2_BUILD_DIR} > /dev/null || 		(echo "ERROR: could not configure datazoo-oauth2 standalone (is Catch2 3 installed?)"; exit 1)
+	@cmake --build ${OAUTH2_BUILD_DIR} --parallel 4
+	@test -x ${OAUTH2_BUILD_DIR}/test/datazoo_oauth2_unit_tests || 		(echo "ERROR: datazoo_oauth2_unit_tests was not built. Catch2 3 was probably not found, which is exactly the silent skip this target exists to prevent."; exit 1)
+	${OAUTH2_BUILD_DIR}/test/datazoo_oauth2_unit_tests
+
 # Run C++ unit tests. ASAN_OPTIONS=detect_odr_violation=0 suppresses a false-positive ODR
 # warning that arises from DuckDB being compiled into both the static test binary and
 # libduckdb.so. The duplicate symbol (LOOKUP_TABLE in nested_to_varchar_cast.cpp) is

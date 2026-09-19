@@ -19,6 +19,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # datazoo-oauth2's own Catch2 suite, which NOTHING used to run.
+  #
+  # Its cmake target is guarded on the submodule being the top-level project, and every
+  # build this repo makes add_subdirectory()s it - so the guard was always false and the
+  # suite was never compiled. That left the only coverage of
+  # OAuth2CallbackHandler::ValidateState (the CSRF defence of the authorization_code flow),
+  # the PKCE/state token generator, and the callback error page's HTML escaping running
+  # nowhere. See GitHub #245.
+  #
+  # Cheap and independent of the extension build, so it is not gated on it: a broken CSRF
+  # check should not wait ~25 minutes behind a Windows build to be reported.
+  oauth2-unit-tests:
+    name: datazoo-oauth2 unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Catch2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y catch2 cmake ninja-build
+
+      - name: Build and run
+        run: make test_oauth2
+
   duckdb-v155-build:
     name: Build extension binaries (v1.5.5)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
