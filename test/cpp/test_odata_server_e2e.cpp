@@ -681,3 +681,91 @@ TEST_CASE("odata_read fails when the entity set itself errors", "[odata_e2e][err
     auto result = con.Query("SELECT * FROM odata_read('" + server.Url("/bad/Airlines") + "')");
     REQUIRE(result->HasError());
 }
+
+// ----------------------------------------------------------------------
+// Decimal facets (GitHub #254)
+
+namespace {
+
+// A service that publishes its money columns the way TOPdesk's reporting API does:
+// Edm.Decimal with a declared Scale and NO Precision. CSDL leaves an absent Precision
+// unbounded, so the only conformant reading is "as wide as the consumer can manage" --
+// defaulting it to the scale itself yields DECIMAL(18,18), which has zero integral
+// digits and cannot hold any value >= 1.
+std::string DecimalEdmx(const char *const scale_facets)
+{
+    return std::string(R"(<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Topdesk" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Asset">
+        <Key><PropertyRef Name="Id"/></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false"/>
+        <Property Name="serviceagreementcost" Type="Edm.Decimal" )") +
+           scale_facets + R"(/>
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="AssetList" EntityType="Topdesk.Asset"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>)";
+}
+
+const char *const ASSET_490 = R"({"Id":"a1","serviceagreementcost":490.0})";
+const char *const ASSET_1250 = R"({"Id":"a2","serviceagreementcost":1250.75})";
+
+}  // namespace
+
+// Catches: GitHub #254. Every decimal column of a TOPdesk reporting service came back
+// as DECIMAL(18,18), so every value >= 1 failed to cast and was returned as NULL with a
+// conversion warning. Nothing here is stubbed but the service itself: the metadata is
+// parsed, the catalog is built and the JSON page is converted by the real code.
+TEST_CASE("a Decimal with no Precision holds values above 1 end to end",
+          "[odata_e2e][decimal]") {
+    ODataTestServer server;
+    server.ServeMetadata("/topdesk/$metadata", DecimalEdmx(R"(Scale="18")"));
+    // ATTACH resolves the metadata context from the service document at the root.
+    server.OnPath("/topdesk/",
+                  CannedResponse::Json(
+                      R"({"@odata.context":")" + server.Url("/topdesk/$metadata") +
+                      R"(","value":[{"name":"AssetList","kind":"EntitySet","url":"AssetList"}]})"));
+    server.OnPath("/topdesk/AssetList",
+                  CannedResponse::Json(MakeV4Page(server.Url("/topdesk/$metadata") + "#AssetList",
+                                                  {ASSET_490, ASSET_1250})));
+
+    TestDatabase database;
+    duckdb::Connection &con = database.Con();
+    REQUIRE_FALSE(con.Query("LOAD erpl_web")->HasError());
+
+    SECTION("through ATTACH, as reported") {
+        auto attach = con.Query("ATTACH '" + server.Url("/topdesk/") + "' AS topdesk (TYPE odata)");
+        INFO((attach->HasError() ? attach->GetError() : std::string()));
+        REQUIRE_FALSE(attach->HasError());
+
+        auto result = con.Query(
+            "SELECT DISTINCT serviceagreementcost FROM topdesk.AssetList "
+            "ORDER BY serviceagreementcost");
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->types.size() == 1);
+        INFO("column type " << result->types[0].ToString());
+        REQUIRE(result->types[0].ToString() == "DECIMAL(38,18)");
+        REQUIRE(result->RowCount() == 2);
+        REQUIRE_FALSE(result->GetValue(0, 0).IsNull());
+        REQUIRE_FALSE(result->GetValue(0, 1).IsNull());
+        REQUIRE(result->GetValue(0, 0).GetValue<double>() == Approx(490.0));
+        REQUIRE(result->GetValue(0, 1).GetValue<double>() == Approx(1250.75));
+    }
+
+    SECTION("through odata_read") {
+        auto result = con.Query("SELECT serviceagreementcost FROM odata_read('" +
+                                server.Url("/topdesk/AssetList") + "') ORDER BY Id");
+        INFO((result->HasError() ? result->GetError() : std::string()));
+        REQUIRE_FALSE(result->HasError());
+        REQUIRE(result->types[0].ToString() == "DECIMAL(38,18)");
+        REQUIRE(result->RowCount() == 2);
+        REQUIRE_FALSE(result->GetValue(0, 0).IsNull());
+        REQUIRE(result->GetValue(0, 0).GetValue<double>() == Approx(490.0));
+    }
+}
