@@ -1216,23 +1216,45 @@ void GraphExcelFunctions::Register(ExtensionLoader &loader) {
         del_rows_set.AddFunction(del_by_name);
 
         CreateTableFunctionInfo info(del_rows_set);
-        FunctionDescription desc;
-        desc.description = "Delete all rows in an Excel table where a column value matches. "
-                           "Returns rows_deleted. "
-                           "The column may be given as a name (resolved against the table header) "
-                           "or as a 0-based integer index. "
-                           "col_value is always compared as a string; cast numeric IDs to VARCHAR if needed.";
-        desc.parameter_names = {"file_path", "table_name", "column", "col_value"};
-        desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                LogicalType::VARCHAR, LogicalType::VARCHAR};
-        desc.examples = {
-            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 'Region', 'North', "
-            "drive := 'b!abc...', secret := 'ms_graph')",
-            "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'obsolete_row', "
-            "site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
-        };
-        desc.categories = {"microsoft", "graph", "excel"};
-        info.descriptions.push_back(std::move(desc));
+
+        // ONE description per overload, each keyed by its exact parameter_types.
+        //
+        // There used to be a single description pinned to all-VARCHAR types. That
+        // matched del_by_name and was DISQUALIFIED for del_by_index, whose third
+        // argument is BIGINT -- CalcDescriptionSpecificity rejects a concrete type
+        // mismatch outright. The effect is silent: the description is simply not
+        // applied, and duckdb_functions() reports that overload as undocumented while
+        // the source plainly documents it.
+        const string shared =
+            "Delete all rows in an Excel table where a column value matches. "
+            "Returns rows_deleted. "
+            "col_value is always compared as a string; cast numeric IDs to VARCHAR if needed.";
+        {
+            FunctionDescription desc;
+            desc.description = shared + " The column is given by NAME, resolved against the table header.";
+            desc.parameter_names = {"file_path", "table_name", "column", "col_value"};
+            desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                    LogicalType::VARCHAR, LogicalType::VARCHAR};
+            desc.examples = {
+                "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 'Region', 'North', "
+                "drive := 'b!abc...', secret := 'ms_graph')"
+            };
+            desc.categories = {"microsoft", "graph", "excel"};
+            info.descriptions.push_back(std::move(desc));
+        }
+        {
+            FunctionDescription desc;
+            desc.description = shared + " The column is given by 0-based integer INDEX.";
+            desc.parameter_names = {"file_path", "table_name", "column_index", "col_value"};
+            desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                    LogicalType::BIGINT, LogicalType::VARCHAR};
+            desc.examples = {
+                "SELECT * FROM graph_excel_delete_rows('report.xlsx', 'Sales', 0, 'obsolete_row', "
+                "site := 'Finance', drive := 'Documents', secret := 'ms_graph')"
+            };
+            desc.categories = {"microsoft", "graph", "excel"};
+            info.descriptions.push_back(std::move(desc));
+        }
         loader.RegisterFunction(std::move(info));
     }
 
