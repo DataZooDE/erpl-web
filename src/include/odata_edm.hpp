@@ -2071,6 +2071,10 @@ class DuckTypeConverter
         // which is how Edm.Byte stayed wrong in all of them at once (GitHub #68).
         static duckdb::LogicalType ConvertEdmPrimitiveStringToLogicalType(const std::string &type_name);
 
+        // The widest DECIMAL DuckDB has. CSDL leaves an absent Precision unbounded, so this
+        // is the closest representable reading of "unbounded".
+        static constexpr int32_t MAX_DECIMAL_WIDTH = 38;
+
         // Build the DuckDB type for an Edm.Decimal property from its CSDL facets.
         //
         // CSDL says an absent Scale defaults to 0, so DECIMAL(p,0) is technically conformant --
@@ -2080,18 +2084,27 @@ class DuckTypeConverter
         // explicitly declared Scale -- including Scale="0" -- still yields DECIMAL(p,s).
         // Property::scale defaults to -1 ("absent"), which is what makes the two
         // distinguishable at all. (GitHub #80, relies on GitHub #73)
+        //
+        // The Precision side is the mirror image, and used to be wrong in the same way.
+        // An absent Precision is UNBOUNDED in CSDL, not 18: defaulting it to 18 against a
+        // declared Scale="18" -- how TOPdesk's reporting API publishes every money column --
+        // produced DECIMAL(18,18), eighteen fractional digits with no room for a single
+        // integral one, so every value >= 1 failed to cast and was returned as NULL. Both an
+        // absent Precision and a declared one that leaves no integral digits therefore widen
+        // to the maximum, keeping the scale the service declared about its own data; only a
+        // scale too wide for any DuckDB DECIMAL falls back to DOUBLE. (GitHub #254)
         static duckdb::LogicalType BuildDecimalLogicalType(const Property &property) {
             if (property.scale < 0) {
                 return duckdb::LogicalTypeId::DOUBLE;
             }
-
-            int32_t precision = property.precision > 0 ? property.precision : 18;
-            if (precision > 38) {
-                precision = 38;
+            if (property.scale >= MAX_DECIMAL_WIDTH) {
+                return duckdb::LogicalTypeId::DOUBLE;
             }
-            int32_t scale = property.scale;
-            if (scale > precision) {
-                scale = precision;
+
+            const int32_t scale = property.scale;
+            int32_t precision = property.precision > 0 ? property.precision : MAX_DECIMAL_WIDTH;
+            if (precision > MAX_DECIMAL_WIDTH || precision <= scale) {
+                precision = MAX_DECIMAL_WIDTH;
             }
             return duckdb::LogicalType::DECIMAL(static_cast<uint8_t>(precision), static_cast<uint8_t>(scale));
         }

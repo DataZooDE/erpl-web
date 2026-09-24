@@ -910,6 +910,66 @@ TEST_CASE("Edm.Decimal without Scale maps to DOUBLE instead of rounding", "[odat
     REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(p_wide, edmx).ToString() == "DECIMAL(38,2)");
 }
 
+TEST_CASE("Edm.Decimal facets that leave no integral digits are widened", "[odata_edm_mapping]")
+{
+    // GitHub #254: a TOPdesk reporting service publishes every money column as
+    // Edm.Decimal with a declared Scale and no Precision. Defaulting the absent
+    // Precision to 18 produced DECIMAL(18,18) -- eighteen fractional digits and zero
+    // integral ones -- so 490.0 could not be cast and came back NULL. CSDL leaves an
+    // absent Precision unbounded, so it widens to DuckDB's maximum instead.
+    auto edm_xml = LoadTestFile("./test/cpp/edm_trippin.xml");
+    auto edmx = Edmx::FromXml(edm_xml);
+
+    auto type_of = [&edmx](int precision, int scale) {
+        Property property;
+        property.name = "serviceagreementcost";
+        property.type_name = "Edm.Decimal";
+        property.precision = precision;
+        property.scale = scale;
+        return DuckTypeConverter::BuildLogicalTypeForProperty(property, edmx).ToString();
+    };
+
+    SECTION("an absent Precision is unbounded, not 18") {
+        REQUIRE(type_of(-1, 18) == "DECIMAL(38,18)");
+        REQUIRE(type_of(-1, 2) == "DECIMAL(38,2)");
+    }
+
+    SECTION("a declared Precision that leaves no integral digits is widened too") {
+        // Truncating the scale down to the precision -- the old behaviour -- turns these
+        // into the same unusable zero-integral-digit type instead of fixing it.
+        REQUIRE(type_of(18, 18) == "DECIMAL(38,18)");
+        REQUIRE(type_of(5, 10) == "DECIMAL(38,10)");
+    }
+
+    SECTION("a scale at or beyond the maximum width has no usable exact type") {
+        REQUIRE(type_of(-1, 38) == "DOUBLE");
+        REQUIRE(type_of(20, 40) == "DOUBLE");
+    }
+
+    SECTION("facets that already leave integral digits are untouched") {
+        REQUIRE(type_of(13, 3) == "DECIMAL(13,3)");
+        REQUIRE(type_of(19, 4) == "DECIMAL(19,4)");
+        REQUIRE(type_of(19, 0) == "DECIMAL(19,0)");
+        REQUIRE(type_of(47, 2) == "DECIMAL(38,2)");
+    }
+
+    SECTION("the reported CSDL shape, parsed from XML") {
+        const char *xml = R"(
+            <Property Name="serviceagreementcost" Type="Edm.Decimal" Scale="18" />
+        )";
+
+        tinyxml2::XMLDocument doc;
+        doc.Parse(xml);
+        tinyxml2::XMLElement *element = doc.FirstChildElement("Property");
+
+        Property property = Property::FromXml(*element);
+        REQUIRE(property.precision == -1);
+        REQUIRE(property.scale == 18);
+        REQUIRE(DuckTypeConverter::BuildLogicalTypeForProperty(property, edmx).ToString() ==
+                "DECIMAL(38,18)");
+    }
+}
+
 TEST_CASE("Edm.Decimal with variable Scale maps to DOUBLE", "[odata_edm_mapping]")
 {
     // GitHub #80: SAP OData v2 services publish Scale="variable"; Property::FromXml parses that
