@@ -114,9 +114,28 @@ static duckdb::Value CreateEmptyFunctionsList() {
     return Value::LIST(CreateFunctionStructType(), vector<Value>());
 }
 
+// A CSDL facet that the metadata never declared. Reporting it as 0 made it
+// indistinguishable from a declared zero -- and Scale="0" versus an absent Scale is
+// precisely what decides DECIMAL(p,0) against DOUBLE, so the one field a caller would
+// consult to understand the type could not express the difference.
+static duckdb::Value AbsentFacet() {
+    return Value(LogicalType::INTEGER);
+}
+
+static duckdb::Value FacetValue(int facet) {
+    return facet >= 0 ? Value::INTEGER(facet) : AbsentFacet();
+}
+
 // Helper to build property struct
-static duckdb::Value BuildPropertyStruct(const Property& prop, bool is_key = false) {
-    auto duck_type_str = DuckTypeConverter::ConvertEdmTypeStringToDuckDbTypeString(prop.type_name);
+//
+// duckdb_type must be what the READER binds, which is why this goes through the
+// property-aware mapping rather than the type-name-only one: the latter is blind to an
+// Edm.Decimal's Precision/Scale facets, to Collection(...) and to complex types, so it
+// answered "DECIMAL" for a DECIMAL(38,18) column and "VARCHAR" for both a VARCHAR[] and
+// a STRUCT. A describe that disagrees with the scan is worse than no describe at all.
+// (GitHub #254)
+static duckdb::Value BuildPropertyStruct(const Property& prop, const Edmx& edmx, bool is_key = false) {
+    auto duck_type_str = DuckTypeConverter::BuildLogicalTypeForProperty(prop, edmx).ToString();
     
     child_list_t<Value> property_struct;
     property_struct.emplace_back("name", Value(prop.name));
@@ -124,9 +143,9 @@ static duckdb::Value BuildPropertyStruct(const Property& prop, bool is_key = fal
     property_struct.emplace_back("edm_type", Value(prop.type_name));
     property_struct.emplace_back("is_nullable", Value(prop.nullable));
     property_struct.emplace_back("is_key", Value(is_key));
-    property_struct.emplace_back("max_length", prop.max_length > 0 ? Value(prop.max_length) : Value::INTEGER(0));
-    property_struct.emplace_back("precision", prop.precision > 0 ? Value(prop.precision) : Value::INTEGER(0));
-    property_struct.emplace_back("scale", prop.scale > 0 ? Value(prop.scale) : Value::INTEGER(0));
+    property_struct.emplace_back("max_length", FacetValue(prop.max_length));
+    property_struct.emplace_back("precision", FacetValue(prop.precision));
+    property_struct.emplace_back("scale", FacetValue(prop.scale));
     
     return Value::STRUCT(property_struct);
 }
@@ -270,11 +289,12 @@ static unique_ptr<FunctionData> ODataDescribeBind(
 }
 
 // Helper to build properties list for an entity type
-static duckdb::Value BuildPropertiesList(const EntityType& entity_type, const std::set<std::string>& key_properties) {
+static duckdb::Value BuildPropertiesList(const EntityType& entity_type, const std::set<std::string>& key_properties,
+                                         const Edmx& edmx) {
     vector<Value> properties;
     for (const auto& prop : entity_type.properties) {
         bool is_key = key_properties.count(prop.name) > 0;
-        properties.push_back(BuildPropertyStruct(prop, is_key));
+        properties.push_back(BuildPropertyStruct(prop, edmx, is_key));
     }
     return properties.empty() ? CreateEmptyPropertyList() : Value::LIST(properties);
 }
@@ -409,7 +429,7 @@ static void ProcessEntitySetDescription(
             }
             
             // Build properties and navigation properties
-            row_values.push_back(BuildPropertiesList(entity_type, key_properties));
+            row_values.push_back(BuildPropertiesList(entity_type, key_properties, metadata));
             row_values.push_back(BuildNavigationPropertiesList(entity_type, metadata, entity_set.entity_type_name));
         } else {
             // Entity type not found
