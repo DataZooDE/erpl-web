@@ -1,4 +1,6 @@
 #include "duckdb.hpp"
+#include "duckdb/parser/parsed_data/create_pragma_function_info.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_function_info.hpp>
 #include "duckdb/function/pragma_function.hpp"
@@ -639,7 +641,28 @@ static void RegisterOdpFunctions(ExtensionLoader &loader)
         info.descriptions.push_back(std::move(desc));
         loader.RegisterFunction(std::move(info));
     }
-    loader.RegisterFunction(erpl_web::CreateOdpRemoveSubscriptionFunction());
+    // Documented via the system catalog -- see RegisterDocumentedPragma below for why
+    // the ExtensionLoader overload cannot carry metadata.
+    {
+        auto pragma = erpl_web::CreateOdpRemoveSubscriptionFunction();
+        auto name = pragma.name;
+        PragmaFunctionSet set(name);
+        set.AddFunction(std::move(pragma));
+        CreatePragmaFunctionInfo info(std::move(name), std::move(set));
+        FunctionDescription d;
+        d.description =
+            "Removes an ODP OData subscription so the source stops retaining delta state for it. "
+            "Pass the subscription id; the boolean controls whether removal is also attempted on "
+            "the remote system rather than only locally.";
+        d.examples = {"PRAGMA odp_odata_remove_subscription('SUB_ID', true);"};
+        d.parameter_names = {"subscription_id", "remove_remote"};
+        d.categories = {"erpl_web", "odp"};
+        info.descriptions.push_back(std::move(d));
+        auto &db = loader.GetDatabaseInstance();
+        auto &system_catalog = Catalog::GetSystemCatalog(db);
+        auto transaction = CatalogTransaction::GetSystemTransaction(db);
+        system_catalog.CreatePragmaFunction(transaction, info);
+    }
 }
 
 static void RegisterSacFunctions(ExtensionLoader &loader)
@@ -945,20 +968,60 @@ static void RegisterGraphTeamsFunctions(ExtensionLoader &loader)
     erpl_web::GraphTeamsFunctions::Register(loader);
 }
 
+// Registers a pragma WITH documentation.
+//
+// ExtensionLoader has no RegisterFunction overload taking a CreatePragmaFunctionInfo,
+// which is why pragmas across the ecosystem are undocumented -- and why this
+// extension's five were. But CreatePragmaFunctionInfo derives from CreateFunctionInfo,
+// and duckdb_functions() extracts PRAGMA_FUNCTION_ENTRY through the same generic
+// ExtractFunctionData path as every other function type, so description, examples and
+// parameter names all surface. Going through the system catalog directly is all that
+// is required. Proven on erpl_tunnel first.
+static void RegisterDocumentedPragma(ExtensionLoader &loader, PragmaFunction pragma,
+                                     string description, vector<string> examples,
+                                     vector<string> parameter_names = {})
+{
+    auto name = pragma.name;
+    PragmaFunctionSet set(name);
+    set.AddFunction(std::move(pragma));
+
+    CreatePragmaFunctionInfo info(std::move(name), std::move(set));
+    FunctionDescription d;
+    d.description = std::move(description);
+    d.examples = std::move(examples);
+    d.parameter_names = std::move(parameter_names);
+    d.categories = {"erpl_web", "tracing"};
+    info.descriptions.push_back(std::move(d));
+
+    auto &db = loader.GetDatabaseInstance();
+    auto &system_catalog = Catalog::GetSystemCatalog(db);
+    auto transaction = CatalogTransaction::GetSystemTransaction(db);
+    system_catalog.CreatePragmaFunction(transaction, info);
+}
+
 static void RegisterTracingPragmas(ExtensionLoader &loader)
 {
-    // Register tracing pragma functions
-    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
-        "erpl_trace_enable", EnableTracingPragmaFunction, {LogicalType::BOOLEAN})));
-    
-    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
-        "erpl_trace_level", SetTraceLevelPragmaFunction, {LogicalType::VARCHAR})));
-    
-    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
-        "erpl_trace_directory", SetTraceDirectoryPragmaFunction, {LogicalType::VARCHAR})));
-    
-    loader.RegisterFunction(PragmaFunctionSet(PragmaFunction::PragmaCall(
-        "erpl_trace_status", GetTracingStatusPragmaFunction, {})));
+    RegisterDocumentedPragma(loader,
+        PragmaFunction::PragmaCall("erpl_trace_enable", EnableTracingPragmaFunction, {LogicalType::BOOLEAN}),
+        "Turns request tracing on or off for the erpl_web extension. Traces record the HTTP "
+        "exchanges the extension makes, which is what you need to see when a remote service "
+        "answers differently than expected.",
+        {"PRAGMA erpl_trace_enable(true);"}, {"enabled"});
+
+    RegisterDocumentedPragma(loader,
+        PragmaFunction::PragmaCall("erpl_trace_level", SetTraceLevelPragmaFunction, {LogicalType::VARCHAR}),
+        "Sets how much detail tracing records: TRACE, DEBUG, INFO, WARN or ERROR.",
+        {"PRAGMA erpl_trace_level('DEBUG');"}, {"level"});
+
+    RegisterDocumentedPragma(loader,
+        PragmaFunction::PragmaCall("erpl_trace_directory", SetTraceDirectoryPragmaFunction, {LogicalType::VARCHAR}),
+        "Sets the directory trace files are written to.",
+        {"PRAGMA erpl_trace_directory('/tmp/erpl_traces');"}, {"directory"});
+
+    RegisterDocumentedPragma(loader,
+        PragmaFunction::PragmaCall("erpl_trace_status", GetTracingStatusPragmaFunction, {}),
+        "Reports whether tracing is enabled, at what level, and where traces are being written.",
+        {"PRAGMA erpl_trace_status;"});
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
